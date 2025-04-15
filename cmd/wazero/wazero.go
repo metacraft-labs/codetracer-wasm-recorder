@@ -22,6 +22,7 @@ import (
 	"github.com/tetratelabs/wazero/experimental/sock"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/internal/stylus"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/sys"
@@ -156,7 +157,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.BoolVar(&help, "h", false, "Prints usage.")
 
 	var useInterpreter bool
-	flags.BoolVar(&useInterpreter, "interpreter", false,
+	flags.BoolVar(&useInterpreter, "interpreter", true,
 		"Interprets WebAssembly modules instead of compiling them into native code.")
 
 	var envs sliceFlag
@@ -205,6 +206,11 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		flags.StringVar(&memProfile, "memprofile", "",
 			"Enables memory profiling and writes the profile at the given path.")
 	}
+
+	// TODO: maybe usage description?
+	var stylusTracePath string
+	flags.StringVar(&stylusTracePath, "stylus", "",
+		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
 	cacheDir := cacheDirFlag(flags)
 
@@ -323,6 +329,17 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	var stylusArg string
+	if stylusTracePath != "" {
+		stylusArg, err = stylus.Instantiate(ctx, rt, stylusTracePath)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
+			return 1
+		}
+		conf = conf.WithStartFunctions()
+	}
+
+	// TODO: detect if the stylus functions are present and show error if there is no stylus trace file
 	switch detectImports(guest.ImportedFunctions()) {
 	case modeWasi:
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
@@ -353,7 +370,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	// We're done, _start was called as part of instantiating the module.
+	if stylusTracePath != "" {
+		// TODO: call user_entrypoint with args from trace and ensure the only event left after execution is user_returned and check it's outs
+		_ = stylusArg
+	} else {
+		// We're done, _start was called as part of instantiating the module.
+	}
+
 	return 0
 }
 

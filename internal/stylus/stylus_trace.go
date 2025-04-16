@@ -62,21 +62,57 @@ func (e *evmEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type stylusTrace struct {
+type StylusTrace struct {
 	events  []evmEvent
 	current int
 }
 
-func (st *stylusTrace) nextEvent(event string) (evmEvent, error) {
+func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {
 	// TODO: maybe validate arguments?
-	if st.current+1 >= len(st.events) {
+	if st.current >= len(st.events) {
 		return evmEvent{}, fmt.Errorf("no next stylus event")
 	}
-	// TODO: validate if event types match
 
 	res := st.events[st.current]
+	if res.name != event {
+		return evmEvent{}, fmt.Errorf("mismatched event types: expected %v but found %v", event, res.name)
+	}
 
 	st.current++
 
 	return res, nil
+}
+
+func (st *StylusTrace) GetEntrypointArg() (uint64, error) {
+	event, err := st.nextEvent("user_entrypoint")
+	if err != nil {
+		return 0, err
+	}
+
+	arg, err := byteArrToU32(event.args)
+	return uint64(arg), err
+}
+
+func (st *StylusTrace) GetReturnedValue() (uint64, error) {
+	event, err := st.nextEvent("user_returned")
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := byteArrToU32(event.outs)
+	return uint64(res), err
+}
+
+func byteArrToU32(arr []byte) (uint32, error) {
+	if len(arr) != 4 {
+		return 0, fmt.Errorf("not bytes of u32")
+	}
+
+	result := uint32(0)
+	for _, byte := range arr {
+		result <<= 8
+		result += uint32(byte)
+	}
+
+	return result, nil
 }

@@ -207,7 +207,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			"Enables memory profiling and writes the profile at the given path.")
 	}
 
-	// TODO: maybe usage description?
+	// TODO: maybe better usage description?
 	var stylusTracePath string
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
@@ -329,9 +329,9 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	var stylusArg string
+	var stylusState *stylus.StylusTrace
 	if stylusTracePath != "" {
-		stylusArg, err = stylus.Instantiate(ctx, rt, stylusTracePath)
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
 			return 1
@@ -343,19 +343,17 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	switch detectImports(guest.ImportedFunctions()) {
 	case modeWasi:
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-		_, err = rt.InstantiateModule(ctx, guest, conf)
 	case modeWasiUnstable:
 		// Instantiate the current WASI functions under the wasi_unstable
 		// instead of wasi_snapshot_preview1.
 		wasiBuilder := rt.NewHostModuleBuilder("wasi_unstable")
 		wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(wasiBuilder)
 		_, err = wasiBuilder.Instantiate(ctx)
-		if err == nil {
-			// Instantiate our binary, but using the old import names.
-			_, err = rt.InstantiateModule(ctx, guest, conf)
-		}
-	case modeDefault:
-		_, err = rt.InstantiateModule(ctx, guest, conf)
+	}
+
+	var module api.Module
+	if err == nil {
+		module, err = rt.InstantiateModule(ctx, guest, conf)
 	}
 
 	if err != nil {
@@ -371,8 +369,25 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	if stylusTracePath != "" {
-		// TODO: call user_entrypoint with args from trace and ensure the only event left after execution is user_returned and check it's outs
-		_ = stylusArg
+		arg, err := stylusState.GetEntrypointArg()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)
+		}
+
+		res, err := module.ExportedFunction("user_entrypoint").Call(ctx, arg)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error executing stylus entrypoint: %v\n", err)
+		}
+
+		retval, err := stylusState.GetReturnedValue()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus user returned result: %v\n", err)
+		}
+
+		if len(res) != 1 || res[0] != retval {
+			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
+			return 1
+		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	result := mb
 	result = exportReadArgs(result, trace)
 	result = exportWriteResult(result, trace)
@@ -48,41 +48,40 @@ func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *stylusTrace) wazer
 	return result
 }
 
-// TODO: do stuff when illegal memory acces
 // TODO: what happens when gas or ink runs out
 
-func exportReadArgs(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "read_args"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				mem := m.Memory()
-
 				ptr := uint32(stack[0])
-
-				mem.WriteString(ptr, string(event.outs))
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
 		).Export(fname)
 }
 
-func exportWriteResult(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "write_result"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
-				// TODO: ensure it is Ok to read memory at addr stack[0] for stack[1] bytes
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				_ = readMemoryBytes(mem, ptr, uint32(stack[1]))
 
 				_ = event
 			}),
@@ -91,29 +90,30 @@ func exportWriteResult(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportReadReturnData(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "read_return_data"
 	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, m api.Module, stack []uint64) {
-			event, err := trace.nextEvent(fname)
-			if err != nil {
-				panic("TODO")
-			}
+		WithGoModuleFunction(api.GoModuleFunc(
+			func(ctx context.Context, m api.Module, stack []uint64) {
+				event, err := trace.nextEvent(fname)
+				if err != nil {
+					panic(fmt.Sprint(err))
+				}
 
-			panic("TODO")
-			_ = event
-		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+				panic("TODO")
+				_ = event
+			}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
 		Export(fname)
 }
 
-func exportCreate2(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "create2"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -124,14 +124,14 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportCreate1(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "create1"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -142,14 +142,14 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportAccountBalance(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "account_balance"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -160,14 +160,14 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *stylusTrace) wazer
 		).Export(fname)
 }
 
-func exportAccountCode(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "account_code"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -178,14 +178,14 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "account_code_size"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -196,14 +196,14 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *stylusTrace) waze
 		).Export(fname)
 }
 
-func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "account_codehash"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -214,14 +214,14 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *stylusTrace) waze
 		).Export(fname)
 }
 
-func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "return_data_size"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -232,14 +232,14 @@ func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *stylusTrace) wazer
 		).Export(fname)
 }
 
-func exportContractAddress(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "contract_address"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -250,19 +250,19 @@ func exportContractAddress(mb wazero.HostModuleBuilder, trace *stylusTrace) waze
 		).Export(fname)
 }
 
-func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "msg_reentrant"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				val, err := byteArrToU32(event.outs)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				stack[0] = uint64(val)
@@ -272,14 +272,14 @@ func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportMsgSender(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "msg_sender"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -290,34 +290,33 @@ func exportMsgSender(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Hos
 		).Export(fname)
 }
 
-func exportMsgValue(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "msg_value"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
+
 				mem := m.Memory()
-
 				ptr := uint32(stack[0])
-
-				mem.WriteString(ptr, string(event.outs))
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
 		).Export(fname)
 }
 
-func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "tx_ink_price"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -328,14 +327,14 @@ func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "tx_gas_price"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -346,14 +345,14 @@ func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportTxOrigin(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "tx_origin"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -364,14 +363,14 @@ func exportTxOrigin(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Host
 		).Export(fname)
 }
 
-func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "native_keccak256"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -382,55 +381,58 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *stylusTrace) waze
 		).Export(fname)
 }
 
-func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "storage_cache_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
+				mem := m.Memory()
+				keyPtr := uint32(stack[0])
+				valuePtr := uint32(stack[1])
+				_ = readMemoryBytes(mem, keyPtr, 32)
+				_ = readMemoryBytes(mem, valuePtr, 32)
+
 				_ = event
-				// TODO: ensure it is OK to read memoty at addr stack[0] and stack[1]
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
 		).Export(fname)
 }
 
-func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "storage_load_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
-				// TODO: ensure it is OK to read memoty at addr stack[0]
-
 				mem := m.Memory()
-
-				ptr := uint32(stack[1])
-
-				mem.WriteString(ptr, string(event.outs))
+				keyPtr := uint32(stack[0])
+				destPtr := uint32(stack[1])
+				_ = readMemoryBytes(mem, keyPtr, 32)
+				writeMemoryBytes(mem, destPtr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
 		).Export(fname)
 }
 
-func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "storage_flush_cache"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				_ = event
@@ -441,14 +443,14 @@ func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *stylusTrace) wa
 		).Export(fname)
 }
 
-func exportEmitLog(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "emit_log"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -459,14 +461,14 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -477,14 +479,14 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "delegate_call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -495,14 +497,14 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace)
 		).Export(fname)
 }
 
-func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "static_call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -513,14 +515,14 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *stylusTrace) w
 		).Export(fname)
 }
 
-func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "block_basefee"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -531,14 +533,14 @@ func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportChainid(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "chainid"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -549,14 +551,14 @@ func exportChainid(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "block_coinbase"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -567,14 +569,14 @@ func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero
 		).Export(fname)
 }
 
-func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "block_gas_limit"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -585,14 +587,14 @@ func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero
 		).Export(fname)
 }
 
-func exportBlockNumber(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "block_number"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -603,14 +605,14 @@ func exportBlockNumber(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "block_timestamp"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -621,14 +623,14 @@ func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *stylusTrace) wazer
 		).Export(fname)
 }
 
-func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "pay_for_memory_grow"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -639,14 +641,14 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *stylusTrace) waz
 		).Export(fname)
 }
 
-func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "evm_gas_left"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -657,14 +659,14 @@ func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.HostModuleBuilder {
+func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
 	fname := "evm_ink_left"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(fname)
 				if err != nil {
-					panic("TODO")
+					panic(fmt.Sprint(err))
 				}
 
 				panic("TODO")
@@ -675,16 +677,17 @@ func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *stylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func byteArrToU32(arr []byte) (uint32, error) {
-	if len(arr) != 4 {
-		return 0, fmt.Errorf("not bytes of u32")
+func readMemoryBytes(mem api.Memory, ptr uint32, cnt uint32) []byte {
+	res, ok := mem.Read(ptr, cnt)
+	if !ok {
+		panic("Invalid memory acces")
 	}
 
-	result := uint32(0)
-	for _, byte := range arr {
-		result *= 0xff
-		result += uint32(byte)
-	}
+	return res
+}
 
-	return result, nil
+func writeMemoryBytes(mem api.Memory, ptr uint32, bytes []byte) {
+	if !mem.Write(ptr, bytes) {
+		panic("Invalid memory acces")
+	}
 }

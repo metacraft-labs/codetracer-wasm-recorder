@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"strings"
 	"sync"
 	"unsafe"
+
+	// Dwarf
+	"debug/dwarf"
+	"io"
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -695,6 +700,36 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+func (ce *callEngine) getLocal(frame *callFrame, localIndex int, frameBaseLocalIdx int) (uint64, error) {
+
+	if frameBaseLocalIdx-1 >= len(ce.stack) {
+		return 0, errors.New("Too early")
+	}
+
+	// This is the FOURTH local
+	frameBase := ce.stack[frameBaseLocalIdx-1]
+
+	effectiveOffset := frameBase + uint64(localIndex)
+
+	// for i, v := range ce.stack {
+	// 	fmt.Printf("Index: %d, Value: %d\n", i, v)
+	// }
+
+	// DW_AT_WASM_location 0x0 0x4, DW_AT_stack_value
+
+	// 0x0 => LOCAL
+	// 0x2 => OPERAND STACK
+	// 0x1 || 0x3 => GLOBAL
+
+	if int(effectiveOffset) >= len(ce.stack) {
+		fmt.Printf("Local var was supposed to be on offset: %d, but stack was of size: %d\n", int(effectiveOffset), len(ce.stack))
+		// panic("local index out of bounds")
+		return 0, errors.New("Local not yet on local stack")
+	}
+
+	return ce.stack[effectiveOffset], nil
+}
+
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -708,6 +743,90 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.pushFrame(frame)
 	body := frame.f.parent.body
 	bodyLen := uint64(len(body))
+
+	dwarfData := frame.f.parent.source.DWARFData
+
+	entryReader := dwarfData.Reader()
+
+	// targetFuncName := "gcd"
+
+	funcName := f.definition().Name()
+	fmt.Printf("Curr func has name: %s\n", funcName)
+
+	for {
+		entry, err := entryReader.Next()
+
+		if err == io.EOF || entry == nil {
+			break
+		}
+
+		if entry.Tag == dwarf.TagSubprogram {
+			// Find the function's name.
+
+			nameField := entry.AttrField(dwarf.AttrName)
+
+			if nameField == nil || !strings.HasPrefix(funcName, nameField.Val.(string)) {
+				continue
+			}
+
+			fmt.Printf("We're in the function: %s\n", nameField.Val.(string))
+
+			// WHY IS THIS NIL ?
+			location := entry.AttrField(dwarf.AttrFrameBase)
+
+			if location == nil {
+				continue
+			}
+
+			arr := location.Val.([]uint8)
+			fmt.Printf("Arr has size: %d\n", len(arr))
+			fmt.Printf("We need the %d'th local\n", arr[2])
+			frameBaseLocalIdx := arr[2]
+
+			if nameField != nil && arr[1] == 0 /* && nameField.Val.(string) == targetFuncName */ {
+
+				// Now iterate over this subprogram's children.
+				for {
+					child, err := entryReader.Next()
+					if err != nil {
+						println("BAD")
+					}
+					// A nil entry or a zero-tag entry signals the end of children.
+					if child == nil || child.Tag == 0 {
+						break
+					}
+
+					// Check if the child is a variable (local variable or parameter).
+					if child.Tag == dwarf.TagVariable {
+						varNameField := child.AttrField(dwarf.AttrName)
+						varLocationField := child.AttrField(dwarf.AttrLocation)
+						if varNameField != nil {
+
+							// if f.definition().DebugName() == "test.wasm.gcd" {
+
+							// DW_AT_fbreg +4
+							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), int((varLocationField.Val.([]uint8))[1]))
+							localVal, err := ce.getLocal(frame, int((varLocationField.Val.([]uint8))[1]), int(frameBaseLocalIdx))
+
+							if err == nil {
+								value := uint32(localVal)
+								fmt.Printf("Local variable %s has value: %d\n", varNameField.Val.(string), value)
+							}
+
+						}
+					}
+				}
+
+				// Break out once we've processed the target subprogram.
+				break
+
+			} else {
+				// If it’s not the target function, skip its children if any.
+				entryReader.SkipChildren()
+			}
+		}
+	}
+
 	for frame.pc < bodyLen {
 		op := &body[frame.pc]
 		// TODO: add description of each operation/case

@@ -154,6 +154,7 @@ func DecodeModule(
 
 	if dwarfEnabled {
 		d, _ := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
+    m.DWARFData = d;
 		m.DWARFLines = wasmdebug.NewDWARFLines(d)
 	}
 

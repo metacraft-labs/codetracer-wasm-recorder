@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+  "debug/dwarf"
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -185,6 +186,8 @@ type Module struct {
 	// as described in https://yurydelendik.github.io/webassembly-dwarf/, though it is not specified in the Wasm
 	// specification: https://github.com/WebAssembly/debugging/issues/1
 	DWARFLines *wasmdebug.DWARFLines
+
+    DWARFData *dwarf.Data
 }
 
 // ModuleID represents sha256 hash value uniquely assigned to Module.

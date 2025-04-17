@@ -24,8 +24,6 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
-
-	ct "github.com/metacraft-labs/trace_record"
 )
 
 // callStackCeiling is the maximum WebAssembly call frame stack height. This allows wazero to raise
@@ -702,20 +700,19 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
-func (ce *callEngine) getLocal(frame *callFrame, localIndex int, frameBaseLocalIdx int) (uint64, error) {
+func (ce *callEngine) getLocal(localIndex int, frameBaseLocalIdx int) (uint64, error) {
 
-	if frameBaseLocalIdx-1 >= len(ce.stack) {
-		return 0, errors.New("Too early")
+	if frameBaseLocalIdx >= len(ce.stack) {
+		return 0, errors.New("too early")
 	}
 
-	// This is the FOURTH local
-	frameBase := ce.stack[frameBaseLocalIdx-1]
+	frameBase := ce.stack[frameBaseLocalIdx]
 
 	effectiveOffset := frameBase + uint64(localIndex)
 
-	// for i, v := range ce.stack {
-	// 	fmt.Printf("Index: %d, Value: %d\n", i, v)
-	// }
+	for i, v := range ce.stack {
+		fmt.Printf("Index: %d, Value: %d\n", i, v)
+	}
 
 	// DW_AT_WASM_location 0x0 0x4, DW_AT_stack_value
 
@@ -725,35 +722,15 @@ func (ce *callEngine) getLocal(frame *callFrame, localIndex int, frameBaseLocalI
 
 	if int(effectiveOffset) >= len(ce.stack) {
 		fmt.Printf("Local var was supposed to be on offset: %d, but stack was of size: %d\n", int(effectiveOffset), len(ce.stack))
-		// panic("local index out of bounds")
-		return 0, errors.New("Local not yet on local stack")
+		return 0, errors.New("local not yet on local stack")
 	}
 
 	return ce.stack[effectiveOffset], nil
 }
 
-func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
-	record := ct.MakeTraceRecord()
-	record.RegisterStep(ct.PathId(0), ct.Line(1))
-
-	frame := &callFrame{f: f, base: len(ce.stack)}
-	moduleInst := f.moduleInstance
-	functions := moduleInst.Engine.(*moduleEngine).functions
-	memoryInst := moduleInst.MemoryInstance
-	globals := moduleInst.Globals
-	tables := moduleInst.Tables
-	typeIDs := moduleInst.TypeIDs
-	dataInstances := moduleInst.DataInstances
-	elementInstances := moduleInst.ElementInstances
-	ce.pushFrame(frame)
-	body := frame.f.parent.body
-	bodyLen := uint64(len(body))
-
-	dwarfData := frame.f.parent.source.DWARFData
+func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance) {
 
 	entryReader := dwarfData.Reader()
-
-	// targetFuncName := "gcd"
 
 	funcName := f.definition().Name()
 	fmt.Printf("Curr func has name: %s\n", funcName)
@@ -774,44 +751,45 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				continue
 			}
 
-			fmt.Printf("We're in the function: %s\n", nameField.Val.(string))
-
-			// WHY IS THIS NIL ?
+			// Get location attribute of the current DWARF entry
 			location := entry.AttrField(dwarf.AttrFrameBase)
 
+			// For some reason the SubProgram entry does not have a location entry
+			// We opt to ignore it rather than panic and terminate execution
 			if location == nil {
 				continue
 			}
 
-			arr := location.Val.([]uint8)
-			fmt.Printf("Arr has size: %d\n", len(arr))
-			fmt.Printf("We need the %d'th local\n", arr[2])
-			frameBaseLocalIdx := arr[2]
+			locationData := location.Val.([]uint8)
 
-			if nameField != nil && arr[1] == 0 /* && nameField.Val.(string) == targetFuncName */ {
+			// Check if our local variable should be accessed from the module's "local" linear memory
+			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
+			if locationData[1] == 0 {
+
+				frameBaseLocalIdx := locationData[2]
+				fmt.Printf("We need the the local variable with index: %d\n", locationData[2])
 
 				// Now iterate over this subprogram's children.
 				for {
 					child, err := entryReader.Next()
 					if err != nil {
-						println("BAD")
+						println("Failed to read DWARF entry")
 					}
 					// A nil entry or a zero-tag entry signals the end of children.
 					if child == nil || child.Tag == 0 {
 						break
 					}
 
-					// Check if the child is a variable (local variable or parameter).
+					// Check if the child is a variable local variable.
 					if child.Tag == dwarf.TagVariable {
 						varNameField := child.AttrField(dwarf.AttrName)
 						varLocationField := child.AttrField(dwarf.AttrLocation)
 						if varNameField != nil {
 
-							// if f.definition().DebugName() == "test.wasm.gcd" {
+							varMemoryOffset := int((varLocationField.Val.([]uint8))[1])
 
-							// DW_AT_fbreg +4
-							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), int((varLocationField.Val.([]uint8))[1]))
-							localVal, err := ce.getLocal(frame, int((varLocationField.Val.([]uint8))[1]), int(frameBaseLocalIdx))
+							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
+							localVal, err := ce.getLocal(varMemoryOffset, int(frameBaseLocalIdx))
 
 							if err == nil {
 								value := uint32(localVal)
@@ -832,7 +810,93 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		}
 	}
 
+}
+
+func (ce *callEngine) extractFunctionNameFromPC(dwarfData dwarf.Data, pc uint64) (string, error) {
+
+	entryReader := dwarfData.Reader()
+
+	for {
+		entry, err := entryReader.Next()
+
+		if entry == nil || err != nil || err == io.EOF {
+			println("Failed ot read entry")
+			break
+		}
+
+		if entry.Tag == dwarf.TagSubprogram {
+
+			// Extract low and high pc
+			lowPCWrapped := entry.AttrField(dwarf.AttrLowpc)
+			highPCWrapped := entry.AttrField(dwarf.AttrHighpc)
+
+			if lowPCWrapped != nil && highPCWrapped != nil {
+				var lowPc uint64
+				var highPc uint64
+				switch v := lowPCWrapped.Val.(type) {
+				case uint64:
+					lowPc = v
+				case int64:
+					lowPc = uint64(v)
+				default:
+					panic(">AAAAAAAAAAAAAAAA")
+				}
+
+				switch v := highPCWrapped.Val.(type) {
+				case uint64:
+					highPc = v
+				case int64:
+					highPc = uint64(v)
+				default:
+					panic(">AAAAAAAAAAAAAAAA")
+				}
+
+				// fmt.Printf("low pc: %v\n", lowPc)
+				// fmt.Printf("high pc: %v\n", highPc)
+
+				if lowPc <= pc && pc <= highPc {
+					return entry.AttrField(dwarf.AttrName).Val.(string), nil
+				}
+			}
+
+		}
+
+	}
+
+	return "", fmt.Errorf("could not find function for the given PC")
+
+}
+
+func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
+	frame := &callFrame{f: f, base: len(ce.stack)}
+	moduleInst := f.moduleInstance
+	functions := moduleInst.Engine.(*moduleEngine).functions
+	memoryInst := moduleInst.MemoryInstance
+	globals := moduleInst.Globals
+	tables := moduleInst.Tables
+	typeIDs := moduleInst.TypeIDs
+	dataInstances := moduleInst.DataInstances
+	elementInstances := moduleInst.ElementInstances
+	ce.pushFrame(frame)
+	body := frame.f.parent.body
+	bodyLen := uint64(len(body))
+
+	dwarfData := frame.f.parent.source.DWARFData
+
+	fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
+
 	for frame.pc < bodyLen {
+
+		funcName, _ := ce.extractFunctionNameFromPC(*dwarfData, frame.pc)
+
+		fmt.Printf("Curr function has name: %s\n", funcName)
+
+		// bytes, flag := m.Memory().Read(65520+12, 4)
+
+		// if flag {
+		// 	fmt.Printf("BYTES FOR LOCAL: %v\n", bytes)
+		// }
+
 		op := &body[frame.pc]
 		// TODO: add description of each operation/case
 		// on, for example, how many args are used,
@@ -1025,6 +1089,8 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 					panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 				}
 			}
+			fmt.Printf("I JUST STORED: %d with offset %d\n", val, offset)
+			ce.getFunctionLocals(dwarfData, f, m)
 			frame.pc++
 		case operationKindStore8:
 			val := byte(ce.popValue())
@@ -1046,6 +1112,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			if !memoryInst.WriteUint32Le(offset, val) {
 				panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 			}
+			fmt.Printf("I JUST STORED: %d", val)
 			frame.pc++
 		case operationKindMemorySize:
 			ce.pushValue(uint64(memoryInst.Pages()))
@@ -4459,6 +4526,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		}
 	}
+
 	ce.popFrame()
 }
 

@@ -24,6 +24,8 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
+
+	ct "github.com/metacraft-labs/trace_record"
 )
 
 // callStackCeiling is the maximum WebAssembly call frame stack height. This allows wazero to raise
@@ -731,6 +733,9 @@ func (ce *callEngine) getLocal(frame *callFrame, localIndex int, frameBaseLocalI
 }
 
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
+	record := ct.MakeTraceRecord()
+	record.RegisterStep(ct.PathId(0), ct.Line(1))
+
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
 	functions := moduleInst.Engine.(*moduleEngine).functions

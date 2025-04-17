@@ -700,35 +700,33 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
-func (ce *callEngine) getLocal(localIndex int, frameBaseLocalIdx int) (uint64, error) {
+func (ce *callEngine) getLocal(m *wasm.ModuleInstance, localIndex int, frameBaseLocalIdx int) ([]byte, error) {
+
+	// if frameBaseLocalIdx >= len(ce.stack) {
+	// 	return 0, errors.New("too early")
+	// }
 
 	if frameBaseLocalIdx >= len(ce.stack) {
-		return 0, errors.New("too early")
+		return nil, fmt.Errorf("still too early to get the local vars")
 	}
 
 	frameBase := ce.stack[frameBaseLocalIdx]
 
 	effectiveOffset := frameBase + uint64(localIndex)
 
-	for i, v := range ce.stack {
-		fmt.Printf("Index: %d, Value: %d\n", i, v)
-	}
+	mem := m.Memory()
 
-	// DW_AT_WASM_location 0x0 0x4, DW_AT_stack_value
+	// for i, v := range ce.stack {
+	// 	fmt.Printf("Index: %d, Value: %d\n", i, v)
+	// }
 
-	// 0x0 => LOCAL
-	// 0x2 => OPERAND STACK
-	// 0x1 || 0x3 => GLOBAL
+	val, _ := mem.Read(uint32(effectiveOffset), 4)
 
-	if int(effectiveOffset) >= len(ce.stack) {
-		fmt.Printf("Local var was supposed to be on offset: %d, but stack was of size: %d\n", int(effectiveOffset), len(ce.stack))
-		return 0, errors.New("local not yet on local stack")
-	}
+	return val, nil
 
-	return ce.stack[effectiveOffset], nil
 }
 
-func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance) {
+func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance, frameBase int) {
 
 	entryReader := dwarfData.Reader()
 
@@ -766,8 +764,7 @@ func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *w
 			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
 			if locationData[1] == 0 {
 
-				frameBaseLocalIdx := locationData[2]
-				fmt.Printf("We need the the local variable with index: %d\n", locationData[2])
+				// frameBaseLocalIdx := locationData[2]
 
 				// Now iterate over this subprogram's children.
 				for {
@@ -788,12 +785,14 @@ func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *w
 
 							varMemoryOffset := int((varLocationField.Val.([]uint8))[1])
 
-							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
-							localVal, err := ce.getLocal(varMemoryOffset, int(frameBaseLocalIdx))
+							// fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
+							localVal, err := ce.getLocal(m, varMemoryOffset, frameBase+2)
 
 							if err == nil {
-								value := uint32(localVal)
-								fmt.Printf("Local variable %s has value: %d\n", varNameField.Val.(string), value)
+								// value := uint32(localVal)
+								decimalLocalVal := binary.LittleEndian.Uint32(localVal)
+
+								fmt.Printf("Local variable %s has raw value: %v and decimal val: %d\n", varNameField.Val.(string), localVal, decimalLocalVal)
 							}
 
 						}
@@ -851,9 +850,6 @@ func (ce *callEngine) extractFunctionNameFromPC(dwarfData dwarf.Data, pc uint64)
 					panic(">AAAAAAAAAAAAAAAA")
 				}
 
-				// fmt.Printf("low pc: %v\n", lowPc)
-				// fmt.Printf("high pc: %v\n", highPc)
-
 				if lowPc <= pc && pc <= highPc {
 					return entry.AttrField(dwarf.AttrName).Val.(string), nil
 				}
@@ -883,15 +879,13 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	dwarfData := frame.f.parent.source.DWARFData
 
-	fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
+	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
+
+	// initialFrameBase := frame.base
 
 	for frame.pc < bodyLen {
 
-		funcName, _ := ce.extractFunctionNameFromPC(*dwarfData, frame.pc)
-
-		fmt.Printf("Curr function has name: %s\n", funcName)
-
-		// bytes, flag := m.Memory().Read(65520+12, 4)
+		// ce.getFunctionLocals(dwarfData, f, m, initialFrameBase)
 
 		// if flag {
 		// 	fmt.Printf("BYTES FOR LOCAL: %v\n", bytes)
@@ -1089,8 +1083,8 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 					panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 				}
 			}
-			fmt.Printf("I JUST STORED: %d with offset %d\n", val, offset)
-			ce.getFunctionLocals(dwarfData, f, m)
+			fmt.Printf("I AM ABOUT TO STORE %d WITH OFFSET %d\n", val, offset)
+			ce.getFunctionLocals(dwarfData, f, m, frame.base)
 			frame.pc++
 		case operationKindStore8:
 			val := byte(ce.popValue())
@@ -1112,7 +1106,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			if !memoryInst.WriteUint32Le(offset, val) {
 				panic(wasmruntime.ErrRuntimeOutOfBoundsMemoryAccess)
 			}
-			fmt.Printf("I JUST STORED: %d", val)
 			frame.pc++
 		case operationKindMemorySize:
 			ce.pushValue(uint64(memoryInst.Pages()))

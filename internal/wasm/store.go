@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/expctxkeys"
@@ -127,6 +128,8 @@ type (
 
 		// CloseNotifier is an experimental hook called once on close.
 		CloseNotifier experimental.CloseNotifier
+
+		Record trace_record.TraceRecord
 	}
 
 	// DataInstance holds bytes corresponding to the data segment in a module.
@@ -344,7 +347,15 @@ func (s *Store) instantiate(
 	sysCtx *internalsys.Context,
 	typeIDs []FunctionTypeID,
 ) (m *ModuleInstance, err error) {
-	m = &ModuleInstance{ModuleName: name, TypeIDs: typeIDs, Sys: sysCtx, s: s, Source: module}
+	m = &ModuleInstance{
+		ModuleName: name,
+		TypeIDs:    typeIDs,
+		Sys:        sysCtx,
+		s:          s,
+		Source:     module,
+
+		Record: trace_record.MakeTraceRecord(),
+	}
 
 	m.Tables = make([]*TableInstance, int(module.ImportTableCount)+len(module.TableSection))
 	m.Globals = make([]*GlobalInstance, int(module.ImportGlobalCount)+len(module.GlobalSection))

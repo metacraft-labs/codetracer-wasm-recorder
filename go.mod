@@ -12,4 +12,7 @@ retract (
 	v1.0.0-beta.1
 )
 
-require github.com/metacraft-labs/trace_record v0.0.0-20250417091205-21e24d14266e // indirect
+require (
+	github.com/metacraft-labs/trace_record v0.0.0-20250417091205-21e24d14266e // indirect
+	github.com/rdleal/intervalst v1.4.1 // indirect
+)

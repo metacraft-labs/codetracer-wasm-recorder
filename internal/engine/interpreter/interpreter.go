@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -24,6 +23,8 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
+
+	"github.com/rdleal/intervalst/interval"
 )
 
 // callStackCeiling is the maximum WebAssembly call frame stack height. This allows wazero to raise
@@ -125,10 +126,27 @@ type callEngine struct {
 
 	// stackiterator for Listeners to walk frames and stack.
 	stackIterator stackIterator
+
+	// Interval tree for storing local variables in scope by PC
+	pcIntervalTree *interval.SearchTree[map[string]uint64, uint64]
 }
 
 func (e *moduleEngine) newCallEngine(compiled *function) *callEngine {
-	return &callEngine{f: compiled}
+
+	cmpFn := func(x, y uint64) int {
+		switch {
+		case x < y:
+			return -1
+		case x > y:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	intervalTree := interval.NewSearchTree[map[string]uint64](cmpFn)
+
+	return &callEngine{f: compiled, pcIntervalTree: intervalTree}
 }
 
 func (ce *callEngine) pushValue(v uint64) {
@@ -700,118 +718,7 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
-func (ce *callEngine) getLocal(m *wasm.ModuleInstance, localIndex int, frameBaseLocalIdx int) ([]byte, error) {
-
-	// if frameBaseLocalIdx >= len(ce.stack) {
-	// 	return 0, errors.New("too early")
-	// }
-
-	if frameBaseLocalIdx >= len(ce.stack) {
-		return nil, fmt.Errorf("still too early to get the local vars")
-	}
-
-	frameBase := ce.stack[frameBaseLocalIdx]
-
-	effectiveOffset := frameBase + uint64(localIndex)
-
-	mem := m.Memory()
-
-	// for i, v := range ce.stack {
-	// 	fmt.Printf("Index: %d, Value: %d\n", i, v)
-	// }
-
-	val, _ := mem.Read(uint32(effectiveOffset), 4)
-
-	return val, nil
-
-}
-
-func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance, frameBase int) {
-
-	entryReader := dwarfData.Reader()
-
-	funcName := f.definition().Name()
-	fmt.Printf("Curr func has name: %s\n", funcName)
-
-	for {
-		entry, err := entryReader.Next()
-
-		if err == io.EOF || entry == nil {
-			break
-		}
-
-		if entry.Tag == dwarf.TagSubprogram {
-			// Find the function's name.
-
-			nameField := entry.AttrField(dwarf.AttrName)
-
-			if nameField == nil || !strings.HasPrefix(funcName, nameField.Val.(string)) {
-				continue
-			}
-
-			// Get location attribute of the current DWARF entry
-			location := entry.AttrField(dwarf.AttrFrameBase)
-
-			// For some reason the SubProgram entry does not have a location entry
-			// We opt to ignore it rather than panic and terminate execution
-			if location == nil {
-				continue
-			}
-
-			locationData := location.Val.([]uint8)
-
-			// Check if our local variable should be accessed from the module's "local" linear memory
-			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
-			if locationData[1] == 0 {
-
-				// frameBaseLocalIdx := locationData[2]
-
-				// Now iterate over this subprogram's children.
-				for {
-					child, err := entryReader.Next()
-					if err != nil {
-						println("Failed to read DWARF entry")
-					}
-					// A nil entry or a zero-tag entry signals the end of children.
-					if child == nil || child.Tag == 0 {
-						break
-					}
-
-					// Check if the child is a variable local variable.
-					if child.Tag == dwarf.TagVariable {
-						varNameField := child.AttrField(dwarf.AttrName)
-						varLocationField := child.AttrField(dwarf.AttrLocation)
-						if varNameField != nil {
-
-							varMemoryOffset := int((varLocationField.Val.([]uint8))[1])
-
-							// fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
-							localVal, err := ce.getLocal(m, varMemoryOffset, frameBase+2)
-
-							if err == nil {
-								// value := uint32(localVal)
-								decimalLocalVal := binary.LittleEndian.Uint32(localVal)
-
-								fmt.Printf("Local variable %s has raw value: %v and decimal val: %d\n", varNameField.Val.(string), localVal, decimalLocalVal)
-							}
-
-						}
-					}
-				}
-
-				// Break out once we've processed the target subprogram.
-				break
-
-			} else {
-				// If it’s not the target function, skip its children if any.
-				entryReader.SkipChildren()
-			}
-		}
-	}
-
-}
-
-func (ce *callEngine) extractFunctionNameFromPC(dwarfData dwarf.Data, pc uint64) (string, error) {
+func (ce *callEngine) extractLowAndHighPcForFunction(dwarfData dwarf.Data, pc uint64) (uint64, uint64, error) {
 
 	entryReader := dwarfData.Reader()
 
@@ -850,8 +757,10 @@ func (ce *callEngine) extractFunctionNameFromPC(dwarfData dwarf.Data, pc uint64)
 					panic(">AAAAAAAAAAAAAAAA")
 				}
 
-				if lowPc <= pc && pc <= highPc {
-					return entry.AttrField(dwarf.AttrName).Val.(string), nil
+				if lowPc <= pc && pc <= highPc && lowPc < highPc {
+
+					fmt.Printf("With name: %s and PC's: %d %d\n", entry.AttrField(dwarf.AttrName).Val.(string), lowPc, highPc)
+					return lowPc, highPc, nil
 				}
 			}
 
@@ -859,7 +768,7 @@ func (ce *callEngine) extractFunctionNameFromPC(dwarfData dwarf.Data, pc uint64)
 
 	}
 
-	return "", fmt.Errorf("could not find function for the given PC")
+	return 0, 0, fmt.Errorf("could not find function for the given PC")
 
 }
 
@@ -879,11 +788,41 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	dwarfData := frame.f.parent.source.DWARFData
 
-	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
+	// lowPc, highPc, err := ce.extractLowAndHighPcForFunction(*dwarfData, frame.pc)
 
-	// initialFrameBase := frame.base
+	// fmt.Printf("Curr pc: %d\n", frame.pc)
+
+	// if err == nil {
+
+	// 	fmt.Printf("Func low pc: %d\n", lowPc)
+	// 	fmt.Printf("Func high pc: %d\n", highPc)
+	// 	fmt.Printf("Locals map: %v\n", localsMap)
+
+	// 	ce.pcIntervalTree.Insert(lowPc, highPc, localsMap)
+	// }
+	funcName := f.definition().Name()
+	fmt.Printf("Curr func has name: %s\n", funcName)
+	// f.parent.offsetsInWasmBinary
 
 	for frame.pc < bodyLen {
+
+		lowPc, highPc, err := ce.extractLowAndHighPcForFunction(*dwarfData, frame.pc)
+
+		if err == nil {
+
+			_, seen := ce.pcIntervalTree.Find(lowPc, highPc)
+
+			if !seen {
+				fmt.Println("I AM NOT SEEN")
+				localsMap := ce.getFunctionLocals(dwarfData, f, m, frame.base)
+				fmt.Printf("MY LOCALS: %v\n", localsMap)
+
+				fmt.Printf("Func low pc: %d\n", lowPc)
+				fmt.Printf("Func high pc: %d\n", highPc)
+				// fmt.Printf("Locals map: %v\n", localsMap)
+				ce.pcIntervalTree.Insert(lowPc, highPc, localsMap)
+			}
+		}
 
 		// ce.getFunctionLocals(dwarfData, f, m, initialFrameBase)
 
@@ -1084,7 +1023,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				}
 			}
 			fmt.Printf("I AM ABOUT TO STORE %d WITH OFFSET %d\n", val, offset)
-			ce.getFunctionLocals(dwarfData, f, m, frame.base)
+			// ce.getFunctionLocals(dwarfData, f, m, frame.base)
 			frame.pc++
 		case operationKindStore8:
 			val := byte(ce.popValue())

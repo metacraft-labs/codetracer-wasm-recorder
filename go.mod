@@ -12,4 +12,4 @@ retract (
 	v1.0.0-beta.1
 )
 
-require github.com/metacraft-labs/trace_record v0.0.0-20250417124611-a86b964a25d5
+require github.com/metacraft-labs/trace_record v0.0.0-20250422125115-aab8f4957748

@@ -2,14 +2,11 @@ package interpreter
 
 import (
 	"context"
-	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/bits"
-	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -583,12 +580,19 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 
 	defer func() {
 		// If the module closed during the call, and the call didn't err for another reason, set an ExitError.
+
+		err = m.Record.ProduceTrace("/tmp/asdf", "/home/dchanev/codetracer-wasm-recorder")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("in deferred func", err)
 		if err == nil {
 			err = m.FailIfClosed()
 		}
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
+			fmt.Println("in if recover")
 			err = ce.recoverOnCall(ctx, m, v)
 		}
 	}()
@@ -600,7 +604,13 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		defer done()
 	}
 
+	fmt.Println("call function: entrypoint")
 	ce.callFunction(ctx, m, ce.f)
+	fmt.Println("produce trace")
+	err = m.Record.ProduceTrace("/tmp/asdf", "/home/dchanev/codetracer-wasm-recorder")
+	if err != nil {
+		panic(err)
+	}
 
 	// This returns a safe copy of the results, instead of a slice view. If we
 	// returned a re-slice, the caller could accidentally or purposefully
@@ -730,158 +740,88 @@ func (ce *callEngine) getLocal(localIndex int, frameBaseLocalIdx int) (uint64, e
 	return ce.stack[effectiveOffset], nil
 }
 
-func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance) {
-	entryReader := dwarfData.Reader()
+// func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance) {
+// 	entryReader := dwarfData.Reader()
 
-	funcName := f.definition().Name()
-	fmt.Printf("Curr func has name: %s\n", funcName)
+// 	funcName := f.definition().Name()
+// 	fmt.Printf("Curr func has name: %s\n", funcName)
 
-	for {
-		entry, err := entryReader.Next()
+// 	for {
+// 		entry, err := entryReader.Next()
 
-		if err == io.EOF || entry == nil {
-			break
-		}
+// 		if err == io.EOF || entry == nil {
+// 			break
+// 		}
 
-		if entry.Tag == dwarf.TagSubprogram {
-			// Find the function's name.
+// 		if entry.Tag == dwarf.TagSubprogram {
+// 			// Find the function's name.
 
-			nameField := entry.AttrField(dwarf.AttrName)
+// 			nameField := entry.AttrField(dwarf.AttrName)
 
-			if nameField == nil || !strings.HasPrefix(funcName, nameField.Val.(string)) {
-				continue
-			}
+// 			if nameField == nil || !strings.HasPrefix(funcName, nameField.Val.(string)) {
+// 				continue
+// 			}
 
-			// Get location attribute of the current DWARF entry
-			location := entry.AttrField(dwarf.AttrFrameBase)
+// 			// Get location attribute of the current DWARF entry
+// 			location := entry.AttrField(dwarf.AttrFrameBase)
 
-			// For some reason the SubProgram entry does not have a location entry
-			// We opt to ignore it rather than panic and terminate execution
-			if location == nil {
-				continue
-			}
+// 			// For some reason the SubProgram entry does not have a location entry
+// 			// We opt to ignore it rather than panic and terminate execution
+// 			if location == nil {
+// 				continue
+// 			}
 
-			locationData := location.Val.([]uint8)
+// 			locationData := location.Val.([]uint8)
 
-			// Check if our local variable should be accessed from the module's "local" linear memory
-			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
-			if locationData[1] == 0 {
+// 			// Check if our local variable should be accessed from the module's "local" linear memory
+// 			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
+// 			if locationData[1] == 0 {
 
-				frameBaseLocalIdx := locationData[2]
-				fmt.Printf("We need the the local variable with index: %d\n", locationData[2])
+// 				frameBaseLocalIdx := locationData[2]
+// 				fmt.Printf("We need the the local variable with index: %d\n", locationData[2])
 
-				// Now iterate over this subprogram's children.
-				for {
-					child, err := entryReader.Next()
-					if err != nil {
-						println("Failed to read DWARF entry")
-					}
-					// A nil entry or a zero-tag entry signals the end of children.
-					if child == nil || child.Tag == 0 {
-						break
-					}
+// 				// Now iterate over this subprogram's children.
+// 				for {
+// 					child, err := entryReader.Next()
+// 					if err != nil {
+// 						println("Failed to read DWARF entry")
+// 					}
+// 					// A nil entry or a zero-tag entry signals the end of children.
+// 					if child == nil || child.Tag == 0 {
+// 						break
+// 					}
 
-					// Check if the child is a variable local variable.
-					if child.Tag == dwarf.TagVariable {
-						varNameField := child.AttrField(dwarf.AttrName)
-						varLocationField := child.AttrField(dwarf.AttrLocation)
-						if varNameField != nil {
+// 					// Check if the child is a variable local variable.
+// 					if child.Tag == dwarf.TagVariable {
+// 						varNameField := child.AttrField(dwarf.AttrName)
+// 						varLocationField := child.AttrField(dwarf.AttrLocation)
+// 						if varNameField != nil {
 
-							varMemoryOffset := int((varLocationField.Val.([]uint8))[1])
+// 							varMemoryOffset := int((varLocationField.Val.([]uint8))[1])
 
-							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
-							localVal, err := ce.getLocal(varMemoryOffset, int(frameBaseLocalIdx))
+// 							fmt.Printf("Var %s should have an offset of: %d\n", varNameField.Val.(string), varMemoryOffset)
+// 							localVal, err := ce.getLocal(varMemoryOffset, int(frameBaseLocalIdx))
 
-							if err == nil {
-								value := uint32(localVal)
-								fmt.Printf("Local variable %s has value: %d\n", varNameField.Val.(string), value)
-							}
+// 							if err == nil {
+// 								value := uint32(localVal)
+// 								fmt.Printf("Local variable %s has value: %d\n", varNameField.Val.(string), value)
+// 							}
 
-						}
-					}
-				}
+// 						}
+// 					}
+// 				}
 
-				// Break out once we've processed the target subprogram.
-				break
+// 				// Break out once we've processed the target subprogram.
+// 				break
 
-			} else {
-				// If it’s not the target function, skip its children if any.
-				entryReader.SkipChildren()
-			}
-		}
-	}
+// 			} else {
+// 				// If it’s not the target function, skip its children if any.
+// 				entryReader.SkipChildren()
+// 			}
+// 		}
+// 	}
 
-}
-
-type funcEntry struct {
-	name   string
-	path   string
-	line   int64
-	lowPc  uint64
-	highPc uint64
-}
-
-func (ce *callEngine) extractFunctionNameFromOffset(dwarfData *dwarf.Data, offset uint64) (funcEntry, error) {
-
-	entryReader := dwarfData.Reader()
-
-	for {
-		entry, err := entryReader.Next()
-
-		if entry == nil || err != nil || err == io.EOF {
-			println("Failed ot read entry")
-			break
-		}
-
-		if entry.Tag == dwarf.TagSubprogram {
-
-			// Extract low and high pc
-			lowPCWrapped := entry.AttrField(dwarf.AttrLowpc)
-			highPCWrapped := entry.AttrField(dwarf.AttrHighpc)
-
-			if lowPCWrapped != nil && highPCWrapped != nil {
-				var lowPc uint64
-				var highPc uint64
-				switch v := lowPCWrapped.Val.(type) {
-				case uint64:
-					lowPc = v
-				case int64:
-					lowPc = uint64(v)
-				default:
-					panic(">AAAAAAAAAAAAAAAA")
-				}
-
-				switch v := highPCWrapped.Val.(type) {
-				case uint64:
-					highPc = v
-				case int64:
-					highPc = uint64(v)
-				default:
-					panic(">AAAAAAAAAAAAAAAA")
-				}
-
-				// fmt.Printf("low pc: %v\n", lowPc)
-				// fmt.Printf("high pc: %v\n", highPc)
-
-				if lowPc <= offset && offset <= highPc {
-					return funcEntry{
-						name: entry.AttrField(dwarf.AttrName).Val.(string),
-						// TODO: get extract path string
-						// path: entry.AttrField(dwarf.AttrDeclFile).Val.(string),
-						line:   entry.AttrField(dwarf.AttrDeclLine).Val.(int64),
-						lowPc:  lowPc,
-						highPc: highPc,
-					}, nil
-				}
-			}
-
-		}
-
-	}
-
-	return funcEntry{}, fmt.Errorf("could not find function for the given PC")
-
-}
+// }
 
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
@@ -909,38 +849,34 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	dwarfReader := dwarfData.Reader()
 
 	dwarfReader.SeekPC(offset)
+	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
 
-	currFile := ""
-	currLine := -1
-	currFunc := funcEntry{}
+	// currLines := make([]wasmdebug.LineRecord, 0)
+
+	// var currFunc *funcEntry = nil
+	positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
+	if len(positions) == 1 {
+		for _, line := range positions {
+			if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") {
+				fmt.Printf("Call: %v\n", line.Function)
+				m.Record.RegisterCall(line.Function.Name, line.Function.FileName, trace_record.Line(line.Function.Line))
+			}
+		}
+	}
+
+	var currPosition wasmdebug.DebugPosition
+
 	for frame.pc < bodyLen {
-		lines := frame.f.parent.source.DWARFLines.Line(frame.f.parent.offsetsInWasmBinary[frame.pc])
-		// TODO: what to do if more than one line for PC
-		if len(lines) == 1 {
-			lineStr := lines[0]
-			parts := strings.Split(lineStr, ":")
-			file := parts[1][1:]
-			// TODO: what to do with different formats
-			if len(parts) == 3 {
-				line, err := strconv.Atoi(parts[2])
-				if err == nil {
-					if currFile != file || currLine != line {
-						m.Record.RegisterStep(file, trace_record.Line(line))
-						fmt.Printf("TEST Step: %v:%v\n", file, line)
-						currLine, currFile = line, file
+		positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
 
-						function, err := ce.extractFunctionNameFromOffset(dwarfData, frame.f.parent.offsetsInWasmBinary[frame.pc])
-						if err == nil {
-							// fmt.Printf("TEST: %v in [%v, %v]\n", frame.f.parent.offsetsInWasmBinary[frame.pc], function.lowPc, function.highPc)
-							// TODO: this won't work with recursion
-							if function.line != currFunc.line || function.name != currFunc.name || function.path != currFunc.path {
-								// if frame.f.parent.offsetsInWasmBinary[frame.pc] == function.lowPc {
-								m.Record.RegisterCall(function.name, function.path, trace_record.Line(function.line))
-								fmt.Printf("TEST Entering function %v\n", function)
-
-								currFunc = function
-							}
-						}
+		// TODO: handle inline stuff
+		if len(positions) == 1 {
+			for _, line := range positions {
+				if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") && line.Line.Line != 0 {
+					if currPosition.Line.FileName != line.Line.FileName || currPosition.Line.Line != line.Line.Line {
+						fmt.Printf("Step: \"%v\"\n", line)
+						m.Record.RegisterStep(line.Line.FileName, trace_record.Line(line.Line.Line))
+						currPosition = line
 					}
 				}
 			}
@@ -4601,6 +4537,16 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	ce.popFrame()
 
+	if len(positions) == 1 {
+		for _, line := range positions {
+			if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") {
+				// TODO: extract return value
+				m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
+				m.Record.RegisterReturn(trace_record.NilValue())
+				fmt.Printf("Return: %v\n", line.Function)
+			}
+		}
+	}
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

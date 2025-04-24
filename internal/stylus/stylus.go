@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 )
 
-func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string) (*StylusTrace, error) {
+func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string, record *trace_record.TraceRecord) (*StylusTrace, error) {
 	stylusTraceJson, err := os.ReadFile(stylusTracePath)
 	if err != nil {
 		return nil, err
@@ -21,7 +22,7 @@ func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string) 
 	}
 
 	moduleBuilder := r.NewHostModuleBuilder("vm_hooks")
-	moduleBuilder = exportSylusFunctions(moduleBuilder, &stylusState)
+	moduleBuilder = exportSylusFunctions(moduleBuilder, &stylusState, record)
 
 	if _, err := moduleBuilder.Instantiate(ctx); err != nil {
 		return nil, err

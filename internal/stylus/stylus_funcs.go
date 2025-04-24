@@ -4,53 +4,55 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
 
-func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	result := mb
-	result = exportReadArgs(result, trace)
-	result = exportWriteResult(result, trace)
-	result = exportReadReturnData(result, trace)
-	result = exportCreate2(result, trace)
-	result = exportCreate1(result, trace)
-	result = exportAccountBalance(result, trace)
-	result = exportAccountCode(result, trace)
-	result = exportAccountCodeSize(result, trace)
-	result = exportAccountCodehash(result, trace)
-	result = exportReturnDataSize(result, trace)
-	result = exportContractAddress(result, trace)
-	result = exportMsgReentrant(result, trace)
-	result = exportMsgSender(result, trace)
-	result = exportMsgValue(result, trace)
-	result = exportTxInkPrice(result, trace)
-	result = exportTxGasPrice(result, trace)
-	result = exportTxOrigin(result, trace)
-	result = exportNativeKeccak256(result, trace)
-	result = exportStorageCacheBytes32(result, trace)
-	result = exportStorageLoadBytes32(result, trace)
-	result = exportStorageFlushCache(result, trace)
-	result = exportEmitLog(result, trace)
-	result = exportCallContract(result, trace)
-	result = exportDelegateCallContract(result, trace)
-	result = exportStaticCallContract(result, trace)
-	result = exportBlockBasefee(result, trace)
-	result = exportChainid(result, trace)
-	result = exportBlockCoinbase(result, trace)
-	result = exportBlockGasLimit(result, trace)
-	result = exportBlockNumber(result, trace)
-	result = exportBlockTimestamp(result, trace)
-	result = exportPayForMemoryGrow(result, trace)
-	result = exportEvmGasLeft(result, trace)
-	result = exportEvmInkLeft(result, trace)
+	result = exportReadArgs(result, trace, record)
+	result = exportWriteResult(result, trace, record)
+	result = exportReadReturnData(result, trace, record)
+	result = exportCreate2(result, trace, record)
+	result = exportCreate1(result, trace, record)
+	result = exportAccountBalance(result, trace, record)
+	result = exportAccountCode(result, trace, record)
+	result = exportAccountCodeSize(result, trace, record)
+	result = exportAccountCodehash(result, trace, record)
+	result = exportReturnDataSize(result, trace, record)
+	result = exportContractAddress(result, trace, record)
+	result = exportMsgReentrant(result, trace, record)
+	result = exportMsgSender(result, trace, record)
+	result = exportMsgValue(result, trace, record)
+	result = exportTxInkPrice(result, trace, record)
+	result = exportTxGasPrice(result, trace, record)
+	result = exportTxOrigin(result, trace, record)
+	result = exportNativeKeccak256(result, trace, record)
+	result = exportStorageCacheBytes32(result, trace, record)
+	result = exportStorageLoadBytes32(result, trace, record)
+	result = exportStorageFlushCache(result, trace, record)
+	result = exportEmitLog(result, trace, record)
+	result = exportCallContract(result, trace, record)
+	result = exportDelegateCallContract(result, trace, record)
+	result = exportStaticCallContract(result, trace, record)
+	result = exportBlockBasefee(result, trace, record)
+	result = exportChainid(result, trace, record)
+	result = exportBlockCoinbase(result, trace, record)
+	result = exportBlockGasLimit(result, trace, record)
+	result = exportBlockNumber(result, trace, record)
+	result = exportBlockTimestamp(result, trace, record)
+	result = exportPayForMemoryGrow(result, trace, record)
+	result = exportEvmGasLeft(result, trace, record)
+	result = exportEvmInkLeft(result, trace, record)
 
 	return result
 }
 
 // TODO: what happens when gas or ink runs out
+// TODO: add record logs for events
 
-func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "read_args"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -69,7 +71,7 @@ func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Host
 		).Export(fname)
 }
 
-func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "write_result"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -90,7 +92,7 @@ func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "read_return_data"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -106,7 +108,7 @@ func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace) wazer
 		Export(fname)
 }
 
-func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "create2"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -124,7 +126,7 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "create1"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -142,7 +144,7 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "account_balance"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -160,7 +162,7 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace) wazer
 		).Export(fname)
 }
 
-func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "account_code"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -178,7 +180,7 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "account_code_size"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -196,7 +198,7 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace) waze
 		).Export(fname)
 }
 
-func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "account_codehash"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -214,7 +216,7 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace) waze
 		).Export(fname)
 }
 
-func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "return_data_size"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -232,7 +234,7 @@ func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace) wazer
 		).Export(fname)
 }
 
-func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "contract_address"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -250,7 +252,7 @@ func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace) waze
 		).Export(fname)
 }
 
-func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "msg_reentrant"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -272,7 +274,7 @@ func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "msg_sender"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -290,7 +292,7 @@ func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Hos
 		).Export(fname)
 }
 
-func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "msg_value"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -309,7 +311,7 @@ func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Host
 		).Export(fname)
 }
 
-func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "tx_ink_price"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -327,7 +329,7 @@ func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "tx_gas_price"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -345,7 +347,7 @@ func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "tx_origin"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -363,7 +365,7 @@ func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Host
 		).Export(fname)
 }
 
-func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "native_keccak256"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -381,7 +383,7 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace) waze
 		).Export(fname)
 }
 
-func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "storage_cache_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -404,7 +406,7 @@ func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) 
 		).Export(fname)
 }
 
-func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "storage_load_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -425,7 +427,7 @@ func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace) w
 		).Export(fname)
 }
 
-func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "storage_flush_cache"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -443,7 +445,7 @@ func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace) wa
 		).Export(fname)
 }
 
-func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "emit_log"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -461,7 +463,7 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -479,7 +481,7 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "delegate_call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -497,7 +499,7 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace)
 		).Export(fname)
 }
 
-func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "static_call_contract"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -515,7 +517,7 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace) w
 		).Export(fname)
 }
 
-func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "block_basefee"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -533,7 +535,7 @@ func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.
 		).Export(fname)
 }
 
-func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "chainid"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -551,7 +553,7 @@ func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostM
 		).Export(fname)
 }
 
-func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "block_coinbase"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -569,7 +571,7 @@ func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero
 		).Export(fname)
 }
 
-func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "block_gas_limit"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -587,7 +589,7 @@ func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero
 		).Export(fname)
 }
 
-func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "block_number"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -605,7 +607,7 @@ func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.H
 		).Export(fname)
 }
 
-func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "block_timestamp"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -623,7 +625,7 @@ func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace) wazer
 		).Export(fname)
 }
 
-func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "pay_for_memory_grow"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -641,7 +643,7 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace) waz
 		).Export(fname)
 }
 
-func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "evm_gas_left"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
@@ -659,7 +661,7 @@ func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.Ho
 		).Export(fname)
 }
 
-func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace) wazero.HostModuleBuilder {
+func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	fname := "evm_ink_left"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(

@@ -129,7 +129,7 @@ type (
 		// CloseNotifier is an experimental hook called once on close.
 		CloseNotifier experimental.CloseNotifier
 
-		Record trace_record.TraceRecord
+		Record *trace_record.TraceRecord
 	}
 
 	// DataInstance holds bytes corresponding to the data segment in a module.
@@ -353,8 +353,6 @@ func (s *Store) instantiate(
 		Sys:        sysCtx,
 		s:          s,
 		Source:     module,
-
-		Record: trace_record.MakeTraceRecord(),
 	}
 
 	m.Tables = make([]*TableInstance, int(module.ImportTableCount)+len(module.TableSection))

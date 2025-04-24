@@ -68,6 +68,7 @@ type StylusTrace struct {
 }
 
 func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {
+	fmt.Printf("Current event requested: %v (%v/%v)\n", event, st.current+1, len(st.events))
 	// TODO: maybe validate arguments?
 	if st.current >= len(st.events) {
 		return evmEvent{}, fmt.Errorf("no next stylus event")

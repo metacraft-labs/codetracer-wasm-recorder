@@ -580,19 +580,12 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 
 	defer func() {
 		// If the module closed during the call, and the call didn't err for another reason, set an ExitError.
-
-		err = m.Record.ProduceTrace("/tmp/asdf", "/home/dchanev/codetracer-wasm-recorder")
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println("in deferred func", err)
 		if err == nil {
 			err = m.FailIfClosed()
 		}
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
-			fmt.Println("in if recover")
 			err = ce.recoverOnCall(ctx, m, v)
 		}
 	}()
@@ -604,13 +597,7 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		defer done()
 	}
 
-	fmt.Println("call function: entrypoint")
 	ce.callFunction(ctx, m, ce.f)
-	fmt.Println("produce trace")
-	err = m.Record.ProduceTrace("/tmp/asdf", "/home/dchanev/codetracer-wasm-recorder")
-	if err != nil {
-		panic(err)
-	}
 
 	// This returns a safe copy of the results, instead of a slice view. If we
 	// returned a re-slice, the caller could accidentally or purposefully
@@ -854,12 +841,17 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// currLines := make([]wasmdebug.LineRecord, 0)
 
 	// var currFunc *funcEntry = nil
-	positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
-	if len(positions) == 1 {
-		for _, line := range positions {
-			if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") {
-				fmt.Printf("Call: %v\n", line.Function)
-				m.Record.RegisterCall(line.Function.Name, line.Function.FileName, trace_record.Line(line.Function.Line))
+
+	var positions []wasmdebug.DebugPosition
+
+	if m.Record != nil {
+		positions = frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
+		if len(positions) == 1 {
+			for _, line := range positions {
+				if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") {
+					fmt.Printf("Call: %v\n", line.Function)
+					m.Record.RegisterCall(line.Function.Name, line.Function.FileName, trace_record.Line(line.Function.Line))
+				}
 			}
 		}
 	}
@@ -867,16 +859,22 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	var currPosition wasmdebug.DebugPosition
 
 	for frame.pc < bodyLen {
-		positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
+		// TODO: add a `tracking` flag somewhere, and run tracking code only
+		// if `tracking` is true:
+		// positions := make([]wasmdebug.DebugPosition, 0)
 
-		// TODO: handle inline stuff
-		if len(positions) == 1 {
-			for _, line := range positions {
-				if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") && line.Line.Line != 0 {
-					if currPosition.Line.FileName != line.Line.FileName || currPosition.Line.Line != line.Line.Line {
-						fmt.Printf("Step: \"%v\"\n", line)
-						m.Record.RegisterStep(line.Line.FileName, trace_record.Line(line.Line.Line))
-						currPosition = line
+		if m.Record != nil {
+			positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
+
+			// TODO: handle inline stuff
+			if len(positions) == 1 {
+				for _, line := range positions {
+					if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") && line.Line.Line != 0 {
+						if currPosition.Line.FileName != line.Line.FileName || currPosition.Line.Line != line.Line.Line {
+							fmt.Printf("Step: \"%v\"\n", line)
+							m.Record.RegisterStep(line.Line.FileName, trace_record.Line(line.Line.Line))
+							currPosition = line
+						}
 					}
 				}
 			}
@@ -4537,13 +4535,15 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	ce.popFrame()
 
-	if len(positions) == 1 {
-		for _, line := range positions {
-			if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Function.FileName, ".rustup") {
-				// TODO: extract return value
-				m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
-				m.Record.RegisterReturn(trace_record.NilValue())
-				fmt.Printf("Return: %v\n", line.Function)
+	if m.Record != nil {
+		if len(positions) == 1 {
+			for _, line := range positions {
+				if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") {
+					// TODO: extract return value
+					m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
+					m.Record.RegisterReturn(trace_record.NilValue())
+					fmt.Printf("Return: %v\n", line.Function)
+				}
 			}
 		}
 	}

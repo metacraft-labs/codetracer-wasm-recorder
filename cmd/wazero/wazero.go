@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -212,6 +213,10 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
+	var traceDir string
+	flags.StringVar(&traceDir, "trace-dir", "",
+		"Directory where to save the trace record. If empty - no trace is produced. Default \"\".")
+
 	cacheDir := cacheDirFlag(flags)
 
 	_ = flags.Parse(args)
@@ -329,9 +334,15 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	traceRecord := trace_record.MakeTraceRecord()
+	var traceRecordPtr *trace_record.TraceRecord
+	if traceDir != "" {
+		traceRecordPtr = &traceRecord
+	}
+
 	var stylusState *stylus.StylusTrace
 	if stylusTracePath != "" {
-		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath)
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, traceRecordPtr)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
 			return 1
@@ -353,7 +364,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 
 	var module api.Module
 	if err == nil {
-		module, err = rt.InstantiateModule(ctx, guest, conf)
+		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, traceRecordPtr)
 	}
 
 	if err != nil {
@@ -390,6 +401,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.
+	}
+
+	if traceDir != "" {
+		err = traceRecord.ProduceTrace(traceDir, "/tmp/random-placeholder")
+		if err != nil {
+			fmt.Fprintf(stdErr, "error creating trace: %v\n", err)
+		}
 	}
 
 	return 0

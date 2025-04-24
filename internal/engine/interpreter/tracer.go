@@ -3,10 +3,6 @@ package interpreter
 import (
 	"debug/dwarf"
 	"fmt"
-	"io"
-	"strings"
-
-	"github.com/tetratelabs/wazero/internal/wasm"
 )
 
 type dwarfWasmLocationInstr struct {
@@ -44,74 +40,25 @@ func newDwarfLocalVariableEntry(data []uint8) dwarfLocalVariableEntry {
 	return p
 }
 
-func (ce *callEngine) getLocal(m *wasm.ModuleInstance, localIndex int, frameBaseLocalIdx int) ([]byte, error) {
-
-	// if frameBaseLocalIdx >= len(ce.stack) {
-	// 	return 0, errors.New("too early")
-	// }
-
-	if frameBaseLocalIdx >= len(ce.stack) {
-		return nil, fmt.Errorf("still too early to get the local vars")
-	}
-
-	frameBase := ce.stack[frameBaseLocalIdx]
-
-	effectiveOffset := frameBase + uint64(localIndex)
-
-	mem := m.Memory()
-
-	for i, v := range ce.stack {
-		fmt.Printf("Index: %d, Value: %d\n", i, v)
-	}
-
-	val, _ := mem.Read(uint32(effectiveOffset), 4)
-
-	return val, nil
-
-}
-
-func (ce *callEngine) getLocalVariableAddress(m *wasm.ModuleInstance, localIndex uint8, frameBaseLocalIdx int) (uint64, error) {
-
-	if frameBaseLocalIdx >= len(ce.stack) {
-		return 0, fmt.Errorf("still too early to get the local vars")
-	}
-
-	frameBase := ce.stack[frameBaseLocalIdx]
-
-	effectiveOffset := frameBase + uint64(localIndex)
-
-	return effectiveOffset, nil
-
-}
-
-func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance, frameBase int) map[string]uint64 {
-
-	entryReader := dwarfData.Reader()
-
-	funcName := f.definition().Name()
-	// fmt.Printf("Curr func has name: %s\n", funcName)
+// func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *wasm.ModuleInstance, frameBase int, int pc) map[string]uint64 {
+func (ce *callEngine) getFunctionLocalVarOffsets(entryReader *dwarf.Reader) (uint64, map[string]uint64, error) {
 
 	res := make(map[string]uint64)
 
+	var stackPointerLocalIndex uint64
+
 	for {
+
 		entry, err := entryReader.Next()
 
-		if err == io.EOF || entry == nil {
-			break
+		if entry == nil || err != nil {
+			return 0, res, fmt.Errorf("Entry was nil")
 		}
 
 		if entry.Tag == dwarf.TagSubprogram {
 			// Find the function's name.
 
-			nameField := entry.AttrField(dwarf.AttrName)
-
-			if nameField == nil || !strings.HasPrefix(funcName, nameField.Val.(string)) {
-
-				fmt.Println("NOT THE RIGHT ONE")
-				continue
-			}
-
-			fmt.Println("RIGHT ONE")
+			// nameField := entry.AttrField(dwarf.AttrName)
 
 			// Get location attribute of the current DWARF entry
 			locationEntry := entry.AttrField(dwarf.AttrFrameBase)
@@ -119,18 +66,18 @@ func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *w
 			// For some reason the SubProgram entry does not have a location entry
 			// We opt to ignore it rather than panic and terminate execution
 			if locationEntry == nil {
-				continue
+				return 0, res, fmt.Errorf("Location entry was nil")
 			}
 
 			locationData := newDwarfWasmLocationInstr(locationEntry.Val.([]uint8))
+
 
 			// Check if our local variable should be accessed from the module's "local" linear memory
 			// TODO: Handle the 2 other types of WASM locations, namely: stack-operand and global
 			if locationData.locationType == 0 {
 
-				// frameBaseLocalIdx := locationData[2]
+				stackPointerLocalIndex = uint64(locationData.location)
 
-				// Now iterate over this subprogram's children.
 				for {
 					child, err := entryReader.Next()
 					if err != nil {
@@ -146,35 +93,18 @@ func (ce *callEngine) getFunctionLocals(dwarfData *dwarf.Data, f *function, m *w
 						varNameField := child.AttrField(dwarf.AttrName)
 						varLocationField := child.AttrField(dwarf.AttrLocation)
 
-						fmt.Println("WWWWWWHAT")
-
-						if varNameField != nil {
-
-							localVarLocationEntry := newDwarfLocalVariableEntry(varLocationField.Val.([]uint8))
-
-							address, err := ce.getLocalVariableAddress(m, localVarLocationEntry.offset, frameBase+2)
-
-							fmt.Printf("FOUND LOCAL: %s WITH ADDRESS: %d\n", varNameField.Val.(string), address)
-
-							if err == nil {
-								fmt.Printf("FOUND LOCAL: %s WITH ADDRESS: %d\n", varNameField.Val.(string), address)
-								res[varNameField.Val.(string)] = address
-							}
-
+						if varNameField != nil && varLocationField != nil {
+							res[varNameField.Val.(string)] = uint64((varLocationField.Val.([]uint8))[1])
 						}
 					}
 				}
 
 				// Break out once we've processed the target subprogram.
 				break
-
-			} else {
-				// If it’s not the target function, skip its children if any.
-				entryReader.SkipChildren()
 			}
+
 		}
 	}
 
-	return res
-
+	return stackPointerLocalIndex, res, nil
 }

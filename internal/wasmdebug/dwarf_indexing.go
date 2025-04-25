@@ -130,26 +130,29 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
 
 	sort.Slice(lines, func(i, j int) bool { return lines[i].Address < lines[j].Address })
 
-	start := 0
-	for i, le := range lines {
-		if le.File != lines[start].File || le.Line != lines[start].Line || le.Column != lines[start].Column {
-			// fmt.Printf("BLQBLQ %v:%v:%v (%v <-> %v)-> %v %v\n", lines[start].File.Name, lines[start].Line, lines[start].Column, start, i, lines[start].Address, lines[i-1].Address)
-			tree.Line.Insert(lines[start].Address, lines[i-1].Address, LineRecord{
-				FileName: lines[start].File.Name,
-				Line:     int64(lines[start].Line),
-				Column:   int64(lines[start].Column),
+	// start := 0
+	// for i, le := range lines {
+	// 	if le.File != lines[start].File || le.Line != lines[start].Line || le.Column != lines[start].Column {
+	// 		fmt.Printf("BLQBLQ %v:%v:%v (%v <-> %v)-> %v %v\n", lines[start].File.Name, lines[start].Line, lines[start].Column, start, i-1, lines[start].Address, lines[i-1].Address)
+	// 		tree.Line.Insert(lines[start].Address, lines[i-1].Address, LineRecord{
+	// 			FileName: lines[start].File.Name,
+	// 			Line:     int64(lines[start].Line),
+	// 			Column:   int64(lines[start].Column),
+	// 		})
+	// 		start = i
+	// 	}
+	// }
+
+	for i, _ := range lines {
+		if i-1 >= 0 {
+			// fmt.Printf("BLQBLQ %v:%v:%v (%v <-> %v)-> %v %v\n", lines[i].File.Name, lines[i].Line, lines[i].Column, i-1, i, lines[i-1].Address, lines[i].Address-1)
+			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
+				FileName: lines[i].File.Name,
+				Line:     int64(lines[i].Line),
+				Column:   int64(lines[i].Column),
 			})
-			start = i
 		}
 	}
-
-	// fmt.Printf("BLQBLQ %v: %v\n", lines[start].File.Name, lines[start].Address)
-	// fmt.Printf("BLQBLQ %v:%v:%v -> %v %v\n", lines[start].File.Name, lines[start].Line, lines[start].Column, lines[start].Address, lines[len(lines)-1].Address)
-	tree.Line.Insert(lines[start].Address, lines[len(lines)-1].Address, LineRecord{
-		FileName: lines[start].File.Name,
-		Line:     int64(lines[start].Line),
-		Column:   int64(lines[start].Column),
-	})
 
 	return nil
 }

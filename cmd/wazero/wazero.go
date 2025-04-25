@@ -404,7 +404,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	if traceDir != "" {
-		err = traceRecord.ProduceTrace(traceDir, "/tmp/random-placeholder")
+		err = traceRecord.ProduceTrace(traceDir, "TEST", "/tmp/random-placeholder")
 		if err != nil {
 			fmt.Fprintf(stdErr, "error creating trace: %v\n", err)
 		}

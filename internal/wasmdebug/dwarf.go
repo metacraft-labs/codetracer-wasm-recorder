@@ -25,18 +25,6 @@ type line struct {
 	pos  dwarf.LineReaderPos
 }
 
-type LineRecord struct {
-	FileName string
-	Line     int64
-	Column   int64
-}
-
-type FunctionRecord struct {
-	Name     string
-	FileName string
-	Line     int64
-}
-
 type DebugPosition struct {
 	InstructionOffset uint64
 	Line              LineRecord

@@ -3,6 +3,7 @@ package wasm
 import (
 	"bytes"
 	"crypto/sha256"
+	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-  "debug/dwarf"
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -187,7 +187,8 @@ type Module struct {
 	// specification: https://github.com/WebAssembly/debugging/issues/1
 	DWARFLines *wasmdebug.DWARFLines
 
-    DWARFData *dwarf.Data
+	DWARFData *dwarf.Data
+	PCRecord  wasmdebug.PCRecord
 }
 
 // ModuleID represents sha256 hash value uniquely assigned to Module.

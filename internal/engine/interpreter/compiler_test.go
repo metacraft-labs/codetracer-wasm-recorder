@@ -1036,7 +1036,7 @@ func TestCompile_Locals(t *testing.T) {
 				// [p[0].lo, p[1].hi] -> [p[0].lo, p[1].hi, 0x01, 0x02]
 				newOperationV128Const(0x01, 0x02),
 				// [p[0].lo, p[1].hi, 0x01, 0x02] -> [0x01, 0x02]
-				newOperationSet(3, true),
+				newOperationSet(3, true), // TODO: fix
 				newOperationDrop(inclusiveRange{Start: 0, End: 1}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},

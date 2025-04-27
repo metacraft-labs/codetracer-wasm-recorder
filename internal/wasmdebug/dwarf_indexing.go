@@ -18,15 +18,16 @@ type LineRecord struct {
 
 type VariableRecord struct {
 	Name string
-	Addr uint64
+	Offset uint64
 }
 
 type FunctionRecord struct {
 	Name     string
 	FileName string
 	Line     int64
+	FrameBaseIndex uint64
 	// TODO: params
-	Params []VariableRecord
+	Locals []VariableRecord
 }
 
 type InlineRecord struct {
@@ -100,11 +101,106 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			case dwarf.TagInlinedSubroutine:
 
 			case dwarf.TagSubprogram:
+				if err := indexFunctionEntry(r, ent, &ret); err != nil {
+					continue
+				}
+
 			}
 		}
 	}
 
 	return
+}
+
+func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error {
+
+	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
+	highPcWrapped := ent.AttrField(dwarf.AttrHighpc)
+
+	if lowPcWrapped == nil || highPcWrapped == nil {
+		return fmt.Errorf("malformed non-inlined function entry: no low or high pc attributes present")
+	}
+
+	var lowPc, highPc uint64
+
+	switch v := lowPcWrapped.Val.(type) {
+		case uint64:
+			lowPc = v
+		case int64:
+			lowPc = uint64(v)
+		default:
+			// TODO: Handle
+			return fmt.Errorf("unrecognized lowPc format")
+	}
+
+	switch v := highPcWrapped.Val.(type) {
+		case uint64:
+			highPc = v
+		case int64:
+			highPc = uint64(v)
+		default:
+			return fmt.Errorf("unrecognized highPc format")
+	}
+
+	functionName := ent.AttrField(dwarf.AttrName).Val.(string)
+
+	// For some reason the DeclLine attribute of our dwarf entry can be int64 ? Not too sure what's going on here
+	// functionFile := ent.AttrField(dwarf.AttrDeclFile).Val.(string)
+	functionFile := "placeholder()"
+	functionLine := ent.AttrField(dwarf.AttrDeclLine).Val.(int64)
+
+	locationField := ent.AttrField(dwarf.AttrFrameBase)
+
+	locationFieldType := (locationField.Val.([]uint8))[1]
+	locationLocal := (locationField.Val.([]uint8))[2]
+	// We only handle "Locals" locations
+	// See: https://yurydelendik.github.io/webassembly-dwarf/#location-descriptions-locals
+	if locationFieldType != 0 {
+		r.SkipChildren()
+		return fmt.Errorf("malformed non-inlined function entry: no location attribute present")
+	}
+
+	locals := make([]VariableRecord, 0)
+
+	// Read children of Subprogram tag
+	for {
+
+		child, err := r.Next()
+
+		// End of subprogram's children
+		if err != nil {
+			return err
+		}
+
+		if child.Tag == 0 {
+			break
+		}
+
+		if (child.Tag == dwarf.TagVariable) {
+			varNameField := child.AttrField(dwarf.AttrName)
+			varLocationField := child.AttrField(dwarf.AttrLocation)
+
+			varName := varNameField.Val.(string)
+			varLocation := (varLocationField.Val.([]uint8))[1]
+
+			locals = append(locals, VariableRecord{
+				Name: varName,
+				Offset: uint64(varLocation),
+			})
+
+		}
+
+	}
+
+	tree.Function.Insert(lowPc, highPc, FunctionRecord{
+		Name: functionName,
+		FileName: functionFile,
+		Line: int64(functionLine),
+		FrameBaseIndex: uint64(locationLocal),
+		Locals: locals,
+	})
+
+	return nil
 }
 
 func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
@@ -145,7 +241,6 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
 
 	for i, _ := range lines {
 		if i-1 >= 0 {
-			// fmt.Printf("BLQBLQ %v:%v:%v (%v <-> %v)-> %v %v\n", lines[i].File.Name, lines[i].Line, lines[i].Column, i-1, i, lines[i-1].Address, lines[i].Address-1)
 			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
 				FileName: lines[i].File.Name,
 				Line:     int64(lines[i].Line),

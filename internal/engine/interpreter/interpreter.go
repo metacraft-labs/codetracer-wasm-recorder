@@ -724,6 +724,8 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// var currFunc *funcEntry = nil
 
+	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
+
 	var positions []wasmdebug.DebugPosition
 
 	if m.Record != nil {
@@ -4404,34 +4406,19 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			frame.pc++
 		}
 	}
-
 	ce.popFrame()
 
-	// if m.Record != nil {
-	// 	if len(positions) == 1 {
-	// 		for _, line := range positions {
-	// 			if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") {
+	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
+	localsRecords, _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
 
-	// 				offsetLocalIndex, localsMap, err := ce.getFunctionLocalVarOffsets(dwarfReader)
+	for _, v := range localsRecords.Locals {
+		mem := m.Memory()
 
-	// 				if err == nil {
+		// TODO: Handle locals of different sizes. Currently we only handle 32-bit integers
+		trueVal, _ := mem.Read(uint32(locals[localsRecords.FrameBaseIndex]+v.Offset), 4)
+		fmt.Printf("local: %s value: %d\n", v.Name, trueVal)
+	}
 
-	// 					for k, v := range localsMap {
-	// 						mem := m.Memory()
-
-	// 						// TODO: Handle locals of different sizes. Currently we only handle 32-bit integers
-	// 						trueVal, _ := mem.Read(uint32(locals[offsetLocalIndex]+v), 4)
-	// 						fmt.Printf("local: %s value: %d\n", k, trueVal)
-	// 					}
-	// 				}
-	// 				// TODO: extract return value
-	// 				m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
-	// 				m.Record.RegisterReturn(trace_record.NilValue())
-	// 				fmt.Printf("Return: %v\n", line.Function)
-	// 			}
-	// 		}
-	// 	}
-	// }
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

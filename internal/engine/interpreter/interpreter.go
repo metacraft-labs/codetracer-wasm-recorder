@@ -720,37 +720,54 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
 
-	// currLines := make([]wasmdebug.LineRecord, 0)
-
-	// var currFunc *funcEntry = nil
-
 	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 
-	var positions []wasmdebug.DebugPosition
+	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
+	functionRecord , _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
 
+	// fmt.Printf("Function record: %v\n", functionRecord)
+
+	tracking_call := false
 	if m.Record != nil {
-		positions = frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
-		if len(positions) == 1 {
-			for _, line := range positions {
-				if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") {
-					fmt.Printf("Call: %v\n", line.Function)
-					m.Record.RegisterCall(line.Function.Name, line.Function.FileName, trace_record.Line(line.Function.Line))
-				}
-			}
+		tracking_call = strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
+		if tracking_call {
+
+			fmt.Printf("Call: %v\n", functionRecord.Name)
+			m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line))
 		}
 	}
 
-	// var currPosition wasmdebug.DebugPosition
+	var currLine wasmdebug.LineRecord
 
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 		// TODO: add a `tracking` flag somewhere, and run tracking code only
 		// if `tracking` is true:
-		// positions := make([]wasmdebug.DebugPosition, 0)
 
-		if m.Record != nil {
+		if m.Record != nil && tracking_call {
+
+
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
-			fmt.Printf("%v (%v): %v\n", frame.pc, offset, x)
+
+				if len(x) == 1 {
+					if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
+						if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
+							fmt.Printf("STEP: %v\n", x[0])
+							currLine = x[0]
+			 				m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+
+							for _, v := range functionRecord.Locals {
+								mem := m.Memory()
+
+								// TODO: Handle locals of different sizes. Currently we only handle 32-bit integers
+								trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), 4)
+								fmt.Printf("local: %s value: %d\n", v.Name, trueVal)
+							}
+
+						}
+					}
+
+				}
 			// positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
 
 			// // TODO: handle inline stuff
@@ -4408,15 +4425,18 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	}
 	ce.popFrame()
 
-	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
-	localsRecords, _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+	if m.Record != nil && tracking_call {
+			// TODO: extract return value
 
-	for _, v := range localsRecords.Locals {
-		mem := m.Memory()
 
-		// TODO: Handle locals of different sizes. Currently we only handle 32-bit integers
-		trueVal, _ := mem.Read(uint32(locals[localsRecords.FrameBaseIndex]+v.Offset), 4)
-		fmt.Printf("local: %s value: %d\n", v.Name, trueVal)
+		m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
+
+
+		m.Record.RegisterReturn(trace_record.NilValue())
+
+
+		fmt.Printf("Return: %v\n", functionRecord.Name)
+
 	}
 
 }

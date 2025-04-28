@@ -67,6 +67,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	}
 
 	r := d.Reader()
+	var files []*dwarf.LineFile
 
 	for {
 		ent, err := r.Next()
@@ -96,16 +97,19 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 
 			switch ent.Tag {
 			case dwarf.TagCompileUnit:
-				if err := indexCompileUnit(ent, d, &ret); err != nil {
+				if files, err = indexCompileUnit(ent, d, &ret); err != nil {
+					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
 					continue
 				}
+
+
 			case dwarf.TagInlinedSubroutine:
 
 			case dwarf.TagSubprogram:
-				if err := indexFunctionEntry(r, ent, &ret); err != nil {
+				if err := indexFunctionEntry(r, ent, files, &ret); err != nil {
+					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
 					continue
 				}
-
 			}
 		}
 	}
@@ -113,14 +117,16 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	return
 }
 
-func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error {
 
+
+func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFile, tree *PCRecord) error {
 	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
 	highPcWrapped := ent.AttrField(dwarf.AttrHighpc)
 
 	if lowPcWrapped == nil || highPcWrapped == nil {
 		return fmt.Errorf("malformed non-inlined function entry: no low or high pc attributes present")
 	}
+
 
 	var lowPc, highPc uint64
 
@@ -134,11 +140,12 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 			return fmt.Errorf("unrecognized lowPc format")
 	}
 
-	switch v := highPcWrapped.Val.(type) {
-		case uint64:
-			highPc = v
-		case int64:
-			highPc = uint64(v)
+
+	switch highPcWrapped.Class {
+		case dwarf.ClassAddress: // we assume it's an absolute offset
+			highPc = highPcWrapped.Val.(uint64)
+		case dwarf.ClassConstant:
+			highPc = lowPc + uint64(highPcWrapped.Val.(int64))
 		default:
 			return fmt.Errorf("unrecognized highPc format")
 	}
@@ -151,9 +158,15 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 
 	functionName := functionNameAttr.Val.(string)
 
+	// fmt.Printf("func %s has raw pcs: %v %v\n", functionName, lowPcWrapped, highPcWrapped)
+
 	// For some reason the DeclLine attribute of our dwarf entry can be int64 ? Not too sure what's going on here
 	// functionFile := ent.AttrField(dwarf.AttrDeclFile).Val.(string)
-	functionFile := "placeholder()"
+	fileIndex, ok := ent.AttrField(dwarf.AttrDeclFile).Val.(int64)
+	if !ok || files == nil {
+		return fmt.Errorf("can't extract function file")
+	}
+	functionFile := files[fileIndex].Name
 	functionLine := ent.AttrField(dwarf.AttrDeclLine).Val.(int64)
 
 	locationField := ent.AttrField(dwarf.AttrFrameBase)
@@ -183,7 +196,11 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 			break
 		}
 
-		if (child.Tag == dwarf.TagVariable) {
+		// if child.Tag == dwarf.TagLexDwarfBlock {
+		//
+		// }
+
+		if child.Tag == dwarf.TagVariable {
 			varNameField := child.AttrField(dwarf.AttrName)
 			varLocationField := child.AttrField(dwarf.AttrLocation)
 
@@ -202,7 +219,10 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 				case []uint8:
 					varLocation = uint64(v[1])
 				default:
-					fmt.Fprintf(os.Stderr, "unsupported Location attribute: %v", varLocationField.Val)
+					fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
+					functionName,
+					varName,
+					varLocationField.Val)
 					continue
 			}
 
@@ -217,6 +237,8 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 
 	}
 
+	// fmt.Printf("Func %s (%d %d)\n", functionName, lowPc, highPc)
+
 	tree.Function.Insert(lowPc, highPc, FunctionRecord{
 		Name: functionName,
 		FileName: functionFile,
@@ -228,10 +250,10 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 	return nil
 }
 
-func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
+func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.LineFile, error) {
 	lineReader, err := d.LineReader(cu)
 	if err != nil || lineReader == nil {
-		return fmt.Errorf("can't initialize line reader: %v", err)
+		return nil, fmt.Errorf("can't initialize line reader: %v", err)
 	}
 
 	var le dwarf.LineEntry
@@ -242,7 +264,7 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
 		if errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
-			return err
+			return nil, err
 		}
 		// TODO: Maybe we should ignore tombstone addresses by using isTombstoneAddr,
 		//  but not sure if that would be an issue in practice.
@@ -267,12 +289,12 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) error {
 	for i, _ := range lines {
 		if i-1 >= 0 {
 			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
-				FileName: lines[i].File.Name,
-				Line:     int64(lines[i].Line),
-				Column:   int64(lines[i].Column),
+				FileName: lines[i - 1].File.Name,
+				Line:     int64(lines[i - 1].Line),
+				Column:   int64(lines[i - 1].Column),
 			})
 		}
 	}
 
-	return nil
+	return lineReader.Files(), nil
 }

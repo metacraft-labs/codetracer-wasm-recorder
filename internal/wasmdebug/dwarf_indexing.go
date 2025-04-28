@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"os"
 
 	"github.com/rdleal/intervalst/interval"
 )
@@ -142,7 +143,13 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 			return fmt.Errorf("unrecognized highPc format")
 	}
 
-	functionName := ent.AttrField(dwarf.AttrName).Val.(string)
+	functionNameAttr := ent.AttrField(dwarf.AttrName)
+
+	if functionNameAttr == nil {
+		return fmt.Errorf("malformed non-inlined function entry: no name attribute")
+	}
+
+	functionName := functionNameAttr.Val.(string)
 
 	// For some reason the DeclLine attribute of our dwarf entry can be int64 ? Not too sure what's going on here
 	// functionFile := ent.AttrField(dwarf.AttrDeclFile).Val.(string)
@@ -180,8 +187,26 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error
 			varNameField := child.AttrField(dwarf.AttrName)
 			varLocationField := child.AttrField(dwarf.AttrLocation)
 
+			if varNameField == nil || varLocationField == nil {
+				continue;
+			}
+
 			varName := varNameField.Val.(string)
-			varLocation := (varLocationField.Val.([]uint8))[1]
+
+			var varLocation uint64
+			// := (varLocationField.Val.([]uint8))[1]
+
+			switch v := varLocationField.Val.(type) {
+				case uint64:
+					varLocation = v
+				case []uint8:
+					varLocation = uint64(v[1])
+				default:
+					fmt.Fprintf(os.Stderr, "unsupported Location attribute: %v", varLocationField.Val)
+					continue
+			}
+
+			// TODO: This is not always a correct assertion
 
 			locals = append(locals, VariableRecord{
 				Name: varName,

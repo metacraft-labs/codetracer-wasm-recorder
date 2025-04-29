@@ -5,11 +5,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"os"
+	"sort"
 
 	"github.com/rdleal/intervalst/interval"
 )
+
+type TypeRecord interface {
+	isTypeRecord()
+}
+
+type BaseTypeRecord struct {
+	Name string
+	Size uint64
+}
+
+type StructTypeRecord struct {
+	Name   string
+	Fields []TypeRecord
+}
+
+type PointerTypeRecord struct {
+	Name    string
+	Address uint64
+}
+
+func (BaseTypeRecord) isTypeRecord()    {}
+func (StructTypeRecord) isTypeRecord()  {}
+func (PointerTypeRecord) isTypeRecord() {}
 
 type LineRecord struct {
 	FileName string
@@ -18,14 +41,14 @@ type LineRecord struct {
 }
 
 type VariableRecord struct {
-	Name string
+	Name   string
 	Offset uint64
 }
 
 type FunctionRecord struct {
-	Name     string
-	FileName string
-	Line     int64
+	Name           string
+	FileName       string
+	Line           int64
 	FrameBaseIndex uint64
 	// TODO: params
 	Locals []VariableRecord
@@ -40,11 +63,14 @@ type InlineRecord struct {
 	CallColumn   int64
 }
 
+type Offset uint64
+
 type PCRecord struct {
 	Line            *interval.SearchTree[LineRecord, uint64]
 	Function        *interval.SearchTree[FunctionRecord, uint64]
 	InlinedRoutines *interval.SearchTree[[]InlineRecord, uint64]
 	Locals          *interval.SearchTree[[]VariableRecord, uint64]
+	Types           map[Offset]TypeRecord
 }
 
 func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
@@ -88,6 +114,8 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			continue
 		}
 
+		// fmt.Printf("TAG: %s\n", ent.Tag.String())
+
 		for _, pcs := range ranges {
 			start, end := pcs[0], pcs[1]
 
@@ -96,12 +124,12 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			}
 
 			switch ent.Tag {
+
 			case dwarf.TagCompileUnit:
 				if files, err = indexCompileUnit(ent, d, &ret); err != nil {
-					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
+					fmt.Fprintf(os.Stderr, "error indexing compile unit: %v\n", err)
 					continue
 				}
-
 
 			case dwarf.TagInlinedSubroutine:
 
@@ -110,6 +138,17 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
 					continue
 				}
+
+			case dwarf.TagBaseType:
+				if err := indexBaseType(r, ent, &ret); err != nil {
+					fmt.Fprintf(os.Stderr, "error indexing type: %v\n", err)
+					continue
+				}
+
+			case dwarf.TagStructType:
+
+			case dwarf.TagPointerType:
+
 			}
 		}
 	}
@@ -117,7 +156,32 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	return
 }
 
+func indexBaseType(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error {
 
+	typeNameAttribute := ent.AttrField(dwarf.AttrName)
+	if typeNameAttribute == nil {
+		return fmt.Errorf("malformed type entry: type has no name")
+	}
+
+	typeName := typeNameAttribute.Val.(string)
+
+	typeSizeAttribute := ent.AttrField(dwarf.AttrByteSize)
+	if typeSizeAttribute == nil {
+		return fmt.Errorf("malformed type entry: type has no size")
+	}
+
+	typeSize := typeSizeAttribute.Val.(uint64)
+
+	record := BaseTypeRecord{
+		Name: typeName,
+		Size: typeSize,
+	}
+
+	fmt.Printf("Indexed type %s with size %d and offset in DWARF %d", typeName, typeSize, ent.Offset)
+	tree.Types[Offset(ent.Offset)] = record
+
+	return nil
+}
 
 func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFile, tree *PCRecord) error {
 	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
@@ -127,27 +191,25 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 		return fmt.Errorf("malformed non-inlined function entry: no low or high pc attributes present")
 	}
 
-
 	var lowPc, highPc uint64
 
 	switch v := lowPcWrapped.Val.(type) {
-		case uint64:
-			lowPc = v
-		case int64:
-			lowPc = uint64(v)
-		default:
-			// TODO: Handle
-			return fmt.Errorf("unrecognized lowPc format")
+	case uint64:
+		lowPc = v
+	case int64:
+		lowPc = uint64(v)
+	default:
+		// TODO: Handle
+		return fmt.Errorf("unrecognized lowPc format")
 	}
 
-
 	switch highPcWrapped.Class {
-		case dwarf.ClassAddress: // we assume it's an absolute offset
-			highPc = highPcWrapped.Val.(uint64)
-		case dwarf.ClassConstant:
-			highPc = lowPc + uint64(highPcWrapped.Val.(int64))
-		default:
-			return fmt.Errorf("unrecognized highPc format")
+	case dwarf.ClassAddress: // we assume it's an absolute offset
+		highPc = highPcWrapped.Val.(uint64)
+	case dwarf.ClassConstant:
+		highPc = lowPc + uint64(highPcWrapped.Val.(int64))
+	default:
+		return fmt.Errorf("unrecognized highPc format")
 	}
 
 	functionNameAttr := ent.AttrField(dwarf.AttrName)
@@ -192,6 +254,10 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 			return err
 		}
 
+		if child == nil {
+			break
+		}
+
 		if child.Tag == 0 {
 			break
 		}
@@ -205,31 +271,30 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 			varLocationField := child.AttrField(dwarf.AttrLocation)
 
 			if varNameField == nil || varLocationField == nil {
-				continue;
+				continue
 			}
 
 			varName := varNameField.Val.(string)
 
 			var varLocation uint64
-			// := (varLocationField.Val.([]uint8))[1]
 
 			switch v := varLocationField.Val.(type) {
-				case uint64:
-					varLocation = v
-				case []uint8:
-					varLocation = uint64(v[1])
-				default:
-					fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
+			case uint64:
+				varLocation = v
+			case []uint8:
+				varLocation = uint64(v[1])
+			default:
+				fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
 					functionName,
 					varName,
 					varLocationField.Val)
-					continue
+				continue
 			}
 
 			// TODO: This is not always a correct assertion
 
 			locals = append(locals, VariableRecord{
-				Name: varName,
+				Name:   varName,
 				Offset: uint64(varLocation),
 			})
 
@@ -237,14 +302,12 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 
 	}
 
-	// fmt.Printf("Func %s (%d %d)\n", functionName, lowPc, highPc)
-
 	tree.Function.Insert(lowPc, highPc, FunctionRecord{
-		Name: functionName,
-		FileName: functionFile,
-		Line: int64(functionLine),
+		Name:           functionName,
+		FileName:       functionFile,
+		Line:           int64(functionLine),
 		FrameBaseIndex: uint64(locationLocal),
-		Locals: locals,
+		Locals:         locals,
 	})
 
 	return nil
@@ -289,9 +352,9 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 	for i, _ := range lines {
 		if i-1 >= 0 {
 			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
-				FileName: lines[i - 1].File.Name,
-				Line:     int64(lines[i - 1].Line),
-				Column:   int64(lines[i - 1].Column),
+				FileName: lines[i-1].File.Name,
+				Line:     int64(lines[i-1].Line),
+				Column:   int64(lines[i-1].Column),
 			})
 		}
 	}

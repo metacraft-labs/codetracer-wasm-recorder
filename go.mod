@@ -13,6 +13,6 @@ retract (
 )
 
 require (
-	github.com/metacraft-labs/trace_record v0.0.0-20250423100216-0934796fec6e
+	github.com/metacraft-labs/trace_record v0.0.0-20250430113633-1c5c5d6fb662
 	github.com/rdleal/intervalst v1.4.1
 )

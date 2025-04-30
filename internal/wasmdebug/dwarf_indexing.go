@@ -43,6 +43,7 @@ type LineRecord struct {
 type VariableRecord struct {
 	Name   string
 	Offset uint64
+	Type   dwarf.Type
 }
 
 type FunctionRecord struct {
@@ -134,7 +135,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			case dwarf.TagInlinedSubroutine:
 
 			case dwarf.TagSubprogram:
-				if err := indexFunctionEntry(r, ent, files, &ret); err != nil {
+				if err := indexFunctionEntry(r, ent, d, files, &ret); err != nil {
 					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
 					continue
 				}
@@ -183,7 +184,7 @@ func indexBaseType(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error {
 	return nil
 }
 
-func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFile, tree *PCRecord) error {
+func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, tree *PCRecord) error {
 	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
 	highPcWrapped := ent.AttrField(dwarf.AttrHighpc)
 
@@ -267,6 +268,9 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 		// }
 
 		if child.Tag == dwarf.TagVariable {
+
+			varTypeField := child.AttrField(dwarf.AttrType)
+
 			varNameField := child.AttrField(dwarf.AttrName)
 			varLocationField := child.AttrField(dwarf.AttrLocation)
 
@@ -275,6 +279,24 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 			}
 
 			varName := varNameField.Val.(string)
+
+			fmt.Printf("VAR %s HAS TYPE: %v\n", varName, varTypeField)
+
+			varTypeOffset := varTypeField.Val.(dwarf.Offset)
+
+			varType, _ := d.Type(varTypeOffset)
+
+			// We can not do type assertions on varTypeTrue
+
+			switch t := varType.(type) {
+			case *dwarf.IntType:
+				fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
+			case *dwarf.PtrType:
+				fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
+
+			default:
+				fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
+			}
 
 			var varLocation uint64
 
@@ -296,6 +318,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, files []*dwarf.LineFi
 			locals = append(locals, VariableRecord{
 				Name:   varName,
 				Offset: uint64(varLocation),
+				Type:   varType,
 			})
 
 		}

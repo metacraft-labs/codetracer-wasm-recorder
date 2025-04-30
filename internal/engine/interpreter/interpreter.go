@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	// Dwarf
+	"debug/dwarf"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
@@ -723,7 +724,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 
 	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
-	functionRecord , _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+	functionRecord, _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
 
 	// fmt.Printf("Function record: %v\n", functionRecord)
 
@@ -746,28 +747,55 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 		if m.Record != nil && tracking_call {
 
-
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
 
-				if len(x) == 1 {
-					if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
-						if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
-							fmt.Printf("STEP: %v\n", x[0])
-							currLine = x[0]
-			 				m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+			if len(x) == 1 {
+				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
+					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
+						fmt.Printf("STEP: %v\n", x[0])
+						currLine = x[0]
+						m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
-							for _, v := range functionRecord.Locals {
-								mem := m.Memory()
+						for _, v := range functionRecord.Locals {
+							mem := m.Memory()
 
-								// TODO: Handle locals of different sizes. Currently we only handle 32-bit integers
-								trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), 4)
-								fmt.Printf("local: %s value: %d\n", v.Name, trueVal)
+							// var varSize uint32
+							varSize := v.Type.Size()
+
+							// switch t := v.Type.(type) {
+							// case *dwarf.IntType:
+							// 	fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
+							// case *dwarf.PtrType:
+							// 	fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
+
+							// default:
+							// 	fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
+							// }
+
+							intType, ok := v.Type.(*dwarf.IntType)
+
+							if ok {
+								rawVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(intType.ByteSize))
+
+								val := binary.LittleEndian.Uint32(rawVal)
+
+								fmt.Printf("local INT: %s has decimal value: %d\n", v.Name, val)
+
+								intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
+								typeId := m.Record.RegisterTypeWithNewId("Int", intTypeRecord)
+								m.Record.RegisterVariable(v.Name, trace_record.IntValue(int64(val), typeId))
+
+							} else {
+
+								trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(varSize))
+								fmt.Printf("local: %s has raw value: %d\n", v.Name, trueVal)
 							}
-
 						}
-					}
 
+					}
 				}
+
+			}
 			// positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
 
 			// // TODO: handle inline stuff
@@ -4426,14 +4454,11 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.popFrame()
 
 	if m.Record != nil && tracking_call {
-			// TODO: extract return value
-
+		// TODO: extract return value
 
 		m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
 
-
 		m.Record.RegisterReturn(trace_record.NilValue())
-
 
 		fmt.Printf("Return: %v\n", functionRecord.Name)
 

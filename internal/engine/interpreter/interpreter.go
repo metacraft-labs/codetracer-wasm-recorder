@@ -734,6 +734,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		if tracking_call {
 
 			fmt.Printf("Call: %v\n", functionRecord.Name)
+			if functionRecord.Name != "b" {
+				m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+			}
 			m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line))
 		}
 	}

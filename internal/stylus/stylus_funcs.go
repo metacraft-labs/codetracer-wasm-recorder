@@ -384,11 +384,11 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 }
 
 func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "storage_cache_bytes32"
+	eventName := "storage_cache_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
+				event, err := trace.nextEvent(eventName)
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
@@ -396,22 +396,25 @@ func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, 
 				mem := m.Memory()
 				keyPtr := uint32(stack[0])
 				valuePtr := uint32(stack[1])
-				_ = readMemoryBytes(mem, keyPtr, 32)
-				_ = readMemoryBytes(mem, valuePtr, 32)
+				key := readMemoryBytes(mem, keyPtr, 32)
+				value := fmt.Sprintf("0x%xd", readMemoryBytes(mem, valuePtr, 32))
 
 				_ = event
+		
+				metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
+				record.RegisterRecordEvent(trace_record.EventKindWriteOther, metadata, value)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
-		).Export(fname)
+		).Export(eventName)
 }
 
 func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "storage_load_bytes32"
+	eventName := "storage_load_bytes32"
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
+				event, err := trace.nextEvent(eventName)
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
@@ -419,12 +422,16 @@ func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 				mem := m.Memory()
 				keyPtr := uint32(stack[0])
 				destPtr := uint32(stack[1])
-				_ = readMemoryBytes(mem, keyPtr, 32)
+				key := readMemoryBytes(mem, keyPtr, 32)
 				writeMemoryBytes(mem, destPtr, event.outs)
+
+				metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
+				content := fmt.Sprintf("0x%xd", event.outs)
+				record.RegisterRecordEvent(trace_record.EventKindReadOther, metadata, content)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
-		).Export(fname)
+		).Export(eventName)
 }
 
 func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {

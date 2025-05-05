@@ -700,6 +700,44 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) trace_record.ValueRecord {
+	mem := m.Memory()
+
+	// var varSize uint32
+	varSize := v.Type.Size()
+
+	// switch t := v.Type.(type) {
+	// case *dwarf.IntType:
+	// 	fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
+	// case *dwarf.PtrType:
+	// 	fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
+
+	// default:
+	// 	fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
+	// }
+
+	intType, ok := v.Type.(*dwarf.IntType)
+
+	if ok {
+		rawVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(intType.ByteSize))
+
+		val := binary.LittleEndian.Uint32(rawVal)
+
+		fmt.Printf("INT: %s has decimal value: %d\n", v.Name, val)
+
+		intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
+		typeId := m.Record.RegisterTypeWithNewId("Int", intTypeRecord)
+		return trace_record.IntValue(int64(val), typeId)
+
+	} else {
+		trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(varSize))
+		fmt.Printf("%s has raw value: %d\n", v.Name, trueVal)
+	}
+
+	// TODO: what to do
+	return trace_record.NilValue()
+}
+
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -717,7 +755,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// dwarfData := frame.f.parent.source.DWARFData
 
 	// TODO: Figure out a way to resolve how many local variables we need
-	locals := [10000]uint64{}
+	locals := make([]uint64, 10000)
 
 	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
 
@@ -728,73 +766,51 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// fmt.Printf("Function record: %v\n", functionRecord)
 
-	tracking_call := false
-	if m.Record != nil {
-		tracking_call = strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
-		if tracking_call {
-
-			fmt.Printf("Call: %v\n", functionRecord.Name)
-			if m.Record.CurrentCallsCount() > 0 {
-				m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
-			}
-			m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line))
-		}
-	}
+	tracking_call := m.Record != nil && strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
 
 	var currLine wasmdebug.LineRecord
 
+	loggedCall := false
+
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
-		// TODO: add a `tracking` flag somewhere, and run tracking code only
-		// if `tracking` is true:
-
 		if m.Record != nil && tracking_call {
-
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
 
 			if len(x) == 1 {
 				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
 					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
-						fmt.Printf("STEP: %v\n", x[0])
-						currLine = x[0]
-						m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+						if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
+							loggedCall = true
 
-						for _, v := range functionRecord.Locals {
-							mem := m.Memory()
+							fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
+							args := make([]trace_record.ArgRecord, 0)
 
-							// var varSize uint32
-							varSize := v.Type.Size()
+							for _, argRec := range functionRecord.Params {
+								fmt.Printf("\t")
+								val := readVariable(m, argRec, functionRecord, locals)
 
-							// switch t := v.Type.(type) {
-							// case *dwarf.IntType:
-							// 	fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
-							// case *dwarf.PtrType:
-							// 	fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
-
-							// default:
-							// 	fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
-							// }
-
-							intType, ok := v.Type.(*dwarf.IntType)
-
-							if ok {
-								rawVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(intType.ByteSize))
-
-								val := binary.LittleEndian.Uint32(rawVal)
-
-								fmt.Printf("local INT: %s has decimal value: %d\n", v.Name, val)
-
-								intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
-								typeId := m.Record.RegisterTypeWithNewId("Int", intTypeRecord)
-								m.Record.RegisterVariable(v.Name, trace_record.IntValue(int64(val), typeId))
-
-							} else {
-
-								trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(varSize))
-								fmt.Printf("local: %s has raw value: %d\n", v.Name, trueVal)
+								args = append(args, trace_record.ArgRecord{
+									Name:  argRec.Name,
+									Value: val,
+								})
 							}
+
+							m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+							m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 						}
 
+						if loggedCall {
+							fmt.Printf("STEP: %v\n", x[0])
+							currLine = x[0]
+							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+
+							for _, v := range functionRecord.Locals {
+								fmt.Printf("local ")
+								val := readVariable(m, v, functionRecord, locals)
+								m.Record.RegisterVariable(v.Name, val)
+							}
+						}
 					}
 				}
 
@@ -4459,11 +4475,16 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	if m.Record != nil && tracking_call {
 		// TODO: extract return value
 
-		m.Record.RegisterTypeWithNewId("nil", trace_record.NewSimpleTypeRecord(30, "nil"))
-
 		m.Record.RegisterReturn(trace_record.NilValue())
 
-		fmt.Printf("Return: %v\n", functionRecord.Name)
+		if functionRecord.ReturnType == nil {
+			fmt.Printf("Return: %v\n", functionRecord.Name)
+		} else {
+			rawValue := ce.stack[len(ce.stack)-1]
+			// TODO: parse value depending on functionRecord.ReturnType
+
+			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, rawValue)
+		}
 
 	}
 

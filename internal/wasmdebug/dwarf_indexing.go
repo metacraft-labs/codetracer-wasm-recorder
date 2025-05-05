@@ -51,8 +51,11 @@ type FunctionRecord struct {
 	FileName       string
 	Line           int64
 	FrameBaseIndex uint64
-	// TODO: params
-	Locals []VariableRecord
+	Params         []VariableRecord
+	Locals         []VariableRecord
+
+	// When nil, then the function is void / doesn't return value
+	ReturnType *dwarf.Type
 }
 
 type InlineRecord struct {
@@ -243,6 +246,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		return fmt.Errorf("malformed non-inlined function entry: no location attribute present")
 	}
 
+	params := make([]VariableRecord, 0)
 	locals := make([]VariableRecord, 0)
 
 	// Read children of Subprogram tag
@@ -267,7 +271,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		//
 		// }
 
-		if child.Tag == dwarf.TagVariable {
+		if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
 
 			varTypeField := child.AttrField(dwarf.AttrType)
 
@@ -315,23 +319,57 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			// TODO: This is not always a correct assertion
 
-			locals = append(locals, VariableRecord{
-				Name:   varName,
-				Offset: uint64(varLocation),
-				Type:   varType,
-			})
+			if child.Tag == dwarf.TagVariable {
+				locals = append(locals, VariableRecord{
+					Name:   varName,
+					Offset: uint64(varLocation),
+					Type:   varType,
+				})
+			} else if child.Tag == dwarf.TagFormalParameter {
+				params = append(params, VariableRecord{
+					Name:   varName,
+					Offset: uint64(varLocation),
+					Type:   varType,
+				})
+			}
 
 		}
 
 	}
 
-	tree.Function.Insert(lowPc, highPc, FunctionRecord{
+	record := FunctionRecord{
 		Name:           functionName,
 		FileName:       functionFile,
 		Line:           int64(functionLine),
 		FrameBaseIndex: uint64(locationLocal),
+		Params:         params,
 		Locals:         locals,
-	})
+		ReturnType:     nil,
+	}
+
+	funcTypeField := ent.AttrField(dwarf.AttrType)
+	if funcTypeField != nil {
+		funcTypeOffset := funcTypeField.Val.(dwarf.Offset)
+		returnType, _ := d.Type(funcTypeOffset)
+
+		// switch t := returnType.(type) {
+		// case *dwarf.IntType:
+		// 	fmt.Printf("FUNCTION %v RETURNS BASIC TYPE: %v\n", functionName, t)
+		// case *dwarf.PtrType:
+		// 	fmt.Printf("FUNCTION %v RETURNS PTR TYPE: %v\n", functionName, t)
+
+		// default:
+		// 	fmt.Printf("FUNCTION %v RETURNS SOMETHING ELSE: %T\n", functionName, t)
+		// }
+
+		record.ReturnType = &returnType
+
+		fmt.Printf("FUNCTION %v RETURNS %#v\n", functionName, returnType)
+	} else {
+		fmt.Printf("FUNCTION %v RETURNS void\n", functionName)
+	}
+
+	tree.Function.Insert(lowPc, highPc, record)
 
 	return nil
 }

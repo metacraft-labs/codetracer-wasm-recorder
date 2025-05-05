@@ -26,7 +26,6 @@ import (
 	"github.com/tetratelabs/wazero/internal/stylus"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
-	"github.com/tetratelabs/wazero/sys"
 )
 
 func main() {
@@ -367,17 +366,18 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, traceRecordPtr)
 	}
 
-	if err != nil {
-		if exitErr, ok := err.(*sys.ExitError); ok {
-			exitCode := exitErr.ExitCode()
-			if exitCode == sys.ExitCodeDeadlineExceeded {
-				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
-			}
-			return int(exitCode)
-		}
-		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
-		return 1
-	}
+	// TODO: handle this appropriately
+	// if err != nil {
+	// 	if exitErr, ok := err.(*sys.ExitError); ok {
+	// 		exitCode := exitErr.ExitCode()
+	// 		if exitCode == sys.ExitCodeDeadlineExceeded {
+	// 			fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
+	// 		}
+	// 		return int(exitCode)
+	// 	}
+	// 	fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
+	// 	return 1
+	// }
 
 	if stylusTracePath != "" {
 		arg, err := stylusState.GetEntrypointArg()

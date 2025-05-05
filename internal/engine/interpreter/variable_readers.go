@@ -53,12 +53,20 @@ func doReadStructVariable(currOffset uint64, currType *dwarf.Type, m *wasm.Modul
 	values := make([]trace_record.ValueRecord, 0)
 	switch t := (*currType).(type) {
 	case *dwarf.StructType:
+		structFields := make([]trace_record.ValueRecord, 0)
 		for _, field := range t.Field {
 			res, err := doReadStructVariable(currOffset+uint64(field.ByteOffset), &field.Type, m)
 			if err == nil {
-				values = append(values, res...)
+				structFields = append(structFields, res...)
 			}
 		}
+
+		structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, t.Common().Name)
+		typeId := m.Record.RegisterTypeWithNewId(t.Name, structTypeRecord)
+
+		structValueRecord := trace_record.StructValue(structFields, typeId)
+
+		values = append(values, structValueRecord)
 	case *dwarf.IntType:
 		intValue, err := readIntVariable(currOffset, m, t)
 		if err == nil {

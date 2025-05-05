@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
 	"strings"
 	"sync"
 	"unsafe"
 
 	// Dwarf
-	"debug/dwarf"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
@@ -700,44 +700,6 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
-func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) trace_record.ValueRecord {
-	mem := m.Memory()
-
-	// var varSize uint32
-	varSize := v.Type.Size()
-
-	// switch t := v.Type.(type) {
-	// case *dwarf.IntType:
-	// 	fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
-	// case *dwarf.PtrType:
-	// 	fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
-
-	// default:
-	// 	fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
-	// }
-
-	intType, ok := v.Type.(*dwarf.IntType)
-
-	if ok {
-		rawVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(intType.ByteSize))
-
-		val := binary.LittleEndian.Uint32(rawVal)
-
-		fmt.Printf("INT: %s has decimal value: %d\n", v.Name, val)
-
-		intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
-		typeId := m.Record.RegisterTypeWithNewId("Int", intTypeRecord)
-		return trace_record.IntValue(int64(val), typeId)
-
-	} else {
-		trueVal, _ := mem.Read(uint32(locals[functionRecord.FrameBaseIndex]+v.Offset), uint32(varSize))
-		fmt.Printf("%s has raw value: %d\n", v.Name, trueVal)
-	}
-
-	// TODO: what to do
-	return trace_record.NilValue()
-}
-
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -788,12 +750,17 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 							for _, argRec := range functionRecord.Params {
 								fmt.Printf("\t")
-								val := readVariable(m, argRec, functionRecord, locals)
+								val, err := readVariable(m, argRec, functionRecord, locals)
 
-								args = append(args, trace_record.ArgRecord{
-									Name:  argRec.Name,
-									Value: val,
-								})
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "Can't function argument %s: %v\n", argRec.Name, err)
+								} else {
+									fmt.Printf("\t%v: %v\n", argRec.Name, val)
+									args = append(args, trace_record.ArgRecord{
+										Name:  argRec.Name,
+										Value: val,
+									})
+								}
 							}
 
 							m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
@@ -806,14 +773,18 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
 							for _, v := range functionRecord.Locals {
-								fmt.Printf("local ")
-								val := readVariable(m, v, functionRecord, locals)
-								m.Record.RegisterVariable(v.Name, val)
+								val, err := readVariable(m, v, functionRecord, locals)
+
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+								} else {
+									fmt.Printf("local %v: %v\n", v.Name, val)
+									m.Record.RegisterVariable(v.Name, val)
+								}
 							}
 						}
 					}
 				}
-
 			}
 			// positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
 

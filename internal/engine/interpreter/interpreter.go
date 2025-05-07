@@ -4469,14 +4469,14 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				// TODO: handle errors
 
 				rawBytes, _ := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
-				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m.Record)
+				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 
 			default:
 				rawBytes := make([]byte, 8)
 				binary.LittleEndian.PutUint64(rawBytes, rawValue)
 
 				// TODO: handle errors
-				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m.Record)
+				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 			}
 			m.Record.RegisterReturn(value)
 			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)

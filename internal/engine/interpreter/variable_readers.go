@@ -21,22 +21,25 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 		return nil, fmt.Errorf("out of range memory access")
 	}
 
-	return bytesToValueRecord(rawBytes, v.Type, m.Record)
+	return bytesToValueRecord(rawBytes, v.Type, m)
 }
 
-func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, record *trace_record.TraceRecord) (val trace_record.ValueRecord, err error) {
+func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, err error) {
+
 	switch t := typ.(type) {
 	case *dwarf.IntType:
-		val, err = bytesToInt(rawBytes, t, record)
+		val, err = bytesToInt(rawBytes, t, m)
 
 	case *dwarf.UintType:
-		val, err = bytesToUint(rawBytes, t, record)
+		val, err = bytesToUint(rawBytes, t, m)
 
 	case *dwarf.StructType:
-		val, err = bytesToStruct(rawBytes, t, record)
+		val, err = bytesToStruct(rawBytes, t, m)
 
 	case *dwarf.PtrType:
-		fmt.Printf("POINTERRRR %#v\n", t.Type.Common().Name)
+		val, err = BytesToPointer(rawBytes, t, m)
+
+		// fmt.Printf("POINTERRRR %#v\n", t.Type.Common().Name)
 
 	default:
 		fmt.Printf("WE HAVE SOMETHING ELSE: %T %#v\n", t, t)
@@ -47,9 +50,11 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, record *trace_record.Tr
 	return
 }
 
-func bytesToInt(rawBytes []byte, typ *dwarf.IntType, record *trace_record.TraceRecord) (trace_record.ValueRecord, error) {
+func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
 	size := typ.ByteSize
 	var intVal int64
+
+	record := m.Record
 
 	switch size {
 	case 1:
@@ -75,9 +80,11 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, record *trace_record.TraceR
 	return trace_record.IntValue(intVal, typeId), nil
 }
 
-func bytesToUint(rawBytes []byte, typ *dwarf.UintType, record *trace_record.TraceRecord) (trace_record.ValueRecord, error) {
+func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
 	size := typ.ByteSize
 	var intVal uint64
+
+	record := m.Record
 
 	switch size {
 	case 1:
@@ -104,13 +111,15 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, record *trace_record.Trac
 	return trace_record.IntValue(int64(intVal), typeId), nil
 }
 
-func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, record *trace_record.TraceRecord) (trace_record.ValueRecord, error) {
+func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
 	values := make([]trace_record.ValueRecord, 0)
+
+	record := m.Record
 
 	for _, field := range typ.Field {
 		offset := field.ByteOffset
 		size := field.Type.Size()
-		res, err := bytesToValueRecord(rawBytes[offset:offset+size], field.Type, record)
+		res, err := bytesToValueRecord(rawBytes[offset:offset+size], field.Type, m)
 		if err != nil {
 			return nil, err
 		}
@@ -123,4 +132,29 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, record *trace_record.
 	typeId := record.RegisterTypeWithNewId(typ.Name, structTypeRecord)
 
 	return trace_record.StructValue(values, typeId), nil
+}
+
+func BytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+	
+
+	dereferencedType := typ.Type
+
+	record := m.Record
+
+	mem := m.Memory()
+
+	addr := binary.LittleEndian.Uint32(rawBytes)
+
+	// TODO: Handle errors
+	dereferencedRawBytes, _ := mem.Read(addr, uint32(dereferencedType.Size()))
+
+	// TODO: Handle errors
+	dereferencedValueRecord, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
+
+	// TODO: Define PTR_TYPE_KIND in trace_record
+	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Pointer")
+	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
+
+	return trace_record.ReferenceValue(dereferencedValueRecord, false, typeId), nil
+
 }

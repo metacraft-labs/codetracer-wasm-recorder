@@ -735,6 +735,14 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	loggedCall := false
 
+	// if m.Record != nil && tracking_call {
+	// 	fmt.Printf("Stack: %v\n", ce.stack)
+	// }
+	// fmt.Printf("-----------------------\n")
+
+	paramCount := len(frame.f.funcType.Params)
+	functionParams := ce.stack[len(ce.stack)-paramCount:]
+
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 		if m.Record != nil && tracking_call {
@@ -747,6 +755,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							loggedCall = true
 
 							fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
+
 							args := make([]trace_record.ArgRecord, 0)
 
 							for _, argRec := range functionRecord.Params {
@@ -4454,10 +4463,12 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			var value trace_record.ValueRecord
 			switch rt := (*functionRecord.ReturnType).(type) {
 			case *dwarf.StructType:
-				// TODO: this is broken 🥹. Must fix.
+				// TODO: This is broken 🥹. Must fix.
+				// EDIT: It works now :)
+
 				// TODO: handle errors
-				rawBytes, _ := m.Memory().Read(uint32(rawValue), uint32(rt.ByteSize))
-				fmt.Printf("RAW BTYES AT %v: %v\n", rawValue, rawBytes)
+
+				rawBytes, _ := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
 				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m.Record)
 
 			default:

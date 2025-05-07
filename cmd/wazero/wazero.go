@@ -26,6 +26,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/stylus"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
+	"github.com/tetratelabs/wazero/sys"
 )
 
 func main() {
@@ -366,18 +367,18 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, traceRecordPtr)
 	}
 
-	// TODO: handle this appropriately
-	// if err != nil {
-	// 	if exitErr, ok := err.(*sys.ExitError); ok {
-	// 		exitCode := exitErr.ExitCode()
-	// 		if exitCode == sys.ExitCodeDeadlineExceeded {
-	// 			fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
-	// 		}
-	// 		return int(exitCode)
-	// 	}
-	// 	fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
-	// 	return 1
-	// }
+	if err != nil {
+		if exitErr, ok := err.(*sys.ExitError); ok {
+			exitCode := exitErr.ExitCode()
+			if exitCode == sys.ExitCodeDeadlineExceeded {
+				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
+			}
+			produceTrace(traceDir, err, traceRecord, stdErr)
+			return int(exitCode)
+		}
+		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
+		return 1
+	}
 
 	if stylusTracePath != "" {
 		arg, err := stylusState.GetEntrypointArg()
@@ -403,14 +404,18 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		// We're done, _start was called as part of instantiating the module.
 	}
 
+	produceTrace(traceDir, err, traceRecord, stdErr)
+
+	return 0
+}
+
+func produceTrace(traceDir string, err error, traceRecord trace_record.TraceRecord, stdErr logging.Writer) {
 	if traceDir != "" {
 		err = traceRecord.ProduceTrace(traceDir, "TEST", "/tmp/random-placeholder")
 		if err != nil {
 			fmt.Fprintf(stdErr, "error creating trace: %v\n", err)
 		}
 	}
-
-	return 0
 }
 
 func validateMounts(mounts sliceFlag, stdErr logging.Writer) (rc int, rootPath string, config wazero.FSConfig) {

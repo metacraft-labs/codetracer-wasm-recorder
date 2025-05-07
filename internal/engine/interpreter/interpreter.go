@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"context"
+	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -4444,17 +4445,30 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.popFrame()
 
 	if m.Record != nil && tracking_call {
-		// TODO: extract return value
-
-		m.Record.RegisterReturn(trace_record.NilValue())
-
 		if functionRecord.ReturnType == nil {
 			fmt.Printf("Return: %v\n", functionRecord.Name)
+			m.Record.RegisterReturn(trace_record.NilValue())
 		} else {
 			rawValue := ce.stack[len(ce.stack)-1]
-			// TODO: parse value depending on functionRecord.ReturnType
 
-			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, rawValue)
+			var value trace_record.ValueRecord
+			switch rt := (*functionRecord.ReturnType).(type) {
+			case *dwarf.StructType:
+				// TODO: this is broken 🥹. Must fix.
+				// TODO: handle errors
+				rawBytes, _ := m.Memory().Read(uint32(rawValue), uint32(rt.ByteSize))
+				fmt.Printf("RAW BTYES AT %v: %v\n", rawValue, rawBytes)
+				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m.Record)
+
+			default:
+				rawBytes := make([]byte, 8)
+				binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+				// TODO: handle errors
+				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m.Record)
+			}
+			m.Record.RegisterReturn(value)
+			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)
 		}
 
 	}

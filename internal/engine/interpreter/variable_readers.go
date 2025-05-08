@@ -33,13 +33,14 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	case *dwarf.UintType:
 		val, err = bytesToUint(rawBytes, t, m)
 
+	case *dwarf.BoolType:
+		val, err = bytesToBool(rawBytes, t, m)
+
 	case *dwarf.StructType:
 		val, err = bytesToStruct(rawBytes, t, m)
 
 	case *dwarf.PtrType:
-		val, err = BytesToPointer(rawBytes, t, m)
-
-		// fmt.Printf("POINTERRRR %#v\n", t.Type.Common().Name)
+		val, err = bytesToPointer(rawBytes, t, m)
 
 	default:
 		fmt.Printf("WE HAVE SOMETHING ELSE: %T %#v\n", t, t)
@@ -70,7 +71,7 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 		intVal = int64(binary.LittleEndian.Uint64(rawBytes))
 
 	default:
-		return nil, fmt.Errorf("unsupported int variable bit size %v", size)
+		return nil, fmt.Errorf("unsupported int variable byte size %v", size)
 	}
 
 	// TODO: what should the string parameter be?
@@ -100,7 +101,7 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 		intVal = binary.LittleEndian.Uint64(rawBytes)
 
 	default:
-		return nil, fmt.Errorf("unsupported uint variable bit size %v", size)
+		return nil, fmt.Errorf("unsupported uint variable byte size %v", size)
 	}
 
 	// TODO: what should the string parameter be?
@@ -109,6 +110,27 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 
 	// TODO: discuss int64 uint64 stuff?
 	return trace_record.IntValue(int64(intVal), typeId), nil
+}
+
+func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+	size := typ.ByteSize
+	var boolVal bool
+
+	record := m.Record
+
+	switch size {
+	case 1:
+		boolVal = rawBytes[0] != 0
+
+	default:
+		return nil, fmt.Errorf("unsupported bool variable byte size %v", size)
+	}
+
+	// TODO: what should the string parameter be?
+	boolTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Boolean")
+	typeId := record.RegisterTypeWithNewId(typ.Name, boolTypeRecord)
+
+	return trace_record.BoolValue(boolVal, typeId), nil
 }
 
 func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
@@ -128,14 +150,14 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	}
 
+	// TODO: what should the string parameter be?
 	structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
 	typeId := record.RegisterTypeWithNewId(typ.Name, structTypeRecord)
 
 	return trace_record.StructValue(values, typeId), nil
 }
 
-func BytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
-	
+func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
 
 	dereferencedType := typ.Type
 
@@ -151,6 +173,7 @@ func BytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	// TODO: Handle errors
 	dereferencedValueRecord, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
 
+	// TODO: what should the string parameter be?
 	// TODO: Define PTR_TYPE_KIND in trace_record
 	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Pointer")
 	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)

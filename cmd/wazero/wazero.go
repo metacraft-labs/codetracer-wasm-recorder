@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -242,6 +243,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	wasmPath := flags.Arg(0)
+	wasmFile := path.Base(wasmPath)
 	wasmArgs := flags.Args()[1:]
 	if len(wasmArgs) > 1 {
 		// Skip "--" if provided
@@ -373,7 +375,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
-			produceTrace(traceDir, err, traceRecord, stdErr)
+			produceTrace(traceDir, wasmFile, traceRecord)
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
@@ -404,16 +406,19 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		// We're done, _start was called as part of instantiating the module.
 	}
 
-	produceTrace(traceDir, err, traceRecord, stdErr)
+	produceTrace(traceDir, wasmFile, traceRecord)
 
 	return 0
 }
 
-func produceTrace(traceDir string, err error, traceRecord trace_record.TraceRecord, stdErr logging.Writer) {
+func produceTrace(traceDir string, fileName string, traceRecord trace_record.TraceRecord) {
+
+	// TODO: Handle error
+	workDir, _ := os.Getwd()
 	if traceDir != "" {
-		err = traceRecord.ProduceTrace(traceDir, "TEST", "/tmp/random-placeholder")
+		err := traceRecord.ProduceTrace(traceDir, fileName, workDir)
 		if err != nil {
-			fmt.Fprintf(stdErr, "error creating trace: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
 		}
 	}
 }

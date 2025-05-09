@@ -4,6 +4,7 @@ import (
 	"debug/dwarf"
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/internal/wasm"
@@ -35,6 +36,9 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 
 	case *dwarf.BoolType:
 		val, err = bytesToBool(rawBytes, t, m)
+
+	case *dwarf.FloatType:
+		val, err = bytesToFloat(rawBytes, t, m)
 
 	case *dwarf.StructType:
 		val, err = bytesToStruct(rawBytes, t, m)
@@ -131,6 +135,30 @@ func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (
 	typeId := record.RegisterTypeWithNewId(typ.Name, boolTypeRecord)
 
 	return trace_record.BoolValue(boolVal, typeId), nil
+}
+
+func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+	size := typ.ByteSize
+	var floatVal float64
+
+	record := m.Record
+
+	switch size {
+	case 4:
+		floatVal = float64(math.Float32frombits(binary.LittleEndian.Uint32(rawBytes)))
+
+	case 8:
+		floatVal = math.Float64frombits(binary.LittleEndian.Uint64(rawBytes))
+
+	default:
+		return nil, fmt.Errorf("unsupported float variable byte size %v", size)
+	}
+
+	// TODO: what should the string parameter be?
+	floatTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Float")
+	typeId := record.RegisterTypeWithNewId(typ.Name, floatTypeRecord)
+
+	return trace_record.FloatValue(floatVal, typeId), nil
 }
 
 func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {

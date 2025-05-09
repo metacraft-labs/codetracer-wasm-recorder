@@ -1,12 +1,14 @@
 { pkgs, ... }:
-let
-  inherit (pkgs) ;
-in
-buildGoModule rec {
+pkgs.buildGoModule rec {
   name = "wazero";
   pname = name;
 
-  src = ./cmd/wazero;
+  src = ./.;
 
-  vendorHash = lib.fakeHash;
+  doCheck = false;
+
+  subPackages = [ "cmd/wazero" ];
+
+  vendorHash = "sha256-qo9oC0E39jPJlcM9POoARcqDKJlRWEl0jWTlflsFFQQ=";
+
 }

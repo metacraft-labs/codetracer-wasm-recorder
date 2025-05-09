@@ -22,6 +22,7 @@
         {
 
           devShells.default = import ./shell.nix { inherit pkgs self' inputs'; };
+          packages.default = import ./wazero.nix { inherit pkgs; };
 
         };
     };

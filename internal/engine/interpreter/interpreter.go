@@ -756,7 +756,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 							fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
 
-							args := make([]trace_record.ArgRecord, 0)
+							args := make([]trace_record.FullValueRecord, 0)
 
 							for _, argRec := range functionRecord.Params {
 								fmt.Printf("\t")
@@ -766,10 +766,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 									fmt.Fprintf(os.Stderr, "Can't function argument %s: %v\n", argRec.Name, err)
 								} else {
 									fmt.Printf("\t%v: %v\n", argRec.Name, val)
-									args = append(args, trace_record.ArgRecord{
-										Name:  argRec.Name,
-										Value: val,
-									})
+									args = append(args, m.Record.Arg(argRec.Name, val))
 								}
 							}
 

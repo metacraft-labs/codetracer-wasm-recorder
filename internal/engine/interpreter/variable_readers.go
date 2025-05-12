@@ -41,7 +41,12 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 		val, err = bytesToFloat(rawBytes, t, m)
 
 	case *dwarf.StructType:
-		val, err = bytesToStruct(rawBytes, t, m)
+		// val, err = bytesToStruct(rawBytes, t, m)
+		if typ.String() == "struct &str" {
+			val, err = bytesToStringRust(rawBytes, t, m)
+		} else {
+			val, err = bytesToStruct(rawBytes, t, m)
+		}
 
 	case *dwarf.PtrType:
 		val, err = bytesToPointer(rawBytes, t, m)
@@ -206,6 +211,50 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Pointer")
 	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
 
-	return trace_record.ReferenceValue(dereferencedValueRecord, false, typeId), nil
+	return trace_record.ReferenceValue(dereferencedValueRecord, addr, false, typeId), nil
+
+}
+
+func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+
+	record := m.Record
+
+	mem := m.Memory()
+
+	data, _ := bytesToStruct(rawBytes, typ, m)
+
+	val, ok := data.(trace_record.StructValueRecord)
+
+	if !ok {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	data_ptr_field, err := val.Fields[0].(trace_record.ReferenceValueRecord)
+
+	if !err {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	addr := data_ptr_field.Address
+
+	len_field, ok := val.Fields[1].(trace_record.IntValueRecord)
+
+	if !ok {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	len := len_field.I
+
+	str := ""
+
+	for i := 0; i < int(len); i++ {
+		data, _ := mem.Read(addr+uint32(i), 1)
+		str += string(data[0])
+	}
+
+	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "String")
+	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
+
+	return trace_record.StringValue(str, typeId), nil
 
 }

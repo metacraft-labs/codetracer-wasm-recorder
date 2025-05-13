@@ -55,6 +55,9 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	case *dwarf.PtrType:
 		val, err = bytesToPointer(rawBytes, t, m)
 
+	case *dwarf.ArrayType:
+		val, err = bytesToArray(rawBytes, t, m)
+
 	default:
 		fmt.Printf("WE HAVE SOMETHING ELSE: %T %#v\n", t, t)
 		// TODO
@@ -216,5 +219,73 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
 
 	return trace_record.ReferenceValue(dereferencedValueRecord, addr, false, typeId), nil
+
+}
+
+func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+
+	record := m.Record
+
+	elemSize := typ.Type.Size()
+
+	arrayLen := typ.Count
+
+	elems := make([]trace_record.ValueRecord, 0)
+
+	for i := 0; i < int(arrayLen)-1; i++ {
+
+		elem, _ := bytesToValueRecord(rawBytes[i*int(elemSize):(i+1)*int(elemSize)], typ.Type, m)
+		elems = append(elems, elem)
+
+	}
+
+	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Array")
+	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
+
+	return trace_record.SequenceValue(elems, false, typeId), nil
+
+}
+
+func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+
+	record := m.Record
+
+	mem := m.Memory()
+
+	data, _ := bytesToStruct(rawBytes, typ, m)
+
+	val, ok := data.(trace_record.StructValueRecord)
+
+	if !ok {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	data_ptr_field, ok := val.Fields[0].(trace_record.ReferenceValueRecord)
+
+	if !ok {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	addr := data_ptr_field.Address
+
+	len_field, ok := val.Fields[1].(trace_record.IntValueRecord)
+
+	if !ok {
+		return nil, fmt.Errorf("not a string slice")
+	}
+
+	len := len_field.I
+
+	str := ""
+
+	for i := 0; i < int(len); i++ {
+		data, _ := mem.Read(addr+uint32(i), 1)
+		str += string(data[0])
+	}
+
+	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "String")
+	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
+
+	return trace_record.StringValue(str, typeId), nil
 
 }

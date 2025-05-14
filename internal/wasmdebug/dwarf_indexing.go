@@ -308,7 +308,25 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			case uint64:
 				varLocation = v
 			case []uint8:
-				varLocation = uint64(v[1])
+
+				// LEB128 decoding
+				shift := 0
+				var res uint64 = 0
+				for i := 1; i < len(v); i++ {
+
+					// get first 7 bits of 8 bit chunk
+					payload := int(v[i]) & 0b01111111
+
+					res = res + uint64(payload*(1<<shift))
+
+					// 8th bit is used to check whether there's "more data to read"
+					if (v[i] & 0b10000000) == 0 {
+						break
+					}
+
+					shift += 7
+				}
+				varLocation = res
 			default:
 				fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
 					functionName,
@@ -320,15 +338,16 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			// TODO: This is not always a correct assertion
 
 			if child.Tag == dwarf.TagVariable {
+				fmt.Printf("Var: %s has location: %d\n", varName, varLocation)
 				locals = append(locals, VariableRecord{
 					Name:   varName,
-					Offset: uint64(varLocation),
+					Offset: varLocation,
 					Type:   varType,
 				})
 			} else if child.Tag == dwarf.TagFormalParameter {
 				params = append(params, VariableRecord{
 					Name:   varName,
-					Offset: uint64(varLocation),
+					Offset: varLocation,
 					Type:   varType,
 				})
 			}

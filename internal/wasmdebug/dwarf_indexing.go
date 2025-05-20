@@ -15,25 +15,6 @@ type TypeRecord interface {
 	isTypeRecord()
 }
 
-type BaseTypeRecord struct {
-	Name string
-	Size uint64
-}
-
-type StructTypeRecord struct {
-	Name   string
-	Fields []TypeRecord
-}
-
-type PointerTypeRecord struct {
-	Name    string
-	Address uint64
-}
-
-func (BaseTypeRecord) isTypeRecord()    {}
-func (StructTypeRecord) isTypeRecord()  {}
-func (PointerTypeRecord) isTypeRecord() {}
-
 type LineRecord struct {
 	FileName string
 	Line     int64
@@ -74,7 +55,6 @@ type PCRecord struct {
 	Function        *interval.SearchTree[FunctionRecord, uint64]
 	InlinedRoutines *interval.SearchTree[[]InlineRecord, uint64]
 	Locals          *interval.SearchTree[[]VariableRecord, uint64]
-	Types           map[Offset]TypeRecord
 }
 
 func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
@@ -106,53 +86,18 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 		}
 
 		switch ent.Tag {
-		case dwarf.TagCompileUnit, dwarf.TagInlinedSubroutine, dwarf.TagSubprogram:
-		default:
-			// Only CompileUnit, InlinedSubroutines ans Subprograms are relevant.
-			continue
-		}
 
-		// Check if the entry spans the range which contains the target instruction.
-		ranges, err := d.Ranges(ent)
-		if err != nil {
-			continue
-		}
-
-		// fmt.Printf("TAG: %s\n", ent.Tag.String())
-
-		for _, pcs := range ranges {
-			start, end := pcs[0], pcs[1]
-
-			if isTombstoneAddr(start) || isTombstoneAddr(end) {
-				continue
+		case dwarf.TagCompileUnit:
+			if files, err = indexCompileUnit(ent, d, &ret); err != nil {
+				fmt.Fprintf(os.Stderr, "error indexing compile unit: %v\n", err)
 			}
 
-			switch ent.Tag {
+		case dwarf.TagInlinedSubroutine:
+			// TODO
 
-			case dwarf.TagCompileUnit:
-				if files, err = indexCompileUnit(ent, d, &ret); err != nil {
-					fmt.Fprintf(os.Stderr, "error indexing compile unit: %v\n", err)
-					continue
-				}
-
-			case dwarf.TagInlinedSubroutine:
-
-			case dwarf.TagSubprogram:
-				if err := indexFunctionEntry(r, ent, d, files, &ret); err != nil {
-					fmt.Fprintf(os.Stderr, "error indexing function: %v\n", err)
-					continue
-				}
-
-			case dwarf.TagBaseType:
-				if err := indexBaseType(r, ent, &ret); err != nil {
-					fmt.Fprintf(os.Stderr, "error indexing type: %v\n", err)
-					continue
-				}
-
-			case dwarf.TagStructType:
-
-			case dwarf.TagPointerType:
-
+		case dwarf.TagSubprogram:
+			if err := indexFunctionEntry(r, ent, d, files, &ret); err != nil {
+				fmt.Fprintf(os.Stderr, "error indexing function:\n\t%#v\n\t%v\n", ent, err)
 			}
 		}
 	}
@@ -160,39 +105,12 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	return
 }
 
-func indexBaseType(r *dwarf.Reader, ent *dwarf.Entry, tree *PCRecord) error {
-
-	typeNameAttribute := ent.AttrField(dwarf.AttrName)
-	if typeNameAttribute == nil {
-		return fmt.Errorf("malformed type entry: type has no name")
-	}
-
-	typeName := typeNameAttribute.Val.(string)
-
-	typeSizeAttribute := ent.AttrField(dwarf.AttrByteSize)
-	if typeSizeAttribute == nil {
-		return fmt.Errorf("malformed type entry: type has no size")
-	}
-
-	typeSize := typeSizeAttribute.Val.(uint64)
-
-	record := BaseTypeRecord{
-		Name: typeName,
-		Size: typeSize,
-	}
-
-	fmt.Printf("Indexed type %s with size %d and offset in DWARF %d", typeName, typeSize, ent.Offset)
-	tree.Types[Offset(ent.Offset)] = record
-
-	return nil
-}
-
 func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, tree *PCRecord) error {
 	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
 	highPcWrapped := ent.AttrField(dwarf.AttrHighpc)
 
 	if lowPcWrapped == nil || highPcWrapped == nil {
-		return fmt.Errorf("malformed non-inlined function entry: no low or high pc attributes present")
+		return fmt.Errorf("malformed function entry: no low or high pc attributes present")
 	}
 
 	var lowPc, highPc uint64
@@ -203,7 +121,6 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 	case int64:
 		lowPc = uint64(v)
 	default:
-		// TODO: Handle
 		return fmt.Errorf("unrecognized lowPc format")
 	}
 
@@ -219,15 +136,13 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 	functionNameAttr := ent.AttrField(dwarf.AttrName)
 
 	if functionNameAttr == nil {
-		return fmt.Errorf("malformed non-inlined function entry: no name attribute")
+		return fmt.Errorf("malformed function entry: no name attribute")
 	}
 
 	functionName := functionNameAttr.Val.(string)
 
 	// fmt.Printf("func %s has raw pcs: %v %v\n", functionName, lowPcWrapped, highPcWrapped)
 
-	// For some reason the DeclLine attribute of our dwarf entry can be int64 ? Not too sure what's going on here
-	// functionFile := ent.AttrField(dwarf.AttrDeclFile).Val.(string)
 	fileIndex, ok := ent.AttrField(dwarf.AttrDeclFile).Val.(int64)
 	if !ok || files == nil {
 		return fmt.Errorf("can't extract function file")
@@ -243,7 +158,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 	// See: https://yurydelendik.github.io/webassembly-dwarf/#location-descriptions-locals
 	if locationFieldType != 0 {
 		r.SkipChildren()
-		return fmt.Errorf("malformed non-inlined function entry: no location attribute present")
+		return fmt.Errorf("unsupported location attribute found: %v", locationFieldType)
 	}
 
 	params := make([]VariableRecord, 0)
@@ -267,10 +182,6 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			break
 		}
 
-		// if child.Tag == dwarf.TagLexDwarfBlock {
-		//
-		// }
-
 		if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
 
 			varTypeField := child.AttrField(dwarf.AttrType)
@@ -284,23 +195,9 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			varName := varNameField.Val.(string)
 
-			fmt.Printf("VAR %s HAS TYPE: %v\n", varName, varTypeField)
-
 			varTypeOffset := varTypeField.Val.(dwarf.Offset)
 
 			varType, _ := d.Type(varTypeOffset)
-
-			// We can not do type assertions on varTypeTrue
-
-			switch t := varType.(type) {
-			case *dwarf.IntType:
-				fmt.Printf("WE HAVE A BASIC TYPE: %v\n", t)
-			case *dwarf.PtrType:
-				fmt.Printf("WE HAVE A PTR TYPE: %v\n", t)
-
-			default:
-				fmt.Printf("WE HAVE SOMETHING ELSE: %T\n", t)
-			}
 
 			var varLocation uint64
 
@@ -336,10 +233,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 				continue
 			}
 
-			// TODO: This is not always a correct assertion
-
 			if child.Tag == dwarf.TagVariable {
-				fmt.Printf("Var: %s has location: %d\n", varName, varLocation)
 				locals = append(locals, VariableRecord{
 					Name:   varName,
 					Offset: varLocation,
@@ -372,21 +266,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		funcTypeOffset := funcTypeField.Val.(dwarf.Offset)
 		returnType, _ := d.Type(funcTypeOffset)
 
-		// switch t := returnType.(type) {
-		// case *dwarf.IntType:
-		// 	fmt.Printf("FUNCTION %v RETURNS BASIC TYPE: %v\n", functionName, t)
-		// case *dwarf.PtrType:
-		// 	fmt.Printf("FUNCTION %v RETURNS PTR TYPE: %v\n", functionName, t)
-
-		// default:
-		// 	fmt.Printf("FUNCTION %v RETURNS SOMETHING ELSE: %T\n", functionName, t)
-		// }
-
 		record.ReturnType = &returnType
-
-		fmt.Printf("FUNCTION %v RETURNS %#v\n", functionName, returnType)
-	} else {
-		fmt.Printf("FUNCTION %v RETURNS void\n", functionName)
 	}
 
 	tree.Function.Insert(lowPc, highPc, record)
@@ -416,19 +296,6 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 	}
 
 	sort.Slice(lines, func(i, j int) bool { return lines[i].Address < lines[j].Address })
-
-	// start := 0
-	// for i, le := range lines {
-	// 	if le.File != lines[start].File || le.Line != lines[start].Line || le.Column != lines[start].Column {
-	// 		fmt.Printf("BLQBLQ %v:%v:%v (%v <-> %v)-> %v %v\n", lines[start].File.Name, lines[start].Line, lines[start].Column, start, i-1, lines[start].Address, lines[i-1].Address)
-	// 		tree.Line.Insert(lines[start].Address, lines[i-1].Address, LineRecord{
-	// 			FileName: lines[start].File.Name,
-	// 			Line:     int64(lines[start].Line),
-	// 			Column:   int64(lines[start].Column),
-	// 		})
-	// 		start = i
-	// 	}
-	// }
 
 	for i, _ := range lines {
 		if i-1 >= 0 {

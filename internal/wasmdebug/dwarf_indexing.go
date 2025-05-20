@@ -317,7 +317,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 					// get first 7 bits of 8 bit chunk
 					payload := int(v[i]) & 0b01111111
 
-					res = res + uint64(payload*(1<<shift))
+					res += uint64(payload*(1<<shift))
 
 					// 8th bit is used to check whether there's "more data to read"
 					if (v[i] & 0b10000000) == 0 {
@@ -327,6 +327,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 					shift += 7
 				}
 				varLocation = res
+
 			default:
 				fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
 					functionName,

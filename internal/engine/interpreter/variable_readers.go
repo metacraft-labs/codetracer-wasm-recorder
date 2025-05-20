@@ -12,6 +12,22 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 )
 
+func discoverSimpleType(m *wasm.ModuleInstance, typeName string) trace_record.TypeId {
+
+	types := m.TypesIndex
+	typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typeName)
+
+	var typeId trace_record.TypeId
+	if existingTypeId, ok := types[typeName]; ok {
+		typeId = existingTypeId
+	} else {
+		typeId = m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+		types[typeName] = typeId
+	}
+
+	return trace_record.TypeId(typeId)
+}
+
 func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) (trace_record.ValueRecord, error) {
 	memAddr := uint32(locals[functionRecord.FrameBaseIndex] + v.Offset)
 	memSize := uint32(v.Type.Size())
@@ -27,6 +43,8 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 }
 
 func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, err error) {
+
+	// typeName := typ.Common().Name
 
 	switch t := typ.(type) {
 	case *dwarf.IntType:
@@ -167,6 +185,7 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 	}
 
 	// TODO: what should the string parameter be?
+
 	floatTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Float")
 	typeId := record.RegisterTypeWithNewId(typ.Name, floatTypeRecord)
 
@@ -178,10 +197,21 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	record := m.Record
 
+	typeName := typ.Common().Name
+
+	types := make([]trace_record.FieldTypeRecord, 0)
+
 	for _, field := range typ.Field {
 		offset := field.ByteOffset
 		size := field.Type.Size()
+		fieldTypeName := field.Type.Common().Name
+
+		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldTypeName, discoverSimpleType(m, fieldTypeName))
+
+		types = append(types, fieldTypeRecord)
+
 		res, err := bytesToValueRecord(rawBytes[offset:offset+size], field.Type, m)
+
 		if err != nil {
 			return nil, err
 		}
@@ -191,8 +221,12 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 	}
 
 	// TODO: what should the string parameter be?
-	structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
-	typeId := record.RegisterTypeWithNewId(typ.Name, structTypeRecord)
+	// structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
+	structTypeRecord := trace_record.NewStructTypeInfo(types)
+	typeRecord := trace_record.TypeRecord{trace_record.STRUCT_TYPE_KIND, "Struct", structTypeRecord}
+	typeId := record.EnsureTypeId(typeName, typeRecord)
+
+	record.RegisterTypeWithNewId(typeName, typeRecord)
 
 	return trace_record.StructValue(values, typeId), nil
 }

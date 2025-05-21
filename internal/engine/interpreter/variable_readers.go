@@ -12,10 +12,9 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 )
 
-func discoverSimpleType(m *wasm.ModuleInstance, typeName string, t trace_record.TypeKind) trace_record.TypeId {
+func discoverTypeId(m *wasm.ModuleInstance, typeName string) (trace_record.TypeId, bool) {
 
 	types := m.TypesIndex
-	typeRecord := trace_record.NewSimpleTypeRecord(t, typeName)
 
 	if types == nil {
 		m.TypesIndex = make(map[string]trace_record.TypeId)
@@ -23,14 +22,15 @@ func discoverSimpleType(m *wasm.ModuleInstance, typeName string, t trace_record.
 	}
 
 	var typeId trace_record.TypeId
-	if existingTypeId, ok := types[typeName]; ok {
+	existingTypeId, ok := types[typeName]
+	if ok {
 		typeId = existingTypeId
 	} else {
-		typeId = m.Record.EnsureTypeId(typeName, typeRecord)
+		typeId = trace_record.TypeId(len(m.TypesIndex))
 		types[typeName] = typeId
 	}
 
-	return trace_record.TypeId(typeId)
+	return typeId, ok
 }
 
 func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) (trace_record.ValueRecord, error) {
@@ -44,25 +44,36 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 		return nil, fmt.Errorf("out of range memory access")
 	}
 
-	return bytesToValueRecord(rawBytes, v.Type, m)
+	valueRecord, _, err := bytesToValueRecord(rawBytes, v.Type, m)
+
+	return valueRecord, err
 }
 
-func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, err error) {
+func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, kind trace_record.TypeKind, err error) {
 
 	// typeName := typ.Common().Name
+
+	fmt.Printf("TYPE: %s\n", typ.String())
 
 	switch t := typ.(type) {
 	case *dwarf.IntType:
 		val, err = bytesToInt(rawBytes, t, m)
+		kind = trace_record.INT_TYPE_KIND
 
 	case *dwarf.UintType:
 		val, err = bytesToUint(rawBytes, t, m)
+		// typeRecord = trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typ.String())
+		kind = trace_record.INT_TYPE_KIND
 
 	case *dwarf.BoolType:
 		val, err = bytesToBool(rawBytes, t, m)
+		// typeRecord = trace_record.NewSimpleTypeRecord(trace_record.BOOL_TYPE_KIND, typ.String())
+		kind = trace_record.BOOL_TYPE_KIND
 
 	case *dwarf.FloatType:
 		val, err = bytesToFloat(rawBytes, t, m)
+		// typeRecord = trace_record.NewSimpleTypeRecord(trace_record.FLOAT_TYPE_KIND, typ.String())
+		kind = trace_record.FLOAT_TYPE_KIND
 
 	case *dwarf.StructType:
 		// TODO: make these language specific
@@ -73,6 +84,7 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 			val, err = bytesToSliceRust(rawBytes, t, m)
 		} else {
 			val, err = bytesToStruct(rawBytes, t, m)
+			kind = trace_record.STRUCT_TYPE_KIND
 		}
 
 	case *dwarf.PtrType:
@@ -94,7 +106,8 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	size := typ.ByteSize
 	var intVal int64
 
-	// record := m.Record
+	typeId, seen := discoverTypeId(m, typ.String())
+	typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typ.String())
 
 	switch size {
 	case 1:
@@ -116,8 +129,10 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	// TODO: what should the string parameter be?
 	// intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
 	// typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
-	fmt.Printf("Int type name: %s\n", typ.Name)
-	typeId := discoverSimpleType(m, typ.Name, trace_record.INT_TYPE_KIND)
+
+	if seen {
+		m.Record.RegisterTypeWithNewId(typ.Name, typeRecord)
+	}
 
 	return trace_record.IntValue(intVal, typeId), nil
 }
@@ -199,7 +214,8 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 	return trace_record.FloatValue(floatVal, typeId), nil
 }
 
-func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+// TODO: Finish
+func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, []trace_record.TypeKind, error) {
 	values := make([]trace_record.ValueRecord, 0)
 
 	record := m.Record
@@ -214,7 +230,12 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		fieldName := field.Name
 
 		fmt.Printf("Stuct field type: %s\n", field.Type.String())
-		fieldTypeId := discoverSimpleType(m, field.Type.String(), trace_record.INT_TYPE_KIND)
+		fieldTypeId, seen := discoverTypeId(m, field.Type.String())
+
+		if !seen {
+			typeRecord := trace_record.NewTypeRecord()
+			m.Record.RegisterTypeWithNewId(field.Type.String())
+		}
 
 		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldName, fieldTypeId)
 
@@ -238,7 +259,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 	structTypeRecord := trace_record.NewStructTypeInfo(types)
 	typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, structTypeRecord)
 	record.RegisterTypeWithNewId(typeName, typeRecord)
-	typeId := discoverSimpleType(m, typeName, trace_record.STRUCT_TYPE_KIND)
+	typeId, _ := discoverTypeId(m, typeName)
 
 	return trace_record.StructValue(values, typeId), nil
 }

@@ -34,6 +34,8 @@ type FunctionRecord struct {
 	FrameBaseIndex uint64
 	Params         []VariableRecord
 	Locals         []VariableRecord
+	LowPC          uint64
+	HighPC         uint64
 
 	// When nil, then the function is void / doesn't return value
 	ReturnType *dwarf.Type
@@ -79,6 +81,8 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	r := d.Reader()
 	var files []*dwarf.LineFile
 
+	offset2function := make(map[dwarf.Offset]*FunctionRecord, 0)
+
 	for {
 		ent, err := r.Next()
 		if err != nil || ent == nil {
@@ -96,180 +100,196 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			// TODO
 
 		case dwarf.TagSubprogram:
-			if err := indexFunctionEntry(r, ent, d, files, &ret); err != nil {
+			if err := indexFunctionEntry(r, ent, d, files, offset2function); err != nil {
 				fmt.Fprintf(os.Stderr, "error indexing function:\n\t%#v\n\t%v\n", ent, err)
 			}
 		}
 	}
 
+	for _, record := range offset2function {
+		// TODO: are these all the cases when an entry is invalid?
+		if record == nil || isTombstoneAddr(record.LowPC) || isTombstoneAddr(record.HighPC) || record.Name == "" {
+			fmt.Fprintf(os.Stderr, "Malformed function entry %#v\n", record)
+			continue
+		}
+
+		ret.Function.Insert(record.LowPC, record.HighPC, *record)
+	}
+
 	return
 }
 
-func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, tree *PCRecord) error {
-	lowPcWrapped := ent.AttrField(dwarf.AttrLowpc)
-	highPcWrapped := ent.AttrField(dwarf.AttrHighpc)
-
-	if lowPcWrapped == nil || highPcWrapped == nil {
-		return fmt.Errorf("malformed function entry: no low or high pc attributes present")
+func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, offset2function map[dwarf.Offset]*FunctionRecord) error {
+	functionOffset := ent.Offset
+	if specWrapped := ent.AttrField(dwarf.AttrSpecification); specWrapped != nil {
+		functionOffset = specWrapped.Val.(dwarf.Offset)
 	}
 
-	var lowPc, highPc uint64
-
-	switch v := lowPcWrapped.Val.(type) {
-	case uint64:
-		lowPc = v
-	case int64:
-		lowPc = uint64(v)
-	default:
-		return fmt.Errorf("unrecognized lowPc format")
+	record := offset2function[functionOffset]
+	if record == nil {
+		tmp := -1
+		record = &FunctionRecord{
+			LowPC:  uint64(tmp),
+			HighPC: uint64(tmp),
+		}
+		offset2function[functionOffset] = record
 	}
 
-	switch highPcWrapped.Class {
-	case dwarf.ClassAddress: // we assume it's an absolute offset
-		highPc = highPcWrapped.Val.(uint64)
-	case dwarf.ClassConstant:
-		highPc = lowPc + uint64(highPcWrapped.Val.(int64))
-	default:
-		return fmt.Errorf("unrecognized highPc format")
+	if lowPcWrapped := ent.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
+		switch v := lowPcWrapped.Val.(type) {
+		case uint64:
+			record.LowPC = v
+		// case int64:
+		//	record.LowPC = uint64(v)
+		default:
+			return fmt.Errorf("unrecognized lowPc format")
+		}
 	}
 
-	functionNameAttr := ent.AttrField(dwarf.AttrName)
-
-	if functionNameAttr == nil {
-		return fmt.Errorf("malformed function entry: no name attribute")
+	if highPcWrapped := ent.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
+		switch highPcWrapped.Class {
+		case dwarf.ClassAddress: // we assume it's an absolute offset
+			record.HighPC = highPcWrapped.Val.(uint64)
+		case dwarf.ClassConstant:
+			// TODO: This is wrong assumption if there is a case when pc record are in different entries
+			record.HighPC = record.LowPC + uint64(highPcWrapped.Val.(int64))
+		default:
+			return fmt.Errorf("unrecognized highPc format")
+		}
 	}
 
-	functionName := functionNameAttr.Val.(string)
-
-	// fmt.Printf("func %s has raw pcs: %v %v\n", functionName, lowPcWrapped, highPcWrapped)
-
-	fileIndex, ok := ent.AttrField(dwarf.AttrDeclFile).Val.(int64)
-	if !ok || files == nil {
-		return fmt.Errorf("can't extract function file")
-	}
-	functionFile := files[fileIndex].Name
-	functionLine := ent.AttrField(dwarf.AttrDeclLine).Val.(int64)
-
-	locationField := ent.AttrField(dwarf.AttrFrameBase)
-
-	locationFieldType := (locationField.Val.([]uint8))[1]
-	locationLocal := (locationField.Val.([]uint8))[2]
-	// We only handle "Locals" locations
-	// See: https://yurydelendik.github.io/webassembly-dwarf/#location-descriptions-locals
-	if locationFieldType != 0 {
-		r.SkipChildren()
-		return fmt.Errorf("unsupported location attribute found: %v", locationFieldType)
+	if functionNameAttr := ent.AttrField(dwarf.AttrName); functionNameAttr != nil {
+		record.Name = functionNameAttr.Val.(string)
 	}
 
-	params := make([]VariableRecord, 0)
-	locals := make([]VariableRecord, 0)
+	if fileIndexWrapped := ent.AttrField(dwarf.AttrDeclFile); fileIndexWrapped != nil {
+		fileIndex, ok := fileIndexWrapped.Val.(int64)
+		if !ok {
+			return fmt.Errorf("unrecognized fileIndex format")
+		}
+		record.FileName = files[fileIndex].Name
+	}
 
-	// Read children of Subprogram tag
-	for {
-
-		child, err := r.Next()
-
-		// End of subprogram's children
-		if err != nil {
-			return err
+	if functionLineWrapped := ent.AttrField(dwarf.AttrDeclLine); functionLineWrapped != nil {
+		functionLine, ok := functionLineWrapped.Val.(int64)
+		if !ok {
+			return fmt.Errorf("unrecognized functionLine format")
 		}
 
-		if child == nil {
-			break
+		record.Line = functionLine
+	}
+
+	if locationField := ent.AttrField(dwarf.AttrFrameBase); locationField != nil {
+		// TODO: handle more formats
+		locationFieldType := (locationField.Val.([]uint8))[1]
+		locationLocal := (locationField.Val.([]uint8))[2]
+		// We only handle "Locals" locations
+		// See: https://yurydelendik.github.io/webassembly-dwarf/#location-descriptions-locals
+		if locationFieldType != 0 {
+			r.SkipChildren()
+			return fmt.Errorf("unsupported location attribute found: %v", locationFieldType)
 		}
 
-		if child.Tag == 0 {
-			break
-		}
+		params := make([]VariableRecord, 0)
+		locals := make([]VariableRecord, 0)
 
-		if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
+		// Read children of Subprogram tag
+		for {
 
-			varTypeField := child.AttrField(dwarf.AttrType)
+			child, err := r.Next()
 
-			varNameField := child.AttrField(dwarf.AttrName)
-			varLocationField := child.AttrField(dwarf.AttrLocation)
-
-			if varNameField == nil || varLocationField == nil {
-				continue
+			// End of subprogram's children
+			if err != nil {
+				return err
 			}
 
-			varName := varNameField.Val.(string)
+			if child == nil {
+				break
+			}
 
-			varTypeOffset := varTypeField.Val.(dwarf.Offset)
+			if child.Tag == 0 {
+				break
+			}
 
-			varType, _ := d.Type(varTypeOffset)
+			if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
 
-			var varLocation uint64
+				varTypeField := child.AttrField(dwarf.AttrType)
 
-			switch v := varLocationField.Val.(type) {
-			case uint64:
-				varLocation = v
-			case []uint8:
+				varNameField := child.AttrField(dwarf.AttrName)
+				varLocationField := child.AttrField(dwarf.AttrLocation)
 
-				// LEB128 decoding
-				shift := 0
-				var res uint64 = 0
-				for i := 1; i < len(v); i++ {
-
-					// get first 7 bits of 8 bit chunk
-					payload := int(v[i]) & 0b01111111
-
-					res += uint64(payload*(1<<shift))
-
-					// 8th bit is used to check whether there's "more data to read"
-					if (v[i] & 0b10000000) == 0 {
-						break
-					}
-
-					shift += 7
+				if varNameField == nil || varLocationField == nil {
+					continue
 				}
-				varLocation = res
 
-			default:
-				fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func with name %s has a vriable %s with location field: %v\n",
-					functionName,
-					varName,
-					varLocationField.Val)
-				continue
+				varName := varNameField.Val.(string)
+
+				varTypeOffset := varTypeField.Val.(dwarf.Offset)
+
+				varType, _ := d.Type(varTypeOffset)
+
+				var varLocation uint64
+
+				switch v := varLocationField.Val.(type) {
+				case uint64:
+					varLocation = v
+				case []uint8:
+
+					// LEB128 decoding
+					shift := 0
+					var res uint64 = 0
+					for i := 1; i < len(v); i++ {
+
+						// get first 7 bits of 8 bit chunk
+						payload := int(v[i]) & 0b01111111
+
+						res += uint64(payload * (1 << shift))
+
+						// 8th bit is used to check whether there's "more data to read"
+						if (v[i] & 0b10000000) == 0 {
+							break
+						}
+
+						shift += 7
+					}
+					varLocation = res
+
+				default:
+					fmt.Fprintf(os.Stderr, "unsupported Location attribute. Func %#v has a vriable %s with location field: %v\n",
+						record,
+						varName,
+						varLocationField.Val)
+					continue
+				}
+
+				if child.Tag == dwarf.TagVariable {
+					locals = append(locals, VariableRecord{
+						Name:   varName,
+						Offset: varLocation,
+						Type:   varType,
+					})
+				} else if child.Tag == dwarf.TagFormalParameter {
+					params = append(params, VariableRecord{
+						Name:   varName,
+						Offset: varLocation,
+						Type:   varType,
+					})
+				}
+
 			}
-
-			if child.Tag == dwarf.TagVariable {
-				locals = append(locals, VariableRecord{
-					Name:   varName,
-					Offset: varLocation,
-					Type:   varType,
-				})
-			} else if child.Tag == dwarf.TagFormalParameter {
-				params = append(params, VariableRecord{
-					Name:   varName,
-					Offset: varLocation,
-					Type:   varType,
-				})
-			}
-
 		}
-
+		record.FrameBaseIndex = uint64(locationLocal)
+		// TODO: append or rewrite?
+		record.Params = append(record.Params, params...)
+		record.Locals = append(record.Locals, locals...)
 	}
 
-	record := FunctionRecord{
-		Name:           functionName,
-		FileName:       functionFile,
-		Line:           int64(functionLine),
-		FrameBaseIndex: uint64(locationLocal),
-		Params:         params,
-		Locals:         locals,
-		ReturnType:     nil,
-	}
-
-	funcTypeField := ent.AttrField(dwarf.AttrType)
-	if funcTypeField != nil {
+	if funcTypeField := ent.AttrField(dwarf.AttrType); funcTypeField != nil {
 		funcTypeOffset := funcTypeField.Val.(dwarf.Offset)
 		returnType, _ := d.Type(funcTypeOffset)
 
 		record.ReturnType = &returnType
 	}
-
-	tree.Function.Insert(lowPc, highPc, record)
 
 	return nil
 }

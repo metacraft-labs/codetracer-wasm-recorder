@@ -234,7 +234,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 	// TODO: what should the string parameter be?
 	// structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
 	structTypeRecord := trace_record.NewStructTypeInfo(types)
-	typeRecord := trace_record.NewTypeRecord(trace_record.STRING_TYPE_KIND, typeName, structTypeRecord)
+	typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, structTypeRecord)
 	record.RegisterTypeWithNewId(typeName, typeRecord)
 	typeId := record.EnsureTypeId(typeName, typeRecord)
 

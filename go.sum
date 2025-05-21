@@ -1,4 +1,6 @@
 github.com/metacraft-labs/trace_record v0.0.0-20250521100647-00a015efad89 h1:3IILw5GdOeLgqGGBo/I4NBj9lD4AtGAd9G5ELBIfYmg=
 github.com/metacraft-labs/trace_record v0.0.0-20250521100647-00a015efad89/go.mod h1:O6YVD4qrg4U7gF4O1b6VdPpj9Nx7bazQEXHNlbvLfx0=
+github.com/metacraft-labs/trace_record v0.0.0-20250521130138-f945c9fa2d1c h1:qcEig+fu2emc2VokvXoBbu+cRJWIL/6TFg/m2U+mP9I=
+github.com/metacraft-labs/trace_record v0.0.0-20250521130138-f945c9fa2d1c/go.mod h1:O6YVD4qrg4U7gF4O1b6VdPpj9Nx7bazQEXHNlbvLfx0=
 github.com/rdleal/intervalst v1.4.1 h1:8rCuAea0aj3Z6cDSeN3Q3c+LZjmHmrqZhXrJbqfPw0c=
 github.com/rdleal/intervalst v1.4.1/go.mod h1:xO89Z6BC+LQDH+IPQQw/OESt5UADgFD41tYMUINGpxQ=

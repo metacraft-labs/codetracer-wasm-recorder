@@ -12,10 +12,10 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 )
 
-func discoverSimpleType(m *wasm.ModuleInstance, typeName string) trace_record.TypeId {
+func discoverSimpleType(m *wasm.ModuleInstance, typeName string, t trace_record.TypeKind) trace_record.TypeId {
 
 	types := m.TypesIndex
-	typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typeName)
+	typeRecord := trace_record.NewSimpleTypeRecord(t, typeName)
 
 	if types == nil {
 		m.TypesIndex = make(map[string]trace_record.TypeId)
@@ -117,7 +117,7 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	// intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
 	// typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
 	fmt.Printf("Int type name: %s\n", typ.Name)
-	typeId := discoverSimpleType(m, typ.Name)
+	typeId := discoverSimpleType(m, typ.Name, trace_record.INT_TYPE_KIND)
 
 	return trace_record.IntValue(intVal, typeId), nil
 }
@@ -214,7 +214,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		fieldName := field.Name
 
 		fmt.Printf("Stuct field type: %s\n", field.Type.String())
-		fieldTypeId := discoverSimpleType(m, field.Type.String())
+		fieldTypeId := discoverSimpleType(m, field.Type.String(), trace_record.INT_TYPE_KIND)
 
 		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldName, fieldTypeId)
 
@@ -238,7 +238,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 	structTypeRecord := trace_record.NewStructTypeInfo(types)
 	typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, structTypeRecord)
 	record.RegisterTypeWithNewId(typeName, typeRecord)
-	typeId := discoverSimpleType(m, typeName)
+	typeId := discoverSimpleType(m, typeName, trace_record.STRUCT_TYPE_KIND)
 
 	return trace_record.StructValue(values, typeId), nil
 }

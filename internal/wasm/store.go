@@ -130,6 +130,10 @@ type (
 		CloseNotifier experimental.CloseNotifier
 
 		Record *trace_record.TraceRecord
+
+		TypesIndex map[string]trace_record.TypeId
+
+		TypeIdIndex uint64
 	}
 
 	// DataInstance holds bytes corresponding to the data segment in a module.

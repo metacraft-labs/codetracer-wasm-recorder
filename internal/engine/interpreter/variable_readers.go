@@ -17,6 +17,11 @@ func discoverSimpleType(m *wasm.ModuleInstance, typeName string) trace_record.Ty
 	types := m.TypesIndex
 	typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typeName)
 
+	if types == nil {
+		m.TypesIndex = make(map[string]trace_record.TypeId)
+		types = m.TypesIndex
+	}
+
 	var typeId trace_record.TypeId
 	if existingTypeId, ok := types[typeName]; ok {
 		typeId = existingTypeId
@@ -197,7 +202,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	record := m.Record
 
-	typeName := typ.Common().Name
+	typeName := typ.Kind
 
 	types := make([]trace_record.FieldTypeRecord, 0)
 
@@ -206,7 +211,9 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		size := field.Type.Size()
 		fieldTypeName := field.Type.Common().Name
 
-		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldTypeName, discoverSimpleType(m, fieldTypeName))
+		fieldTypeId := discoverSimpleType(m, typeName)
+
+		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldTypeName, fieldTypeId)
 
 		types = append(types, fieldTypeRecord)
 
@@ -220,13 +227,16 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	}
 
+	// fmt.Printf("NAME 1: %s\n", typ.Name)
+	// fmt.Printf("NAME 2: %s\n", typ.Common().Name)
+	// fmt.Printf("NAME 3: %s\n", typ.Kind)
+
 	// TODO: what should the string parameter be?
 	// structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
 	structTypeRecord := trace_record.NewStructTypeInfo(types)
-	typeRecord := trace_record.TypeRecord{trace_record.STRUCT_TYPE_KIND, "Struct", structTypeRecord}
-	typeId := record.EnsureTypeId(typeName, typeRecord)
-
+	typeRecord := trace_record.NewTypeRecord(trace_record.STRING_TYPE_KIND, typeName, structTypeRecord)
 	record.RegisterTypeWithNewId(typeName, typeRecord)
+	typeId := record.EnsureTypeId(typeName, typeRecord)
 
 	return trace_record.StructValue(values, typeId), nil
 }

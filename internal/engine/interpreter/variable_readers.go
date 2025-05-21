@@ -209,11 +209,11 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 	for _, field := range typ.Field {
 		offset := field.ByteOffset
 		size := field.Type.Size()
-		fieldTypeName := field.Type.Common().Name
+		fieldName := field.Name
 
 		fieldTypeId := discoverSimpleType(m, typeName)
 
-		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldTypeName, fieldTypeId)
+		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldName, fieldTypeId)
 
 		types = append(types, fieldTypeRecord)
 

@@ -26,7 +26,7 @@ func discoverSimpleType(m *wasm.ModuleInstance, typeName string) trace_record.Ty
 	if existingTypeId, ok := types[typeName]; ok {
 		typeId = existingTypeId
 	} else {
-		typeId = m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+		typeId = m.Record.EnsureTypeId(typeName, typeRecord)
 		types[typeName] = typeId
 	}
 
@@ -94,7 +94,7 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	size := typ.ByteSize
 	var intVal int64
 
-	record := m.Record
+	// record := m.Record
 
 	switch size {
 	case 1:
@@ -114,8 +114,10 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	}
 
 	// TODO: what should the string parameter be?
-	intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
-	typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
+	// intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
+	// typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
+	fmt.Printf("Int type name: %s\n", typ.Name)
+	typeId := discoverSimpleType(m, typ.Name)
 
 	return trace_record.IntValue(intVal, typeId), nil
 }
@@ -211,7 +213,8 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		size := field.Type.Size()
 		fieldName := field.Name
 
-		fieldTypeId := discoverSimpleType(m, typeName)
+		fmt.Printf("Stuct field type: %s\n", field.Type.String())
+		fieldTypeId := discoverSimpleType(m, field.Type.String())
 
 		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldName, fieldTypeId)
 
@@ -229,14 +232,13 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	// fmt.Printf("NAME 1: %s\n", typ.Name)
 	// fmt.Printf("NAME 2: %s\n", typ.Common().Name)
-	// fmt.Printf("NAME 3: %s\n", typ.Kind)
 
 	// TODO: what should the string parameter be?
 	// structTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRUCT_TYPE_KIND, "Struct")
 	structTypeRecord := trace_record.NewStructTypeInfo(types)
 	typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, structTypeRecord)
 	record.RegisterTypeWithNewId(typeName, typeRecord)
-	typeId := record.EnsureTypeId(typeName, typeRecord)
+	typeId := discoverSimpleType(m, typeName)
 
 	return trace_record.StructValue(values, typeId), nil
 }

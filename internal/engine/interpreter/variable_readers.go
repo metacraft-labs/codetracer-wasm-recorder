@@ -257,7 +257,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 		typeSpecificInfo := trace_record.NewStructTypeInfo(types)
 
-		typeRecord := trace_record.NewTypeRecord(trace_record.FLOAT_TYPE_KIND, typeName, typeSpecificInfo)
+		typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, typeSpecificInfo)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
@@ -293,7 +293,7 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 
 		typeSpecificInfo := trace_record.NewPointerTypeInfo(dereferencedTypeId)
 
-		typeRecord := trace_record.NewTypeRecord(trace_record.FLOAT_TYPE_KIND, typeName, typeSpecificInfo)
+		typeRecord := trace_record.NewTypeRecord(trace_record.POINTER_TYPE_KIND, typeName, typeSpecificInfo)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}

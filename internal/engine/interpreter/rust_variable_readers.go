@@ -8,24 +8,24 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
 
-func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 
 	typeName := typ.String()
 
 	mem := m.Memory()
 
-	data, _ := bytesToStruct(rawBytes, typ, m)
+	data, _, _ := bytesToStruct(rawBytes, typ, m)
 
 	val, ok := data.(trace_record.StructValueRecord)
 
 	if !ok {
-		return nil, fmt.Errorf("not a string slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a string slice")
 	}
 
 	data_ptr_field, err := val.Fields[0].(trace_record.ReferenceValueRecord)
 
 	if !err {
-		return nil, fmt.Errorf("not a string slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a string slice")
 	}
 
 	addr := data_ptr_field.Address
@@ -33,7 +33,7 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 	len_field, ok := val.Fields[1].(trace_record.IntValueRecord)
 
 	if !ok {
-		return nil, fmt.Errorf("not a string slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a string slice")
 	}
 
 	length := len_field.I
@@ -57,39 +57,38 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StringValue(str, typeId), nil
-
+	return trace_record.StringValue(str, typeId), trace_record.TypeId(0xffffffffffffffff), nil
 }
 
-func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 
 	typeName := typ.String()
 
 	mem := m.Memory()
 
-	rawStruct, err := bytesToStruct(rawBytes, typ, m)
+	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
 	if err != nil {
-		return nil, err
+		return nil, trace_record.TypeId(0xffffffffffffffff), err
 	}
 
 	fields := rawStruct.(trace_record.StructValueRecord).Fields
 
 	if len(fields) != 2 {
-		return nil, fmt.Errorf("not a slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a slice")
 	}
 
 	var addr uint32
 	if addrRecord, ok := fields[0].(trace_record.ReferenceValueRecord); ok {
 		addr = addrRecord.Address
 	} else {
-		return nil, fmt.Errorf("not a slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a slice")
 	}
 
 	var length uint32
 	if lenRecord, ok := fields[1].(trace_record.IntValueRecord); ok {
 		length = uint32(lenRecord.I)
 	} else {
-		return nil, fmt.Errorf("not a slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a slice")
 	}
 
 	var elemType dwarf.Type
@@ -98,7 +97,7 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 		elemType = ptrTyp.Type
 		elemSize = uint32(ptrTyp.Type.Common().ByteSize)
 	} else {
-		return nil, fmt.Errorf("not a slice")
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("not a slice")
 	}
 
 	// TODO: what type kind?
@@ -120,18 +119,18 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	for i := uint32(0); i < length; i++ {
 		elemBytes, ok := mem.Read(addr+i*elemSize, elemSize)
 		if !ok {
-			return trace_record.SequenceValue(elems, true, typeId), fmt.Errorf("invalid memory access")
+			return trace_record.SequenceValue(elems, true, typeId), trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("invalid memory access")
 		}
 
 		// TODO: Construct array Type info, DO NOT ignore it
 		elem, _, err := bytesToValueRecord(elemBytes, elemType, m)
 		if err != nil {
-			return trace_record.SequenceValue(elems, true, typeId), err
+			return trace_record.SequenceValue(elems, true, typeId), trace_record.TypeId(0xffffffffffffffff), err
 		}
 
 		elems = append(elems, elem)
 	}
 
-	return trace_record.SequenceValue(elems, true, typeId), nil
+	return trace_record.SequenceValue(elems, true, typeId), trace_record.TypeId(0xffffffffffffffff), nil
 
 }

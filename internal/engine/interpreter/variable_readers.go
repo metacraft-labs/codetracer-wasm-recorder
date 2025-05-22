@@ -32,34 +32,34 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 
 	switch t := typ.(type) {
 	case *dwarf.IntType:
-		val, err = bytesToInt(rawBytes, t, m)
+		val, typeId, err = bytesToInt(rawBytes, t, m)
 
 	case *dwarf.UintType:
-		val, err = bytesToUint(rawBytes, t, m)
+		val, typeId, err = bytesToUint(rawBytes, t, m)
 
 	case *dwarf.BoolType:
-		val, err = bytesToBool(rawBytes, t, m)
+		val, typeId, err = bytesToBool(rawBytes, t, m)
 
 	case *dwarf.FloatType:
-		val, err = bytesToFloat(rawBytes, t, m)
+		val, typeId, err = bytesToFloat(rawBytes, t, m)
 
 	case *dwarf.StructType:
 		// TODO: make these language specific
 		typeStr := typ.String()
 		if typeStr == "struct &str" {
-			val, err = bytesToStringRust(rawBytes, t, m)
+			val, typeId, err = bytesToStringRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct &[") && strings.HasSuffix(typeStr, "]") {
-			val, err = bytesToSliceRust(rawBytes, t, m)
+			val, typeId, err = bytesToSliceRust(rawBytes, t, m)
 		} else {
 
-			val, err = bytesToStruct(rawBytes, t, m)
+			val, typeId, err = bytesToStruct(rawBytes, t, m)
 		}
 
 	case *dwarf.PtrType:
-		val, err = bytesToPointer(rawBytes, t, m)
+		val, typeId, err = bytesToPointer(rawBytes, t, m)
 
 	case *dwarf.ArrayType:
-		val, err = bytesToArray(rawBytes, t, m)
+		val, typeId, err = bytesToArray(rawBytes, t, m)
 
 	default:
 		fmt.Printf("WE HAVE SOMETHING ELSE: %T %#v\n", t, t)
@@ -70,11 +70,9 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	return
 }
 
-func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	size := typ.ByteSize
 	var intVal int64
-
-	typeName := typ.Name
 
 	switch size {
 	case 1:
@@ -90,16 +88,16 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 		intVal = int64(binary.LittleEndian.Uint64(rawBytes))
 
 	default:
-		return nil, fmt.Errorf("unsupported int variable byte size %v", size)
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported int variable byte size %v", size)
 	}
 
 	// TODO: what should the string parameter be?
 	// intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
 	// typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -111,14 +109,12 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.IntValue(intVal, typeId), nil
+	return trace_record.IntValue(intVal, typeId), typeId, nil
 }
 
-func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	size := typ.ByteSize
 	var intVal uint64
-
-	typeName := typ.Name
 
 	switch size {
 	case 1:
@@ -134,12 +130,12 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 		intVal = binary.LittleEndian.Uint64(rawBytes)
 
 	default:
-		return nil, fmt.Errorf("unsupported uint variable byte size %v", size)
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported uint variable byte size %v", size)
 	}
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -152,26 +148,24 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 	}
 
 	// TODO: discuss int64 uint64 stuff?
-	return trace_record.IntValue(int64(intVal), typeId), nil
+	return trace_record.IntValue(int64(intVal), typeId), typeId, nil
 }
 
-func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	size := typ.ByteSize
 	var boolVal bool
-
-	typeName := typ.String()
 
 	switch size {
 	case 1:
 		boolVal = rawBytes[0] != 0
 
 	default:
-		return nil, fmt.Errorf("unsupported bool variable byte size %v", size)
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported bool variable byte size %v", size)
 	}
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -183,14 +177,12 @@ func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.BoolValue(boolVal, typeId), nil
+	return trace_record.BoolValue(boolVal, typeId), typeId, nil
 }
 
-func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	size := typ.ByteSize
 	var floatVal float64
-
-	typeName := typ.String()
 
 	switch size {
 	case 4:
@@ -200,12 +192,12 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 		floatVal = math.Float64frombits(binary.LittleEndian.Uint64(rawBytes))
 
 	default:
-		return nil, fmt.Errorf("unsupported float variable byte size %v", size)
+		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported float variable byte size %v", size)
 	}
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -217,14 +209,12 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.FloatValue(floatVal, typeId), nil
+	return trace_record.FloatValue(floatVal, typeId), typeId, nil
 }
 
 // TODO: Finish
-func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	values := make([]trace_record.ValueRecord, 0)
-
-	typeName := typ.String()
 
 	types := make([]trace_record.FieldTypeRecord, 0)
 
@@ -239,16 +229,16 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		types = append(types, fieldTypeRecord)
 
 		if err != nil {
-			return nil, err
+			return nil, trace_record.TypeId(0xffffffffffffffff), err
 		}
 
 		values = append(values, res)
 
 	}
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -262,16 +252,14 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StructValue(values, typeId), nil
+	return trace_record.StructValue(values, typeId), typeId, nil
 }
 
-func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 
 	dereferencedType := typ.Type
 
 	mem := m.Memory()
-
-	typeName := typ.String()
 
 	addr := binary.LittleEndian.Uint32(rawBytes)
 
@@ -282,9 +270,9 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	// TODO: Construct array Type info, DO NOT ignore it
 	dereferencedValueRecord, dereferencedTypeId, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
 
-	// NOTE: We call this only from bytesToValueRecord,
-	// which ensures that this type has had a TypeId assigned before this function was called
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -300,17 +288,15 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 
 	// TODO: Record pointer Type info
 
-	return trace_record.ReferenceValue(dereferencedValueRecord, addr, false, typeId), nil
+	return trace_record.ReferenceValue(dereferencedValueRecord, addr, false, typeId), typeId, nil
 
 }
 
-func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
+func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 
 	elemSize := typ.Type.Size()
 
 	arrayLen := typ.Count
-
-	typeName := typ.String()
 
 	elems := make([]trace_record.ValueRecord, 0)
 
@@ -321,6 +307,8 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 		elems = append(elems, elem)
 
 	}
+
+	typeName := typ.String()
 
 	// TODO: Record array Type info
 	typeId, seen := m.TypesIndex[typeName]
@@ -335,6 +323,6 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.SequenceValue(elems, false, typeId), nil
+	return trace_record.SequenceValue(elems, false, typeId), typeId, nil
 
 }

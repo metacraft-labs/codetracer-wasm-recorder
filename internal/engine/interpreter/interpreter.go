@@ -9,7 +9,6 @@ import (
 	"math"
 	"math/bits"
 	"os"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -729,7 +728,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// fmt.Printf("Function record: %v\n", functionRecord)
 
-	tracking_call := m.Record != nil && strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
+	tracking_call := m.Record != nil // && strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
 
 	var currLine wasmdebug.LineRecord
 
@@ -749,49 +748,49 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
 
 			if len(x) == 1 {
-				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
-					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
-						if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
-							loggedCall = true
+				// if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
+				if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
+					if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
+						loggedCall = true
 
-							fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
+						fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
 
-							args := make([]trace_record.FullValueRecord, 0)
+						args := make([]trace_record.FullValueRecord, 0)
 
-							for _, argRec := range functionRecord.Params {
-								fmt.Printf("\t")
-								val, err := readVariable(m, argRec, functionRecord, locals)
+						for _, argRec := range functionRecord.Params {
+							fmt.Printf("\t")
+							val, err := readVariable(m, argRec, functionRecord, locals)
 
-								if err != nil {
-									fmt.Fprintf(os.Stderr, "Can't function argument %s: %v\n", argRec.Name, err)
-								} else {
-									fmt.Printf("\t%v: %v\n", argRec.Name, val)
-									args = append(args, m.Record.Arg(argRec.Name, val))
-								}
+							if err != nil {
+								fmt.Fprintf(os.Stderr, "Can't function argument %s: %v\n", argRec.Name, err)
+							} else {
+								fmt.Printf("\t%v: %v\n", argRec.Name, val)
+								args = append(args, m.Record.Arg(argRec.Name, val))
 							}
-
-							m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
-							m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 						}
 
-						if loggedCall {
-							fmt.Printf("STEP: %v\n", x[0])
-							currLine = x[0]
-							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+						m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+						m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+					}
 
-							for _, v := range functionRecord.Locals {
-								val, err := readVariable(m, v, functionRecord, locals)
+					if loggedCall {
+						fmt.Printf("STEP: %v\n", x[0])
+						currLine = x[0]
+						m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
-								if err != nil {
-									fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-								} else {
-									fmt.Printf("local %v: %v\n", v.Name, val)
-									m.Record.RegisterVariable(v.Name, val)
-								}
+						for _, v := range functionRecord.Locals {
+							val, err := readVariable(m, v, functionRecord, locals)
+
+							if err != nil {
+								fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+							} else {
+								fmt.Printf("local %v: %v\n", v.Name, val)
+								m.Record.RegisterVariable(v.Name, val)
 							}
 						}
 					}
 				}
+				// }
 			}
 			// positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
 
@@ -4461,7 +4460,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			switch rt := (*functionRecord.ReturnType).(type) {
 			case *dwarf.StructType:
 				// TODO: This is broken 🥹. Must fix.
-				// EDIT: It works now :)
+				// EDIT: It works now 🙂
 
 				// TODO: handle errors
 

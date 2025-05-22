@@ -1,4 +1,4 @@
-{pkgs, ...}:
+{ pkgs, ... }:
 pkgs.buildGoModule rec {
   name = "wazero";
   pname = name;
@@ -7,7 +7,7 @@ pkgs.buildGoModule rec {
 
   doCheck = false;
 
-  subPackages = ["cmd/wazero"];
+  subPackages = [ "cmd/wazero" ];
 
-  vendorHash = "sha256-9zS4ex2GXMaJKvQ/rui1RvbcZ4z7C/u2/7Q5Ls1Qlvk=";
+  vendorHash = "sha256-KPAossSbErDG9cOFxWSYOo+GAsUorevb6YAsvERXo0E=";
 }

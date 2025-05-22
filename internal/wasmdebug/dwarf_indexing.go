@@ -127,6 +127,8 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			continue
 		}
 
+		fmt.Printf("INDEXED %#v\n", record)
+
 		ret.Function.Insert(record.LowPC, record.HighPC, *record)
 	}
 
@@ -210,15 +212,18 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		} else if locationFieldType == 2 {
 			record.FrameBase.Typ = OperandStack
 			record.FrameBase.Index = uint32(parseLEB128(locationFieldValue[2:]))
+		} else {
+			return fmt.Errorf("found invalid WASM location")
 		}
 
 		params := make([]VariableRecord, 0)
 		locals := make([]VariableRecord, 0)
 
 		// Read children of Subprogram tag
-		for {
+		for ent.Children {
 
 			child, err := r.Next()
+			fmt.Printf("CHILD %v %v if of %v\n", child.Tag.GoString(), child.AttrField(dwarf.AttrName), ent.AttrField(dwarf.AttrName))
 
 			// End of subprogram's children
 			if err != nil {

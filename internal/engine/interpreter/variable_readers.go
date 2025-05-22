@@ -13,7 +13,20 @@ import (
 )
 
 func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) (trace_record.ValueRecord, error) {
-	memAddr := uint32(locals[functionRecord.FrameBaseIndex] + v.Offset)
+	fb := functionRecord.FrameBase
+
+	var memAddr uint32
+
+	if fb.Typ == wasmdebug.LocationTypeLocal {
+		memAddr = uint32(locals[fb.Index] + v.Offset)
+	} else if fb.Typ == wasmdebug.LocationTypeGlobal {
+		memAddr = uint32(m.Global(int(fb.Index)).Get())
+	} else if fb.Typ == wasmdebug.OperandStack {
+		// TODO: support
+		return nil, fmt.Errorf("unsupported location type")
+	} else {
+		return nil, fmt.Errorf("invalid location type")
+	}
 	memSize := uint32(v.Type.Size())
 
 	mem := m.Memory()
@@ -29,6 +42,7 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 }
 
 func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, typeId trace_record.TypeId, err error) {
+	fmt.Printf("PARSING BYTES FOR TYPE %v. SIZE IS %v AND RAW BYTES ARE %v\n", typ.String(), typ.Size(), len(rawBytes))
 
 	switch t := typ.(type) {
 	case *dwarf.IntType:

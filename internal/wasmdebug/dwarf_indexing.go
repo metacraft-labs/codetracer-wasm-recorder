@@ -2,6 +2,7 @@ package wasmdebug
 
 import (
 	"debug/dwarf"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,19 @@ import (
 
 	"github.com/rdleal/intervalst/interval"
 )
+
+type LocationType uint8
+
+const (
+	LocationTypeLocal LocationType = iota
+	LocationTypeGlobal
+	OperandStack
+)
+
+type MemoryLocation struct {
+	Typ   LocationType
+	Index uint32
+}
 
 type TypeRecord interface {
 	isTypeRecord()
@@ -28,14 +42,14 @@ type VariableRecord struct {
 }
 
 type FunctionRecord struct {
-	Name           string
-	FileName       string
-	Line           int64
-	FrameBaseIndex uint64
-	Params         []VariableRecord
-	Locals         []VariableRecord
-	LowPC          uint64
-	HighPC         uint64
+	Name      string
+	FileName  string
+	Line      int64
+	FrameBase MemoryLocation
+	Params    []VariableRecord
+	Locals    []VariableRecord
+	LowPC     uint64
+	HighPC    uint64
 
 	// When nil, then the function is void / doesn't return value
 	ReturnType *dwarf.Type
@@ -181,13 +195,21 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 	if locationField := ent.AttrField(dwarf.AttrFrameBase); locationField != nil {
 		// TODO: handle more formats
-		locationFieldType := (locationField.Val.([]uint8))[1]
-		locationLocal := (locationField.Val.([]uint8))[2]
-		// We only handle "Locals" locations
-		// See: https://yurydelendik.github.io/webassembly-dwarf/#location-descriptions-locals
-		if locationFieldType != 0 {
-			r.SkipChildren()
-			return fmt.Errorf("unsupported location attribute found: %v", locationFieldType)
+		locationFieldValue := locationField.Val.([]uint8)
+		locationFieldType := locationFieldValue[1]
+
+		if locationFieldType == 0 {
+			record.FrameBase.Typ = LocationTypeLocal
+			record.FrameBase.Index = uint32(parseLEB128(locationFieldValue[2:]))
+		} else if locationFieldType == 1 {
+			record.FrameBase.Typ = LocationTypeGlobal
+			record.FrameBase.Index = uint32(parseLEB128(locationFieldValue[2:]))
+		} else if locationFieldType == 3 {
+			record.FrameBase.Typ = LocationTypeGlobal
+			record.FrameBase.Index = binary.LittleEndian.Uint32(locationFieldValue[2:6])
+		} else if locationFieldType == 2 {
+			record.FrameBase.Typ = OperandStack
+			record.FrameBase.Index = uint32(parseLEB128(locationFieldValue[2:]))
 		}
 
 		params := make([]VariableRecord, 0)
@@ -233,25 +255,9 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 				switch v := varLocationField.Val.(type) {
 				case uint64:
 					varLocation = v
+
 				case []uint8:
-
-					// LEB128 decoding
-					shift := 0
-					var res uint64 = 0
-					for i := 1; i < len(v); i++ {
-
-						// get first 7 bits of 8 bit chunk
-						payload := int(v[i]) & 0b01111111
-
-						res += uint64(payload * (1 << shift))
-
-						// 8th bit is used to check whether there's "more data to read"
-						if (v[i] & 0b10000000) == 0 {
-							break
-						}
-
-						shift += 7
-					}
+					res := parseLEB128(v[1:])
 					varLocation = res
 
 				default:
@@ -278,7 +284,6 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			}
 		}
-		record.FrameBaseIndex = uint64(locationLocal)
 		// TODO: append or rewrite?
 		record.Params = append(record.Params, params...)
 		record.Locals = append(record.Locals, locals...)
@@ -292,6 +297,26 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 	}
 
 	return nil
+}
+
+func parseLEB128(v []uint8) uint64 {
+	shift := 0
+	var res uint64 = 0
+	for i := 0; i < len(v); i++ {
+
+		// get first 7 bits of 8 bit chunk
+		payload := int(v[i]) & 0b01111111
+
+		res += uint64(payload * (1 << shift))
+
+		// 8th bit is used to check whether there's "more data to read"
+		if (v[i] & 0b10000000) == 0 {
+			break
+		}
+
+		shift += 7
+	}
+	return res
 }
 
 func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.LineFile, error) {

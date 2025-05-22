@@ -356,6 +356,7 @@ func (r *runtime) InstantiateModuleWithRecord(
 	}
 
 	moduleInstance.Record = traceRecord
+	moduleInstance.TypesIndex = make(map[string]trace_record.TypeId)
 	mod = moduleInstance
 
 	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {

@@ -10,7 +10,7 @@ import (
 
 func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
 
-	record := m.Record
+	typeName := typ.String()
 
 	mem := m.Memory()
 
@@ -36,24 +36,34 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 		return nil, fmt.Errorf("not a string slice")
 	}
 
-	len := len_field.I
+	length := len_field.I
 
 	str := ""
 
-	for i := 0; i < int(len); i++ {
+	for i := 0; i < int(length); i++ {
 		data, _ := mem.Read(addr+uint32(i), 1)
 		str += string(data[0])
 	}
 
-	pointerTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "String")
-	typeId := record.RegisterTypeWithNewId(typ.Name, pointerTypeRecord)
+	typeId, seen := m.TypesIndex[typ.String()]
+
+	if !seen {
+
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRING_TYPE_KIND, typeName)
+
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
 
 	return trace_record.StringValue(str, typeId), nil
 
 }
 
 func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, error) {
-	record := m.Record
+
+	typeName := typ.String()
 
 	mem := m.Memory()
 
@@ -93,8 +103,18 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	// TODO: what type kind?
 	// TODO: what should the string parameter be?
-	sliceTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Slice")
-	typeId := record.RegisterTypeWithNewId(typ.Name, sliceTypeRecord)
+
+	typeId, seen := m.TypesIndex[typ.String()]
+
+	if !seen {
+
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
 
 	elems := make([]trace_record.ValueRecord, 0)
 	for i := uint32(0); i < length; i++ {
@@ -103,7 +123,8 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 			return trace_record.SequenceValue(elems, true, typeId), fmt.Errorf("invalid memory access")
 		}
 
-		elem, err := bytesToValueRecord(elemBytes, elemType, m)
+		// TODO: Construct array Type info, DO NOT ignore it
+		elem, _, err := bytesToValueRecord(elemBytes, elemType, m)
 		if err != nil {
 			return trace_record.SequenceValue(elems, true, typeId), err
 		}

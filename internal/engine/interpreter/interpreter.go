@@ -701,33 +701,6 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
-func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
-	if *loggedCall {
-		return
-	}
-
-	*loggedCall = true
-
-	fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
-
-	args := make([]trace_record.FullValueRecord, 0)
-
-	for _, argRec := range functionRecord.Params {
-		fmt.Printf("\t")
-		val, err := readVariable(m, argRec, functionRecord, locals)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Can't read function argument %s: %v\n", argRec.Name, err)
-		} else {
-			fmt.Printf("\t%v: %v\n", argRec.Name, val)
-			args = append(args, m.Record.Arg(argRec.Name, val))
-		}
-	}
-
-	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
-	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
-}
-
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -779,7 +752,26 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
 					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
 						if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
-							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
+							loggedCall = true
+
+							fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
+
+							args := make([]trace_record.FullValueRecord, 0)
+
+							for _, argRec := range functionRecord.Params {
+								fmt.Printf("\t")
+								val, err := readVariable(m, argRec, functionRecord, locals)
+
+								if err != nil {
+									fmt.Fprintf(os.Stderr, "Can't function argument %s: %v\n", argRec.Name, err)
+								} else {
+									fmt.Printf("\t%v: %v\n", argRec.Name, val)
+									args = append(args, m.Record.Arg(argRec.Name, val))
+								}
+							}
+
+							m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+							m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 						}
 
 						if loggedCall {
@@ -4459,7 +4451,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.popFrame()
 
 	if m.Record != nil && tracking_call {
-		traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 		if functionRecord.ReturnType == nil {
 			fmt.Printf("Return: %v\n", functionRecord.Name)
 			m.Record.RegisterReturn(trace_record.NilValue())
@@ -4475,14 +4466,14 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				// TODO: handle errors
 
 				rawBytes, _ := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
-				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 
 			default:
 				rawBytes := make([]byte, 8)
 				binary.LittleEndian.PutUint64(rawBytes, rawValue)
 
 				// TODO: handle errors
-				value, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 			}
 			m.Record.RegisterReturn(value)
 			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)

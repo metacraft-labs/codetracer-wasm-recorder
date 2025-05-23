@@ -281,8 +281,11 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	dereferencedRawBytes, _ := mem.Read(addr, uint32(dereferencedType.Size()))
 
 	// TODO: Handle errors
-	// TODO: Construct array Type info, DO NOT ignore it
 	dereferencedValueRecord, dereferencedTypeId, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
+
+	if dereferencedValueRecord == nil {
+		dereferencedValueRecord = trace_record.NilValue()
+	}
 
 	typeName := typ.String()
 
@@ -314,7 +317,9 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 
 	elems := make([]trace_record.ValueRecord, 0)
 
-	for i := 0; i < int(arrayLen)-1; i++ {
+	fmt.Printf("ARR HAS LEN: %d AND ELEM SIZE: %d\n", int(arrayLen), elemSize)
+
+	for i := 0; i < int(arrayLen); i++ {
 
 		// TODO: Construct array Type info, DO NOT ignore it
 		elem, _, _ := bytesToValueRecord(rawBytes[i*int(elemSize):(i+1)*int(elemSize)], typ.Type, m)

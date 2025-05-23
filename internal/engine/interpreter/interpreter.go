@@ -4439,30 +4439,55 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			m.Record.RegisterReturn(trace_record.NilValue())
 		} else {
 			rawValue := ce.stack[len(ce.stack)-1]
+			rvSize := (*functionRecord.ReturnType).Size()
+
+			fmt.Printf("RAW VAL: %d\n", rawValue)
+
+			fmt.Printf("FUNCTION: %s has return value size: %d and byte size: %d and other size: %d and type: %#v\n", functionRecord.Name, (*functionRecord.ReturnType).Size(), (*functionRecord.ReturnType).Common().ByteSize, (*functionRecord.ReturnType).Common().Size(), (*functionRecord.ReturnType))
 
 			var value trace_record.ValueRecord
-			switch rt := (*functionRecord.ReturnType).(type) {
-			case *dwarf.StructType:
-				// TODO: This is broken 🥹. Must fix.
-				// EDIT: It works now 🙂
+			if rvSize <= 8 {
 
-				fmt.Printf("Function %s has return type %s with size %d and byteSize: %d\n", f.definition().Name(), rt.String(), rt.Size(), rt.ByteSize)
-
-				// TODO: Singleton structures are on the stack, handle them separately
-				// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
-				rawBytes, ok := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
-				if !ok {
-					// TODO: better description
-					panic("BANANA")
-				}
-				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
-
-			default:
 				rawBytes := make([]byte, 8)
 				binary.LittleEndian.PutUint64(rawBytes, rawValue)
 
 				// TODO: handle errors
 				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			} else {
+
+				switch rt := (*functionRecord.ReturnType).(type) {
+				case *dwarf.StructType:
+					// TODO: This is broken 🥹. Must fix.
+					// EDIT: It works now 🙂
+
+					fmt.Printf("Function %s has return type %s with size %d and byteSize: %d\n", f.definition().Name(), rt.String(), rt.Size(), rt.ByteSize)
+
+					// TODO: Singleton structures are on the stack, handle them separately
+					// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
+					rawBytes, ok := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
+					if !ok {
+						panic("Failed to read return value")
+					}
+					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+				case *dwarf.ArrayType:
+
+					rawBytes, ok := m.Memory().Read(uint32(functionParams[0]), uint32(rt.Size()))
+					if !ok {
+						panic("Failed to read Array return value")
+					}
+
+					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+
+				default:
+
+					// 16 147
+					// TODO: Should this be rvSize ?
+					rawBytes := make([]byte, 8)
+					binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+					// TODO: handle errors
+					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+				}
 			}
 			m.Record.RegisterReturn(value)
 			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)

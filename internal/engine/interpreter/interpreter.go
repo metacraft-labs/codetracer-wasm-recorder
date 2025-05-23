@@ -715,8 +715,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	body := frame.f.parent.body
 	bodyLen := uint64(len(body))
 
-	// dwarfData := frame.f.parent.source.DWARFData
-
 	// TODO: Figure out a way to resolve how many local variables we need
 	locals := make([]uint64, 10000)
 
@@ -729,7 +727,12 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// fmt.Printf("Function record: %v\n", functionRecord)
 
-	tracking_call := m.Record != nil // && strings.HasSuffix(functionRecord.FileName, ".rs") && !strings.HasPrefix(functionRecord.FileName, "/rustc") && !strings.Contains(functionRecord.FileName, ".rustup") && !strings.Contains(functionRecord.FileName, ".cargo")
+	tracking_call := m.Record != nil && (
+		strings.HasSuffix(functionRecord.FileName, ".rs") && 
+		!strings.HasPrefix(functionRecord.FileName, "/rustc") && 
+		!strings.Contains(functionRecord.FileName, ".rustup") && 
+		// !strings.Contains(functionRecord.FileName, ".cargo")) &&
+		!strings.Contains(functionRecord.FileName, "/rust/deps"))
 
 	var currLine wasmdebug.LineRecord
 

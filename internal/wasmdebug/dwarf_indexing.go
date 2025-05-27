@@ -221,7 +221,6 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 		// Read children of Subprogram tag
 		for ent.Children {
-
 			child, err := r.Next()
 			fmt.Printf("CHILD %v %v if of %v\n", child.Tag.GoString(), child.AttrField(dwarf.AttrName), ent.AttrField(dwarf.AttrName))
 
@@ -236,6 +235,11 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			if child.Tag == 0 {
 				break
+			}
+
+			if child.Tag == dwarf.TagInlinedSubroutine {
+				// TODO: delete this when handling for inlined subroutines is implemented
+				r.SkipChildren()
 			}
 
 			if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {

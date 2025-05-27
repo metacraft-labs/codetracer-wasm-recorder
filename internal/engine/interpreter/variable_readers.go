@@ -49,7 +49,13 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 		val, typeId, err = bytesToInt(rawBytes, t, m)
 
 	case *dwarf.UintType:
-		val, typeId, err = bytesToUint(rawBytes, t, m)
+		// TODO: make these language specific
+		typeStr := typ.String()
+		if typeStr == "()" {
+			val, typeId, err = bytesToVoidptr(rawBytes, t, m)
+		} else {
+			val, typeId, err = bytesToUint(rawBytes, t, m)
+		}
 
 	case *dwarf.BoolType:
 		val, typeId, err = bytesToBool(rawBytes, t, m)
@@ -283,7 +289,7 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	// TODO: Handle errors
 	dereferencedValueRecord, dereferencedTypeId, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
 
-	if dereferencedValueRecord == nil {
+	if dereferencedValueRecord == nil || dereferencedType.Size() == 0 {
 		dereferencedValueRecord = trace_record.NilValue()
 	}
 

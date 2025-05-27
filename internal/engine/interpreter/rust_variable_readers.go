@@ -45,7 +45,7 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 		str += string(data[0])
 	}
 
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -103,7 +103,7 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	// TODO: what type kind?
 	// TODO: what should the string parameter be?
 
-	typeId, seen := m.TypesIndex[typ.String()]
+	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
@@ -133,4 +133,23 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	return trace_record.SequenceValue(elems, true, typeId), trace_record.TypeId(0xffffffffffffffff), nil
 
+}
+
+// TODO: maybe this is not Rust specific?
+func bytesToVoidptr(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+	typeName := typ.String()
+
+	typeId, seen := m.TypesIndex[typeName]
+
+	if !seen {
+
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
+
+	return trace_record.NilValue(), typeId, nil
 }

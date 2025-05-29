@@ -70,6 +70,9 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 			val, typeId, err = bytesToStringRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct &[") && strings.HasSuffix(typeStr, "]") {
 			val, typeId, err = bytesToSliceRust(rawBytes, t, m)
+		} else if strings.HasPrefix(typeStr, "(") && strings.HasSuffix(typeStr, ")") {
+			fmt.Println("FOUND A TUPLE\n")
+			val, typeId, err = bytesToTupleRust(rawBytes, t, m)
 		} else {
 
 			val, typeId, err = bytesToStruct(rawBytes, t, m)
@@ -285,6 +288,8 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 
 	// TODO: Handle errors
 	dereferencedRawBytes, _ := mem.Read(addr, uint32(dereferencedType.Size()))
+
+	// NOTE: What do we do when the dereferencedType's size is 0 ?
 
 	// TODO: Handle errors
 	dereferencedValueRecord, dereferencedTypeId, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)

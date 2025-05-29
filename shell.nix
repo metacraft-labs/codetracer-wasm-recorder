@@ -25,8 +25,9 @@ mkShell {
     wabt
     killall
 
-    cargo
-    wasm-rust
+    # cargo
+    # wasm-rust
+    delve
     emscripten
     binaryen
     llvm

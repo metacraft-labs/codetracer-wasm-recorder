@@ -738,11 +738,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	loggedCall := false
 
-	// if m.Record != nil && tracking_call {
-	// 	fmt.Printf("Stack: %v\n", ce.stack)
-	// }
-	// fmt.Printf("-----------------------\n")
-
 	paramCount := len(frame.f.funcType.Params)
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
 

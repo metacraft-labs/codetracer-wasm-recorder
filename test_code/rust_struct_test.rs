@@ -1,29 +1,33 @@
 // use std::num::NonZero;
 
-struct TestStruct {
+struct TestStruct1 {
     a: i32,
 }
 
-fn test_struct(a: i32) -> TestStruct {
-    TestStruct { a: a }
+fn test_struct1(a: i32) -> TestStruct1 {
+    TestStruct1 { a: a }
 }
 
-fn number() -> usize {
-    1
+struct TestStruct2 {
+    a: i32,
+    b: i32,
 }
+
+fn test_struct2(a: i32, b: i32) -> TestStruct2 {
+    TestStruct2 { a: a, b: b }
+}
+
+// fn number() -> usize {
+//     1
+// }
 // fn non_zero() -> NonZero<usize> {
-    // NonZero::new(2).unwrap()
+// NonZero::new(2).unwrap()
 // }
 
 fn main() {
-    let test = test_struct(123);
+    let test1 = test_struct1(123);
 
-    let dummy = test_struct(234);
+    let test2 = test_struct2(234, 345);
 
-    let first = number();
-
-    // let i = non_zero();
-    println!("{}", test.a);
-
-    std::process::exit(0)
+    let dummy = test_struct1(-1);
 }

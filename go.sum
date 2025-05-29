@@ -8,5 +8,9 @@ github.com/metacraft-labs/trace_record v0.0.0-20250521144255-435775ffc9b6 h1:dJ1
 github.com/metacraft-labs/trace_record v0.0.0-20250521144255-435775ffc9b6/go.mod h1:O6YVD4qrg4U7gF4O1b6VdPpj9Nx7bazQEXHNlbvLfx0=
 github.com/metacraft-labs/trace_record v0.0.0-20250522113951-6278e4757b0a h1:eTUbVwQxNN/FguFpBEr/UaWYKU0bDc65EZYSycHfl6I=
 github.com/metacraft-labs/trace_record v0.0.0-20250522113951-6278e4757b0a/go.mod h1:O6YVD4qrg4U7gF4O1b6VdPpj9Nx7bazQEXHNlbvLfx0=
+github.com/metacraft-labs/trace_record v0.0.0-20250528150215-db8c1ddac322 h1:cbeW49kEdaZy/qAXuh4cOynxZ56TQYTGL9s2R3xrbMM=
+github.com/metacraft-labs/trace_record v0.0.0-20250528150215-db8c1ddac322/go.mod h1:O6YVD4qrg4U7gF4O1b6VdPpj9Nx7bazQEXHNlbvLfx0=
 github.com/rdleal/intervalst v1.4.1 h1:8rCuAea0aj3Z6cDSeN3Q3c+LZjmHmrqZhXrJbqfPw0c=
 github.com/rdleal/intervalst v1.4.1/go.mod h1:xO89Z6BC+LQDH+IPQQw/OESt5UADgFD41tYMUINGpxQ=
+github.com/rdleal/intervalst v1.5.0 h1:SEB9bCFz5IqD1yhfH1Wv8IBnY/JQxDplwkxHjT6hamU=
+github.com/rdleal/intervalst v1.5.0/go.mod h1:xO89Z6BC+LQDH+IPQQw/OESt5UADgFD41tYMUINGpxQ=

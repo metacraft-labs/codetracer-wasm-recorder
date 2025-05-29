@@ -60,6 +60,39 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 	return trace_record.StringValue(str, typeId), trace_record.TypeId(0xffffffffffffffff), nil
 }
 
+func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+
+	typeName := typ.String()
+
+	elemSize := uint32(typ.Field[0].Type.Size())
+
+	fieldTypes := typ.Field
+
+	tupleLength := uint32(len(fieldTypes))
+
+	elems := make([]trace_record.ValueRecord, 0)
+
+	for i := uint32(0); i < tupleLength; i++ {
+		tupleElem, _, _ := bytesToValueRecord(rawBytes[i*elemSize:(i+1)*elemSize], fieldTypes[i].Type, m)
+
+		elems = append(elems, tupleElem)
+	}
+
+	typeId, seen := m.TypesIndex[typeName]
+
+	if !seen {
+
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
+
+	return trace_record.TupleValue(elems, typeId), trace_record.TypeId(0xffffffffffffffff), nil
+}
+
 func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 
 	typeName := typ.String()

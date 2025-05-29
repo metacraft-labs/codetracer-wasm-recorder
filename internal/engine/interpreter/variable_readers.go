@@ -66,13 +66,13 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	case *dwarf.StructType:
 		// TODO: make these language specific
 		typeStr := typ.String()
+		fmt.Printf("Type str: %s", typeStr)
 		if typeStr == "struct &str" {
 			val, typeId, err = bytesToStringRust(rawBytes, t, m)
+		} else if strings.HasPrefix(typeStr, "struct (") && strings.HasSuffix(typeStr, ")") {
+			val, typeId, err = bytesToTupleRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct &[") && strings.HasSuffix(typeStr, "]") {
 			val, typeId, err = bytesToSliceRust(rawBytes, t, m)
-		} else if strings.HasPrefix(typeStr, "(") && strings.HasSuffix(typeStr, ")") {
-			fmt.Println("FOUND A TUPLE\n")
-			val, typeId, err = bytesToTupleRust(rawBytes, t, m)
 		} else {
 
 			val, typeId, err = bytesToStruct(rawBytes, t, m)

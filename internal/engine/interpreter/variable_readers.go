@@ -73,7 +73,8 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 			val, typeId, err = bytesToTupleRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct &[") && strings.HasSuffix(typeStr, "]") {
 			val, typeId, err = bytesToSliceRust(rawBytes, t, m)
-		} else if strings.HasPrefix(typeStr, "struct alloc::vec::Vec<") && strings.HasSuffix(typeStr, ">") {
+		} else if strings.HasPrefix(typeStr, "struct Vec<") && strings.HasSuffix(typeStr, ">") {
+			fmt.Println("CYKA")
 			val, typeId, err = bytesToVecRust(rawBytes, t, m)
 		} else {
 
@@ -95,6 +96,8 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	return
 }
 
+const INVALID_TYPE_ID = trace_record.TypeId(0xffffffffffffffff)
+
 func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	size := typ.ByteSize
 	var intVal int64
@@ -113,7 +116,7 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 		intVal = int64(binary.LittleEndian.Uint64(rawBytes))
 
 	default:
-		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported int variable byte size %v", size)
+		return nil, INVALID_TYPE_ID, fmt.Errorf("unsupported int variable byte size %v", size)
 	}
 
 	// TODO: what should the string parameter be?
@@ -155,7 +158,7 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 		intVal = binary.LittleEndian.Uint64(rawBytes)
 
 	default:
-		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported uint variable byte size %v", size)
+		return nil, INVALID_TYPE_ID, fmt.Errorf("unsupported uint variable byte size %v", size)
 	}
 
 	typeName := typ.String()
@@ -185,7 +188,7 @@ func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (
 		boolVal = rawBytes[0] != 0
 
 	default:
-		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported bool variable byte size %v", size)
+		return nil, INVALID_TYPE_ID, fmt.Errorf("unsupported bool variable byte size %v", size)
 	}
 
 	typeName := typ.String()
@@ -217,7 +220,7 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 		floatVal = math.Float64frombits(binary.LittleEndian.Uint64(rawBytes))
 
 	default:
-		return nil, trace_record.TypeId(0xffffffffffffffff), fmt.Errorf("unsupported float variable byte size %v", size)
+		return nil, INVALID_TYPE_ID, fmt.Errorf("unsupported float variable byte size %v", size)
 	}
 
 	typeName := typ.String()
@@ -254,7 +257,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 		types = append(types, fieldTypeRecord)
 
 		if err != nil {
-			return nil, trace_record.TypeId(0xffffffffffffffff), err
+			return nil, INVALID_TYPE_ID, err
 		}
 
 		values = append(values, res)

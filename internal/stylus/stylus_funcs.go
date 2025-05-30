@@ -2,6 +2,7 @@ package stylus
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/metacraft-labs/trace_record"
@@ -102,8 +103,10 @@ func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				destPtr := uint32(stack[0])
+				writeMemoryBytes(mem, destPtr, event.outs)
+				stack[0] = uint64(len(event.outs))
 			}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
 		Export(fname)
 }
@@ -118,8 +121,11 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				contractPtr := uint32(stack[4])
+				revertPtr := uint32(stack[5])
+				writeMemoryBytes(mem, contractPtr, event.outs[:20])
+				writeMemoryBytes(mem, revertPtr, event.outs[20:])
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -136,8 +142,11 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				contractPtr := uint32(stack[3])
+				revertPtr := uint32(stack[4])
+				writeMemoryBytes(mem, contractPtr, event.outs[:20])
+				writeMemoryBytes(mem, revertPtr, event.outs[20:])
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -154,8 +163,9 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				destPtr := uint32(stack[1])
+				writeMemoryBytes(mem, destPtr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -172,8 +182,10 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				destPtr := uint32(stack[3])
+				writeMemoryBytes(mem, destPtr, event.outs)
+				stack[0] = uint64(len(event.outs))
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{api.ValueTypeI32},
@@ -190,8 +202,8 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint32(event.outs)
+				stack[0] = uint64(val)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{api.ValueTypeI32},
@@ -208,8 +220,9 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				destPtr := uint32(stack[1])
+				writeMemoryBytes(mem, destPtr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -226,8 +239,8 @@ func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint32(event.outs)
+				stack[0] = uint64(val)
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI32},
@@ -244,8 +257,9 @@ func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -284,8 +298,9 @@ func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tr
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -321,8 +336,8 @@ func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint32(event.outs)
+				stack[0] = uint64(val)
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI32},
@@ -339,8 +354,9 @@ func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -357,8 +373,9 @@ func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tra
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -375,8 +392,9 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				destPtr := uint32(stack[2])
+				writeMemoryBytes(mem, destPtr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -400,7 +418,7 @@ func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, 
 				value := fmt.Sprintf("0x%xd", readMemoryBytes(mem, valuePtr, 32))
 
 				_ = event
-		
+
 				metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
 				record.RegisterRecordEvent(trace_record.EventKindWriteOther, metadata, value)
 			}),
@@ -462,7 +480,6 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
 				_ = event
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
@@ -480,8 +497,10 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				retPtr := uint32(stack[5])
+				writeMemoryBytes(mem, retPtr, event.outs[:4])
+				stack[0] = uint64(event.outs[4])
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 			[]api.ValueType{api.ValueTypeI32},
@@ -498,8 +517,10 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace,
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				retPtr := uint32(stack[4])
+				writeMemoryBytes(mem, retPtr, event.outs[:4])
+				stack[0] = uint64(event.outs[4])
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 			[]api.ValueType{api.ValueTypeI32},
@@ -516,8 +537,10 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				retPtr := uint32(stack[4])
+				writeMemoryBytes(mem, retPtr, event.outs[:4])
+				stack[0] = uint64(event.outs[4])
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 			[]api.ValueType{api.ValueTypeI32},
@@ -534,8 +557,9 @@ func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -552,8 +576,8 @@ func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},
@@ -570,8 +594,9 @@ func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				mem := m.Memory()
+				ptr := uint32(stack[0])
+				writeMemoryBytes(mem, ptr, event.outs)
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},
@@ -588,8 +613,8 @@ func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},
@@ -606,8 +631,8 @@ func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},
@@ -624,8 +649,8 @@ func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},
@@ -642,7 +667,6 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, rec
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
 				_ = event
 			}),
 			[]api.ValueType{api.ValueTypeI32},
@@ -660,8 +684,8 @@ func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},
@@ -678,8 +702,8 @@ func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 					panic(fmt.Sprint(err))
 				}
 
-				panic("TODO")
-				_ = event
+				val := binary.BigEndian.Uint64(event.outs)
+				stack[0] = val
 			}),
 			[]api.ValueType{},
 			[]api.ValueType{api.ValueTypeI64},

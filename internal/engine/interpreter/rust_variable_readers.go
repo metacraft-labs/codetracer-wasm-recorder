@@ -168,6 +168,10 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 }
 
+func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+
+}
+
 // TODO: maybe this is not Rust specific?
 func bytesToVoidptr(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	typeName := typ.String()

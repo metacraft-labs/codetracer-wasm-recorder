@@ -66,11 +66,14 @@ type InlineRecord struct {
 
 type Offset uint64
 
+type TemplateParamMap map[string]dwarf.Type
+
 type PCRecord struct {
 	Line            *interval.SearchTree[LineRecord, uint64]
 	Function        *interval.SearchTree[FunctionRecord, uint64]
 	InlinedRoutines *interval.SearchTree[[]InlineRecord, uint64]
 	Locals          *interval.SearchTree[[]VariableRecord, uint64]
+	TypeParamMap    map[string]TemplateParamMap
 }
 
 func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
@@ -90,6 +93,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
 		InlinedRoutines: interval.NewSearchTree[[]InlineRecord](cmpFn),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
+		TypeParamMap:    make(map[string]TemplateParamMap),
 	}
 
 	r := d.Reader()
@@ -117,8 +121,15 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			if err := indexFunctionEntry(r, ent, d, files, offset2function); err != nil {
 				fmt.Fprintf(os.Stderr, "error indexing function:\n\t%#v\n\t%v\n", ent, err)
 			}
+
+		case dwarf.TagStructType:
+			if err := indexStructType(d, ent, &ret); err != nil {
+				fmt.Fprintf(os.Stderr, "error indexing struct type:\n\t%#v\n\t%v\n", ent, err)
+			}
 		}
 	}
+
+	fmt.Printf("Type param map: %#v\n", ret.TypeParamMap)
 
 	for _, record := range offset2function {
 		// TODO: are these all the cases when an entry is invalid?
@@ -133,6 +144,54 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	}
 
 	return
+}
+
+func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
+	sr := d.Reader()
+	sr.Seek(ent.Offset)
+
+	fmt.Printf("INDEXING TYPE PARAMS FOR STRUCT: %s\n", ent.AttrField(dwarf.AttrName).Val.(string))
+
+	for ent.Children {
+		child, err := sr.Next()
+
+		// End of subprogram's children
+		if err != nil {
+			return err
+		}
+
+		if child == nil {
+			break
+		}
+
+		if child.Tag == 0 {
+			break
+		}
+
+		if child.Tag == dwarf.TagTemplateTypeParameter {
+
+			typOffset := child.AttrField(dwarf.AttrType).Val.(dwarf.Offset)
+			templateName := child.AttrField(dwarf.AttrName).Val.(string)
+
+			paramType, err := d.Type(typOffset)
+
+			if err != nil {
+				continue
+			}
+
+			typeName := "struct " + ent.AttrField(dwarf.AttrName).Val.(string)
+
+			if _, ok := ret.TypeParamMap[typeName]; !ok {
+				ret.TypeParamMap[typeName] = make(TemplateParamMap)
+			}
+
+			ret.TypeParamMap[typeName][templateName] = paramType
+
+			fmt.Printf("FOUND TYPE PARAM: %s %s %#v\n", typeName, templateName, paramType)
+		}
+
+	}
+	return nil
 }
 
 func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, offset2function map[dwarf.Offset]*FunctionRecord) error {

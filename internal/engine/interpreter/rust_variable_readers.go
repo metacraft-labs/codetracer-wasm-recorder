@@ -57,23 +57,19 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StringValue(str, typeId), INVALID_TYPE_ID, nil
+	return trace_record.StringValue(str, typeId), typeId, nil
 }
 
 func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
-
 	typeName := typ.String()
-
-	elemSize := uint32(typ.Field[0].Type.Size())
-
-	fieldTypes := typ.Field
-
-	tupleLength := uint32(len(fieldTypes))
 
 	elems := make([]trace_record.ValueRecord, 0)
 
-	for i := uint32(0); i < tupleLength; i++ {
-		tupleElem, _, _ := bytesToValueRecord(rawBytes[i*elemSize:(i+1)*elemSize], fieldTypes[i].Type, m)
+	for _, field := range typ.Field {
+		startByte := field.ByteOffset
+		endByte := startByte + field.Type.Size()
+
+		tupleElem, _, _ := bytesToValueRecord(rawBytes[startByte:endByte], field.Type, m)
 
 		elems = append(elems, tupleElem)
 	}
@@ -90,7 +86,7 @@ func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.TupleValue(elems, typeId), INVALID_TYPE_ID, nil
+	return trace_record.TupleValue(elems, typeId), typeId, nil
 }
 
 func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
@@ -164,7 +160,7 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 		elems = append(elems, elem)
 	}
 
-	return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, nil
+	return trace_record.SequenceValue(elems, true, typeId), typeId, nil
 
 }
 
@@ -269,74 +265,7 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 		elems = append(elems, elem)
 	}
 
-	return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, nil
-	//	// Vec<T> in Rust stdlib is essentially { buf: RawVec<T>, len: usize }.
-	//	// RawVec<T> is { ptr: Unique<T>, cap: usize, alloc: Global } where Unique<T>
-	//	// is repr(transparent) over *const T. Therefore on wasm32 the layout is:
-	//	// [0:4] data pointer, [4:8] capacity, [8:12] length.
-	//
-	//	mem := m.Memory()
-	//	typeName := typ.String()
-	//
-	//	// Determine the element type via the PCRecord's TypeParamMap if available.
-	//	var elemType dwarf.Type
-	//	if m.Source != nil {
-	//		if mp, ok := m.Source.PCRecord.TypeParamMap[typeName]; ok {
-	//			if t, ok := mp["T"]; ok {
-	//				elemType = t
-	//			}
-	//		}
-	//	}
-	//	// Fallback: attempt to extract from the first field if not found.
-	//	// if elemType == nil && len(typ.Field) > 0 {
-	//	// 	if rawVec, ok := typ.Field[0].Type.(*dwarf.StructType); ok {
-	//	// 		if len(rawVec.Field) > 0 {
-	//	// 			if unique, ok := rawVec.Field[0].Type.(*dwarf.StructType); ok {
-	//	// 				if len(unique.Field) > 0 {
-	//	// 					if ptr, ok := unique.Field[0].Type.(*dwarf.PtrType); ok {
-	//	// 						elemType = ptr.Type
-	//	// 					}
-	//	// 				}
-	//	// 			}
-	//	// 		}
-	//	// 	}
-	//	// }
-	//	if elemType == nil {
-	//		return nil, INVALID_TYPE_ID, fmt.Errorf("could not resolve vec element type")
-	//	}
-	//
-	//	fmt.Printf("ELEM TYPE: %#v\n", elemType)
-	//
-	//	addr := binary.LittleEndian.Uint32(rawBytes[0:4])
-	//	length := binary.LittleEndian.Uint32(rawBytes[8:12])
-	//
-	//	elemSize := uint32(elemType.Size())
-	//
-	//	// Register Vec type in trace record if needed.
-	//	typeId, seen := m.TypesIndex[typeName]
-	//	if !seen {
-	//		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
-	//		typeId = m.TypesIndex[typeName]
-	//		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
-	//		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
-	//	}
-	//
-	//	elems := make([]trace_record.ValueRecord, 0)
-	//	for i := uint32(0); i < length; i++ {
-	//		elemBytes, ok := mem.Read(addr+i*elemSize, elemSize)
-	//		if !ok {
-	//			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
-	//		}
-	//
-	//		elem, _, err := bytesToValueRecord(elemBytes, elemType, m)
-	//		if err != nil {
-	//			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, err
-	//		}
-	//
-	//		elems = append(elems, elem)
-	//	}
-	//
-	//	return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, nil
+	return trace_record.SequenceValue(elems, true, typeId), typeId, nil
 
 }
 

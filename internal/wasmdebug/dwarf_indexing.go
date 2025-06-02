@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 
 	"github.com/rdleal/intervalst/interval"
 )
@@ -405,13 +404,22 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 		}
 		// TODO: Maybe we should ignore tombstone addresses by using isTombstoneAddr,
 		//  but not sure if that would be an issue in practice.
-		lines = append(lines, le)
+		if !isTombstoneAddr(le.Address) {
+			lines = append(lines, le)
+		}
 	}
 
-	sort.Slice(lines, func(i, j int) bool { return lines[i].Address < lines[j].Address })
+	// sort.Slice(lines, func(i, j int) bool { return lines[i].Address < lines[j].Address })
 
 	for i, _ := range lines {
 		if i-1 >= 0 {
+
+			if lines[i-1].Address > lines[i].Address-1 {
+				fmt.Println("BAD LINE INFO")
+				continue
+			}
+
+			fmt.Printf("INSERTING %s:%d:%d FOR ADDRESS range [%x %x]\n", lines[i-1].File.Name, lines[i-1].Line, lines[i-1].Column, lines[i-1].Address, lines[i].Address-1)
 			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
 				FileName: lines[i-1].File.Name,
 				Line:     int64(lines[i-1].Line),

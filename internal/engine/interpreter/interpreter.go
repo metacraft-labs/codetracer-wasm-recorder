@@ -717,7 +717,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// TODO: Figure out a way to resolve how many local variables we need
 	locals := make([]uint64, 10000)
-
+	// 16d03 16d0d
 	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
 
 	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
@@ -727,12 +727,13 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// fmt.Printf("Function record: %v\n", functionRecord)
 
-	tracking_call := m.Record != nil && (
-		strings.HasSuffix(functionRecord.FileName, ".rs") && 
-		!strings.HasPrefix(functionRecord.FileName, "/rustc") && 
-		!strings.Contains(functionRecord.FileName, ".rustup") && 
-		// !strings.Contains(functionRecord.FileName, ".cargo")) &&
+	tracking_call := m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
+		!strings.HasPrefix(functionRecord.FileName, "/rustc") &&
+		!strings.Contains(functionRecord.FileName, ".rustup") &&
+		!strings.Contains(functionRecord.FileName, ".cargo") &&
 		!strings.Contains(functionRecord.FileName, "/rust/deps"))
+
+	// tracking_call = true
 
 	var currLine wasmdebug.LineRecord
 
@@ -742,12 +743,20 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
 
 	for frame.pc < bodyLen {
+		fmt.Printf("FUNC: %s PC: 0x%x OFFSET: 0x%x\n", functionRecord.Name, frame.pc, frame.f.parent.offsetsInWasmBinary[frame.pc])
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 		if m.Record != nil && tracking_call {
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
+			// fmt.Printf("%#v\n", x)
+
+			fmt.Println("Function intersectins:\n")
+			for _, v := range x {
+				fmt.Printf("%s ", v.FileName)
+			}
+			fmt.Print("\n")
 
 			if len(x) == 1 {
-				if true || (strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo")) {
+				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
 					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
 						if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
 							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
@@ -4433,7 +4442,16 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 
 		if functionRecord.ReturnType == nil {
+			typeName := "void"
 			fmt.Printf("Return: %v\n", functionRecord.Name)
+			_, seen := m.TypesIndex[typeName]
+
+			if !seen {
+				m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+				typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+				m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+			}
+
 			m.Record.RegisterReturn(trace_record.NilValue())
 		} else {
 			rawValue := ce.stack[len(ce.stack)-1]

@@ -415,11 +415,13 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 		if i-1 >= 0 {
 
 			if lines[i-1].Address > lines[i].Address-1 {
-				fmt.Println("BAD LINE INFO")
 				continue
 			}
 
-			fmt.Printf("INSERTING %s:%d:%d FOR ADDRESS range [%x %x]\n", lines[i-1].File.Name, lines[i-1].Line, lines[i-1].Column, lines[i-1].Address, lines[i].Address-1)
+			if lines[i-1].EndSequence {
+				continue
+			}
+
 			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
 				FileName: lines[i-1].File.Name,
 				Line:     int64(lines[i-1].Line),

@@ -121,6 +121,8 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 					panic(fmt.Sprint(err))
 				}
 
+				// TODO: Add memory reads for verification
+
 				mem := m.Memory()
 				contractPtr := uint32(stack[4])
 				revertPtr := uint32(stack[5])
@@ -141,6 +143,8 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
+
+				// TODO: Add memory reads for verification
 
 				mem := m.Memory()
 				contractPtr := uint32(stack[3])
@@ -163,6 +167,8 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 					panic(fmt.Sprint(err))
 				}
 
+				// TODO: Add memory reads for verification
+
 				mem := m.Memory()
 				destPtr := uint32(stack[1])
 				writeMemoryBytes(mem, destPtr, event.outs)
@@ -181,6 +187,8 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
+
+				// TODO: Add memory reads for verification
 
 				mem := m.Memory()
 				destPtr := uint32(stack[3])
@@ -202,6 +210,8 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
+				// TODO: Add memory reads for verification
+
 				val := binary.BigEndian.Uint32(event.outs)
 				stack[0] = uint64(val)
 			}),
@@ -219,6 +229,8 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
+
+				// TODO: Add memory reads for verification
 
 				mem := m.Memory()
 				destPtr := uint32(stack[1])
@@ -276,11 +288,7 @@ func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 					panic(fmt.Sprint(err))
 				}
 
-				val, err := byteArrToU32(event.outs)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
+				val := binary.BigEndian.Uint32(event.outs)
 				stack[0] = uint64(val)
 			}),
 			[]api.ValueType{},
@@ -392,6 +400,8 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 					panic(fmt.Sprint(err))
 				}
 
+				// TODO: Add memory reads for verification
+
 				mem := m.Memory()
 				destPtr := uint32(stack[2])
 				writeMemoryBytes(mem, destPtr, event.outs)
@@ -481,6 +491,8 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 				}
 
 				_ = event
+
+				// TODO: Add memory reads for verification
 			}),
 			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 			[]api.ValueType{},
@@ -496,6 +508,8 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
+
+				// TODO: Add memory reads for verification
 
 				mem := m.Memory()
 				retPtr := uint32(stack[5])
@@ -517,6 +531,8 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace,
 					panic(fmt.Sprint(err))
 				}
 
+				// TODO: Add memory reads for verification
+
 				mem := m.Memory()
 				retPtr := uint32(stack[4])
 				writeMemoryBytes(mem, retPtr, event.outs[:4])
@@ -536,6 +552,8 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 				if err != nil {
 					panic(fmt.Sprint(err))
 				}
+
+				// TODO: Add memory reads for verification
 
 				mem := m.Memory()
 				retPtr := uint32(stack[4])
@@ -668,6 +686,7 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, rec
 				}
 
 				_ = event
+				// This is NOOP
 			}),
 			[]api.ValueType{api.ValueTypeI32},
 			[]api.ValueType{},

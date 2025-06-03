@@ -749,12 +749,12 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
 			// fmt.Printf("%#v\n", x)
 
-			fmt.Println("Function intersectins:\n")
 			for _, v := range x {
 				fmt.Printf("%s ", v.FileName)
 			}
 			fmt.Print("\n")
 
+			// TODO: Remove when we finally implement inlining support
 			if len(x) == 1 {
 				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
 					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {

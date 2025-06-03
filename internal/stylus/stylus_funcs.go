@@ -10,6 +10,24 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
+// exportFunc reduces boilerplate for building Stylus host hooks. It fetches the
+// next event and forwards it to fn.
+func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
+	params, results []api.ValueType,
+	fn func(m api.Module, stack []uint64, event evmEvent)) wazero.HostModuleBuilder {
+	return mb.NewFunctionBuilder().
+		WithGoModuleFunction(api.GoModuleFunc(
+			func(ctx context.Context, m api.Module, stack []uint64) {
+				event, err := trace.nextEvent(name)
+				if err != nil {
+					panic(fmt.Sprint(err))
+				}
+				fn(m, stack, event)
+			}),
+			params, results,
+		).Export(name)
+}
+
 func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	result := mb
 	result = exportReadArgs(result, trace, record)
@@ -54,685 +72,377 @@ func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 // TODO: add record logs for events
 
 func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "read_args"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "read_args",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "write_result"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				_ = readMemoryBytes(mem, ptr, uint32(stack[1]))
-
-				_ = event
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "write_result",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			_ = readMemoryBytes(mem, ptr, uint32(stack[1]))
+			_ = event
+		})
 }
 
 func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "read_return_data"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				destPtr := uint32(stack[0])
-				writeMemoryBytes(mem, destPtr, event.outs)
-				stack[0] = uint64(len(event.outs))
-			}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
-		Export(fname)
+	return exportFunc(mb, trace, "read_return_data",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			destPtr := uint32(stack[0])
+			writeMemoryBytes(mem, destPtr, event.outs)
+			stack[0] = uint64(len(event.outs))
+		})
 }
 
 func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "create2"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				contractPtr := uint32(stack[4])
-				revertPtr := uint32(stack[5])
-				writeMemoryBytes(mem, contractPtr, event.outs[:20])
-				writeMemoryBytes(mem, revertPtr, event.outs[20:])
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "create2",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			contractPtr := uint32(stack[4])
+			revertPtr := uint32(stack[5])
+			writeMemoryBytes(mem, contractPtr, event.outs[:20])
+			writeMemoryBytes(mem, revertPtr, event.outs[20:])
+		})
 }
 
 func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "create1"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				contractPtr := uint32(stack[3])
-				revertPtr := uint32(stack[4])
-				writeMemoryBytes(mem, contractPtr, event.outs[:20])
-				writeMemoryBytes(mem, revertPtr, event.outs[20:])
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "create1",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			contractPtr := uint32(stack[3])
+			revertPtr := uint32(stack[4])
+			writeMemoryBytes(mem, contractPtr, event.outs[:20])
+			writeMemoryBytes(mem, revertPtr, event.outs[20:])
+		})
 }
 
 func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "account_balance"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				destPtr := uint32(stack[1])
-				writeMemoryBytes(mem, destPtr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "account_balance",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			destPtr := uint32(stack[1])
+			writeMemoryBytes(mem, destPtr, event.outs)
+		})
 }
 
 func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "account_code"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				destPtr := uint32(stack[3])
-				writeMemoryBytes(mem, destPtr, event.outs)
-				stack[0] = uint64(len(event.outs))
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "account_code",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			destPtr := uint32(stack[3])
+			writeMemoryBytes(mem, destPtr, event.outs)
+			stack[0] = uint64(len(event.outs))
+		})
 }
 
 func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "account_code_size"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				val := binary.BigEndian.Uint32(event.outs)
-				stack[0] = uint64(val)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "account_code_size",
+		[]api.ValueType{api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			val := binary.BigEndian.Uint32(event.outs)
+			stack[0] = uint64(val)
+		})
 }
 
 func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "account_codehash"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				destPtr := uint32(stack[1])
-				writeMemoryBytes(mem, destPtr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "account_codehash",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			destPtr := uint32(stack[1])
+			writeMemoryBytes(mem, destPtr, event.outs)
+		})
 }
 
 func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "return_data_size"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint32(event.outs)
-				stack[0] = uint64(val)
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "return_data_size",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint32(event.outs)
+			stack[0] = uint64(val)
+		})
 }
 
 func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "contract_address"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "contract_address",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "msg_reentrant"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint32(event.outs)
-				stack[0] = uint64(val)
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "msg_reentrant",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint32(event.outs)
+			stack[0] = uint64(val)
+		})
 }
 
 func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "msg_sender"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "msg_sender",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "msg_value"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "msg_value",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "tx_ink_price"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint32(event.outs)
-				stack[0] = uint64(val)
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "tx_ink_price",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint32(event.outs)
+			stack[0] = uint64(val)
+		})
 }
 
 func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "tx_gas_price"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "tx_gas_price",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "tx_origin"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "tx_origin",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "native_keccak256"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				destPtr := uint32(stack[2])
-				writeMemoryBytes(mem, destPtr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "native_keccak256",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			destPtr := uint32(stack[2])
+			writeMemoryBytes(mem, destPtr, event.outs)
+		})
 }
 
 func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	eventName := "storage_cache_bytes32"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(eventName)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
+	return exportFunc(mb, trace, eventName,
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			keyPtr := uint32(stack[0])
+			valuePtr := uint32(stack[1])
+			key := readMemoryBytes(mem, keyPtr, 32)
+			value := fmt.Sprintf("0x%xd", readMemoryBytes(mem, valuePtr, 32))
 
-				mem := m.Memory()
-				keyPtr := uint32(stack[0])
-				valuePtr := uint32(stack[1])
-				key := readMemoryBytes(mem, keyPtr, 32)
-				value := fmt.Sprintf("0x%xd", readMemoryBytes(mem, valuePtr, 32))
+			_ = event
 
-				_ = event
-
-				metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
-				record.RegisterRecordEvent(trace_record.EventKindWriteOther, metadata, value)
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(eventName)
+			metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
+			record.RegisterRecordEvent(trace_record.EventKindWriteOther, metadata, value)
+		})
 }
 
 func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
 	eventName := "storage_load_bytes32"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(eventName)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
+	return exportFunc(mb, trace, eventName,
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			keyPtr := uint32(stack[0])
+			destPtr := uint32(stack[1])
+			key := readMemoryBytes(mem, keyPtr, 32)
+			writeMemoryBytes(mem, destPtr, event.outs)
 
-				mem := m.Memory()
-				keyPtr := uint32(stack[0])
-				destPtr := uint32(stack[1])
-				key := readMemoryBytes(mem, keyPtr, 32)
-				writeMemoryBytes(mem, destPtr, event.outs)
-
-				metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
-				content := fmt.Sprintf("0x%xd", event.outs)
-				record.RegisterRecordEvent(trace_record.EventKindReadOther, metadata, content)
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(eventName)
+			metadata := fmt.Sprintf("%s: key 0x%xd", eventName, key)
+			content := fmt.Sprintf("0x%xd", event.outs)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, metadata, content)
+		})
 }
 
 func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "storage_flush_cache"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				_ = event
-				// This is NOOP
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "storage_flush_cache",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			_ = event
+			// This is NOOP
+		})
 }
 
 func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "emit_log"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				_ = event
-
-				// TODO: Add memory reads for verification
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "emit_log",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			_ = event
+			// TODO: Add memory reads for verification
+		})
 }
 
 func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "call_contract"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				retPtr := uint32(stack[5])
-				writeMemoryBytes(mem, retPtr, event.outs[:4])
-				stack[0] = uint64(event.outs[4])
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "call_contract",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			retPtr := uint32(stack[5])
+			writeMemoryBytes(mem, retPtr, event.outs[:4])
+			stack[0] = uint64(event.outs[4])
+		})
 }
 
 func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "delegate_call_contract"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				retPtr := uint32(stack[4])
-				writeMemoryBytes(mem, retPtr, event.outs[:4])
-				stack[0] = uint64(event.outs[4])
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "delegate_call_contract",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			retPtr := uint32(stack[4])
+			writeMemoryBytes(mem, retPtr, event.outs[:4])
+			stack[0] = uint64(event.outs[4])
+		})
 }
 
 func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "static_call_contract"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				// TODO: Add memory reads for verification
-
-				mem := m.Memory()
-				retPtr := uint32(stack[4])
-				writeMemoryBytes(mem, retPtr, event.outs[:4])
-				stack[0] = uint64(event.outs[4])
-			}),
-			[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
-			[]api.ValueType{api.ValueTypeI32},
-		).Export(fname)
+	return exportFunc(mb, trace, "static_call_contract",
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			retPtr := uint32(stack[4])
+			writeMemoryBytes(mem, retPtr, event.outs[:4])
+			stack[0] = uint64(event.outs[4])
+		})
 }
 
 func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "block_basefee"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "block_basefee",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "chainid"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "chainid",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "block_coinbase"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				mem := m.Memory()
-				ptr := uint32(stack[0])
-				writeMemoryBytes(mem, ptr, event.outs)
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "block_coinbase",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			ptr := uint32(stack[0])
+			writeMemoryBytes(mem, ptr, event.outs)
+		})
 }
 
 func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "block_gas_limit"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "block_gas_limit",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "block_number"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "block_number",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "block_timestamp"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "block_timestamp",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "pay_for_memory_grow"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				_ = event
-				// This is NOOP
-			}),
-			[]api.ValueType{api.ValueTypeI32},
-			[]api.ValueType{},
-		).Export(fname)
+	return exportFunc(mb, trace, "pay_for_memory_grow",
+		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			_ = event
+			// This is NOOP
+		})
 }
 
 func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "evm_gas_left"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "evm_gas_left",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trace_record.TraceRecord) wazero.HostModuleBuilder {
-	fname := "evm_ink_left"
-	return mb.NewFunctionBuilder().
-		WithGoModuleFunction(api.GoModuleFunc(
-			func(ctx context.Context, m api.Module, stack []uint64) {
-				event, err := trace.nextEvent(fname)
-				if err != nil {
-					panic(fmt.Sprint(err))
-				}
-
-				val := binary.BigEndian.Uint64(event.outs)
-				stack[0] = val
-			}),
-			[]api.ValueType{},
-			[]api.ValueType{api.ValueTypeI64},
-		).Export(fname)
+	return exportFunc(mb, trace, "evm_ink_left",
+		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
+		func(m api.Module, stack []uint64, event evmEvent) {
+			val := binary.BigEndian.Uint64(event.outs)
+			stack[0] = val
+		})
 }
 
 func readMemoryBytes(mem api.Memory, ptr uint32, cnt uint32) []byte {
 	res, ok := mem.Read(ptr, cnt)
 	if !ok {
-		panic("Invalid memory acces")
+		panic("Invalid memory access")
 	}
 
 	return res
@@ -740,6 +450,6 @@ func readMemoryBytes(mem api.Memory, ptr uint32, cnt uint32) []byte {
 
 func writeMemoryBytes(mem api.Memory, ptr uint32, bytes []byte) {
 	if !mem.Write(ptr, bytes) {
-		panic("Invalid memory acces")
+		panic("Invalid memory access")
 	}
 }

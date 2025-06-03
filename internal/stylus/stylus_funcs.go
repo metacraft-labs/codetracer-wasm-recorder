@@ -108,8 +108,14 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 	return exportFunc(mb, trace, "create2",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			codePtr := uint32(stack[0])
+			codeLen := uint32(stack[1])
+			endowmentPtr := uint32(stack[2])
+			saltPtr := uint32(stack[3])
+			_ = readMemoryBytes(mem, codePtr, codeLen)
+			_ = readMemoryBytes(mem, endowmentPtr, 32)
+			_ = readMemoryBytes(mem, saltPtr, 32)
 			contractPtr := uint32(stack[4])
 			revertPtr := uint32(stack[5])
 			writeMemoryBytes(mem, contractPtr, event.outs[:20])
@@ -121,8 +127,12 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 	return exportFunc(mb, trace, "create1",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			codePtr := uint32(stack[0])
+			codeLen := uint32(stack[1])
+			endowmentPtr := uint32(stack[2])
+			_ = readMemoryBytes(mem, codePtr, codeLen)
+			_ = readMemoryBytes(mem, endowmentPtr, 32)
 			contractPtr := uint32(stack[3])
 			revertPtr := uint32(stack[4])
 			writeMemoryBytes(mem, contractPtr, event.outs[:20])
@@ -134,8 +144,9 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 	return exportFunc(mb, trace, "account_balance",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			addrPtr := uint32(stack[0])
+			_ = readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[1])
 			writeMemoryBytes(mem, destPtr, event.outs)
 		})
@@ -146,8 +157,9 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			addrPtr := uint32(stack[0])
+			_ = readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[3])
 			writeMemoryBytes(mem, destPtr, event.outs)
 			stack[0] = uint64(len(event.outs))
@@ -159,7 +171,9 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		[]api.ValueType{api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
+			mem := m.Memory()
+			addrPtr := uint32(stack[0])
+			_ = readMemoryBytes(mem, addrPtr, 20)
 			val := binary.BigEndian.Uint32(event.outs)
 			stack[0] = uint64(val)
 		})
@@ -169,8 +183,9 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 	return exportFunc(mb, trace, "account_codehash",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			addrPtr := uint32(stack[0])
+			_ = readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[1])
 			writeMemoryBytes(mem, destPtr, event.outs)
 		})
@@ -257,8 +272,10 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 	return exportFunc(mb, trace, "native_keccak256",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			inputPtr := uint32(stack[0])
+			inputLen := uint32(stack[1])
+			_ = readMemoryBytes(mem, inputPtr, inputLen)
 			destPtr := uint32(stack[2])
 			writeMemoryBytes(mem, destPtr, event.outs)
 		})
@@ -312,8 +329,11 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 	return exportFunc(mb, trace, "emit_log",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
+			mem := m.Memory()
+			dataPtr := uint32(stack[0])
+			len := uint32(stack[1])
+			_ = readMemoryBytes(mem, dataPtr, len)
 			_ = event
-			// TODO: Add memory reads for verification
 		})
 }
 
@@ -322,8 +342,14 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			contractPtr := uint32(stack[0])
+			dataPtr := uint32(stack[1])
+			dataLen := uint32(stack[2])
+			valuePtr := uint32(stack[3])
+			_ = readMemoryBytes(mem, contractPtr, 20)
+			_ = readMemoryBytes(mem, dataPtr, dataLen)
+			_ = readMemoryBytes(mem, valuePtr, 32)
 			retPtr := uint32(stack[5])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])
@@ -335,8 +361,12 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace,
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			contractPtr := uint32(stack[0])
+			dataPtr := uint32(stack[1])
+			dataLen := uint32(stack[2])
+			_ = readMemoryBytes(mem, contractPtr, 20)
+			_ = readMemoryBytes(mem, dataPtr, dataLen)
 			retPtr := uint32(stack[4])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])
@@ -348,8 +378,12 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
-			// TODO: Add memory reads for verification
 			mem := m.Memory()
+			contractPtr := uint32(stack[0])
+			dataPtr := uint32(stack[1])
+			dataLen := uint32(stack[2])
+			_ = readMemoryBytes(mem, contractPtr, 20)
+			_ = readMemoryBytes(mem, dataPtr, dataLen)
 			retPtr := uint32(stack[4])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])

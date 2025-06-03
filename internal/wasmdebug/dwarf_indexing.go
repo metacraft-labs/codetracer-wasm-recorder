@@ -58,6 +58,8 @@ type InlineRecord struct {
 	Name         string
 	FileName     string
 	Line         int64
+	Params       []VariableRecord
+	Locals       []VariableRecord
 	CallFileName string
 	CallLine     int64
 	CallColumn   int64
@@ -70,7 +72,7 @@ type TemplateParamMap map[string]dwarf.Type
 type PCRecord struct {
 	Line            *interval.SearchTree[LineRecord, uint64]
 	Function        *interval.SearchTree[FunctionRecord, uint64]
-	InlinedRoutines *interval.SearchTree[[]InlineRecord, uint64]
+	InlinedRoutines *interval.SearchTree[InlineRecord, uint64]
 	Locals          *interval.SearchTree[[]VariableRecord, uint64]
 	TypeParamMap    map[string]TemplateParamMap
 }

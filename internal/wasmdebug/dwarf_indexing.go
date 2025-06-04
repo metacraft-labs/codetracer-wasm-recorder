@@ -92,7 +92,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	ret = PCRecord{
 		Line:            interval.NewSearchTree[LineRecord](cmpFn),
 		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
-		InlinedRoutines: interval.NewSearchTree[[]InlineRecord](cmpFn),
+		InlinedRoutines: interval.NewSearchTree[InlineRecord](cmpFn),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
 		TypeParamMap:    make(map[string]TemplateParamMap),
 	}
@@ -116,10 +116,12 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			}
 
 		case dwarf.TagInlinedSubroutine:
-			// TODO
+			if err := indexInlineEntry(r, ent, d, files, &ret); err != nil {
+				fmt.Fprintf(os.Stderr, "error indexing inlined subroutine:\n\t%#v\n\t%v\n", ent, err)
+			}
 
 		case dwarf.TagSubprogram:
-			if err := indexFunctionEntry(r, ent, d, files, offset2function); err != nil {
+			if err := indexFunctionEntry(r, ent, d, files, &ret, offset2function); err != nil {
 				fmt.Fprintf(os.Stderr, "error indexing function:\n\t%#v\n\t%v\n", ent, err)
 			}
 
@@ -195,7 +197,7 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 	return nil
 }
 
-func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, offset2function map[dwarf.Offset]*FunctionRecord) error {
+func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, ret *PCRecord, offset2function map[dwarf.Offset]*FunctionRecord) error {
 	functionOffset := ent.Offset
 	if specWrapped := ent.AttrField(dwarf.AttrSpecification); specWrapped != nil {
 		functionOffset = specWrapped.Val.(dwarf.Offset)
@@ -298,8 +300,10 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			}
 
 			if child.Tag == dwarf.TagInlinedSubroutine {
-				// TODO: delete this when handling for inlined subroutines is implemented
-				r.SkipChildren()
+				if err := indexInlineEntry(r, child, d, files, ret); err != nil {
+					return err
+				}
+				continue
 			}
 
 			if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
@@ -363,6 +367,146 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		returnType, _ := d.Type(funcTypeOffset)
 
 		record.ReturnType = &returnType
+	}
+
+	return nil
+}
+
+func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, recordTree *PCRecord) error {
+	var lowPC, highPC uint64
+
+	if lowPcField := ent.AttrField(dwarf.AttrLowpc); lowPcField != nil {
+		switch v := lowPcField.Val.(type) {
+		case uint64:
+			lowPC = v
+		case int64:
+			lowPC = uint64(v)
+		default:
+			return fmt.Errorf("unrecognized lowPc format")
+		}
+	}
+
+	if highPcField := ent.AttrField(dwarf.AttrHighpc); highPcField != nil {
+		switch highPcField.Class {
+		case dwarf.ClassAddress:
+			highPC = highPcField.Val.(uint64)
+		case dwarf.ClassConstant:
+			highPC = lowPC + uint64(highPcField.Val.(int64))
+		default:
+			return fmt.Errorf("unrecognized highPc format")
+		}
+	}
+
+	rec := InlineRecord{}
+
+	if originField := ent.AttrField(dwarf.AttrAbstractOrigin); originField != nil {
+		or := d.Reader()
+		or.Seek(originField.Val.(dwarf.Offset))
+		origin, err := or.Next()
+		if err == nil && origin != nil {
+			if nameField := origin.AttrField(dwarf.AttrName); nameField != nil {
+				rec.Name = nameField.Val.(string)
+			}
+			if fileField := origin.AttrField(dwarf.AttrDeclFile); fileField != nil {
+				if idx, ok := fileField.Val.(int64); ok && int(idx) < len(files) {
+					rec.FileName = files[idx].Name
+				}
+			}
+			if lineField := origin.AttrField(dwarf.AttrDeclLine); lineField != nil {
+				rec.Line, _ = lineField.Val.(int64)
+			}
+		}
+	}
+
+	if fileField := ent.AttrField(dwarf.AttrCallFile); fileField != nil {
+		if idx, ok := fileField.Val.(int64); ok && int(idx) < len(files) {
+			rec.CallFileName = files[idx].Name
+		}
+	}
+	if lineField := ent.AttrField(dwarf.AttrCallLine); lineField != nil {
+		rec.CallLine, _ = lineField.Val.(int64)
+	}
+	if colField := ent.AttrField(dwarf.AttrCallColumn); colField != nil {
+		rec.CallColumn, _ = colField.Val.(int64)
+	}
+
+	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
+		recordTree.InlinedRoutines.Insert(lowPC, highPC, rec)
+	}
+
+	if ent.Children {
+		for ent.Children {
+			child, err := r.Next()
+			if err != nil {
+				return err
+			}
+			if child == nil || child.Tag == 0 {
+				break
+			}
+
+			switch child.Tag {
+			case dwarf.TagInlinedSubroutine:
+				if err := indexInlineEntry(r, child, d, files, recordTree); err != nil {
+					return err
+				}
+			case dwarf.TagVariable, dwarf.TagFormalParameter:
+				varTypeField := child.AttrField(dwarf.AttrType)
+				varNameField := child.AttrField(dwarf.AttrName)
+				varLocationField := child.AttrField(dwarf.AttrLocation)
+
+				if varNameField == nil || varLocationField == nil {
+					// try resolving via abstract origin
+					if originAttr := child.AttrField(dwarf.AttrAbstractOrigin); originAttr != nil {
+						or := d.Reader()
+						or.Seek(originAttr.Val.(dwarf.Offset))
+						orig, _ := or.Next()
+						if orig != nil {
+							if varNameField == nil {
+								varNameField = orig.AttrField(dwarf.AttrName)
+							}
+							if varTypeField == nil {
+								varTypeField = orig.AttrField(dwarf.AttrType)
+							}
+							if varLocationField == nil {
+								varLocationField = orig.AttrField(dwarf.AttrLocation)
+							}
+						}
+					}
+				}
+
+				if varNameField == nil || varLocationField == nil {
+					r.SkipChildren()
+					continue
+				}
+
+				varName := varNameField.Val.(string)
+				varType, _ := func() (dwarf.Type, error) {
+					if varTypeField != nil {
+						return d.Type(varTypeField.Val.(dwarf.Offset))
+					}
+					return nil, nil
+				}()
+
+				var loc uint64
+				switch v := varLocationField.Val.(type) {
+				case uint64:
+					loc = v
+				case []uint8:
+					loc = parseLEB128(v[1:])
+				default:
+					r.SkipChildren()
+					continue
+				}
+
+				if child.Tag == dwarf.TagVariable {
+					rec.Locals = append(rec.Locals, VariableRecord{Name: varName, Offset: loc, Type: varType})
+				} else {
+					rec.Params = append(rec.Params, VariableRecord{Name: varName, Offset: loc, Type: varType})
+				}
+			default:
+				r.SkipChildren()
+			}
+		}
 	}
 
 	return nil

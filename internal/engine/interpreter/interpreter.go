@@ -743,28 +743,29 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
 
 	for frame.pc < bodyLen {
-		fmt.Printf("FUNC: %s PC: 0x%x OFFSET: 0x%x\n", functionRecord.Name, frame.pc, frame.f.parent.offsetsInWasmBinary[frame.pc])
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
+
+		// fmt.Printf("FUNC: %s PC: 0x%x OFFSET: 0x%x\n", functionRecord.Name, frame.pc, frame.f.parent.offsetsInWasmBinary[frame.pc])
+
+		// for _, v := range lineRecords {
+		// fmt.Printf("%s:%d:%d\n", v.FileName, v.Line, v.Column)
+		// }
+		// fmt.Print("---------------------------------------------------------\n")
+
 		if m.Record != nil && tracking_call {
-			x, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
-			// fmt.Printf("%#v\n", x)
+			lineRecords, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
 
-			for _, v := range x {
-				fmt.Printf("%s ", v.FileName)
-			}
-			fmt.Print("\n")
-
-			// TODO: Remove when we finally implement inlining support
-			if len(x) == 1 {
-				if strings.HasSuffix(x[0].FileName, ".rs") && !strings.HasPrefix(x[0].FileName, "/rustc") && !strings.Contains(x[0].FileName, ".rustup") && !strings.Contains(x[0].FileName, ".cargo") {
-					if currLine.Line != x[0].Line || currLine.FileName != x[0].FileName {
-						if !loggedCall && (x[0].Line != functionRecord.Line || x[0].FileName != functionRecord.FileName) {
+			if len(lineRecords) == 1 {
+				lineRecord := lineRecords[0]
+				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
+					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
+						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
 							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 						}
 
 						if loggedCall {
-							fmt.Printf("STEP: %v\n", x[0])
-							currLine = x[0]
+							fmt.Printf("STEP: %v\n", lineRecord)
+							currLine = lineRecord
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
 							for _, v := range functionRecord.Locals {

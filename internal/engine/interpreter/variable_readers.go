@@ -75,8 +75,9 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 			val, typeId, err = bytesToSliceRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct Vec<") && strings.HasSuffix(typeStr, ">") {
 			val, typeId, err = bytesToVecRust(rawBytes, t, m)
+		} else if strings.HasPrefix(typeStr, "struct Uint<") && strings.HasSuffix(typeStr, ">") {
+			val, typeId, err = bytesToRuintRust(rawBytes, t, m)
 		} else {
-
 			val, typeId, err = bytesToStruct(rawBytes, t, m)
 		}
 

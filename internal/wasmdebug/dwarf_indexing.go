@@ -143,7 +143,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 
 		fmt.Printf("INDEXED %#v\n", record)
 
-		ret.Function.Insert(record.LowPC, record.HighPC, *record)
+		ret.Function.Insert(record.LowPC, record.HighPC-1, *record)
 	}
 
 	return
@@ -431,7 +431,7 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 	}
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
-		recordTree.InlinedRoutines.Insert(lowPC, highPC, rec)
+		recordTree.InlinedRoutines.Insert(lowPC, highPC-1, rec)
 	}
 
 	if ent.Children {
@@ -533,14 +533,15 @@ func parseLEB128(v []uint8) uint64 {
 }
 
 func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.LineFile, error) {
+	fmt.Println("---------------------------------------------------------")
 	lineReader, err := d.LineReader(cu)
 	if err != nil || lineReader == nil {
 		return nil, fmt.Errorf("can't initialize line reader: %v", err)
 	}
 
 	var le dwarf.LineEntry
-	// Get the lines inside the entry.
-	lines := make([]dwarf.LineEntry, 0)
+	var prevLe *dwarf.LineEntry
+
 	for {
 		err = lineReader.Next(&le)
 		if errors.Is(err, io.EOF) {
@@ -548,31 +549,23 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 		} else if err != nil {
 			return nil, err
 		}
-		// TODO: Maybe we should ignore tombstone addresses by using isTombstoneAddr,
-		//  but not sure if that would be an issue in practice.
-		if !isTombstoneAddr(le.Address) {
-			lines = append(lines, le)
+
+		if prevLe != nil {
+			if prevLe.IsStmt {
+				fmt.Printf("LINE: %s:%d:%d RANGE: [%x; %x]\n", prevLe.File.Name, prevLe.Line, prevLe.Column, prevLe.Address, le.Address-1)
+				tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
+					FileName: prevLe.File.Name,
+					Line:     int64(prevLe.Line),
+					Column:   int64(prevLe.Column),
+				})
+			}
+		} else {
+			prevLe = &dwarf.LineEntry{}
 		}
-	}
+		*prevLe = le
 
-	// sort.Slice(lines, func(i, j int) bool { return lines[i].Address < lines[j].Address })
-
-	for i, _ := range lines {
-		if i-1 >= 0 {
-
-			if lines[i-1].Address > lines[i].Address-1 {
-				continue
-			}
-
-			if lines[i-1].EndSequence {
-				continue
-			}
-
-			tree.Line.Insert(lines[i-1].Address, lines[i].Address-1, LineRecord{
-				FileName: lines[i-1].File.Name,
-				Line:     int64(lines[i-1].Line),
-				Column:   int64(lines[i-1].Column),
-			})
+		if prevLe.EndSequence {
+			prevLe = nil
 		}
 	}
 

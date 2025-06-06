@@ -2,7 +2,9 @@ package interpreter
 
 import (
 	"debug/dwarf"
+	"encoding/binary"
 	"fmt"
+	"slices"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/internal/wasm"
@@ -128,9 +130,6 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	} else {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a slice")
 	}
-
-	// TODO: what type kind?
-	// TODO: what should the string parameter be?
 
 	typeId, seen := m.TypesIndex[typeName]
 
@@ -286,4 +285,53 @@ func bytesToVoidptr(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance
 	}
 
 	return trace_record.NilValue(), typeId, nil
+}
+
+// Stylus contracts use https://crates.io/crates/ruint to store variables. So we should handle them.
+func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+	typeName := typ.String()
+
+	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
+	if err != nil {
+		return nil, INVALID_TYPE_ID, err
+	}
+
+	fields := rawStruct.(trace_record.StructValueRecord).Fields
+
+	if len(fields) != 1 {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
+	}
+
+	limbs, ok := fields[0].(trace_record.SequenceValueRecord)
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
+	}
+
+	bytes := make([]byte, 0)
+	for _, n := range limbs.Elements {
+		limb, ok := n.(trace_record.IntValueRecord)
+		if !ok {
+			return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
+		}
+
+		bytes = binary.LittleEndian.AppendUint64(bytes, uint64(limb.I))
+	}
+
+	slices.Reverse(bytes)
+	for len(bytes) > 1 && bytes[0] == 0 {
+		bytes = bytes[1:]
+	}
+
+	typeId, seen := m.TypesIndex[typeName]
+
+	if !seen {
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
+
+	return trace_record.BigIntValue(bytes, false, typeId), typeId, nil
 }

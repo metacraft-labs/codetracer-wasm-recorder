@@ -72,7 +72,7 @@ type TemplateParamMap map[string]dwarf.Type
 type PCRecord struct {
 	Line            *interval.SearchTree[LineRecord, uint64]
 	Function        *interval.SearchTree[FunctionRecord, uint64]
-	InlinedRoutines *interval.SearchTree[InlineRecord, uint64]
+	InlinedRoutines *interval.SearchTree[[]InlineRecord, uint64]
 	Locals          *interval.SearchTree[[]VariableRecord, uint64]
 	TypeParamMap    map[string]TemplateParamMap
 }
@@ -92,7 +92,7 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	ret = PCRecord{
 		Line:            interval.NewSearchTree[LineRecord](cmpFn),
 		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
-		InlinedRoutines: interval.NewSearchTree[InlineRecord](cmpFn),
+		InlinedRoutines: interval.NewSearchTree[[]InlineRecord](cmpFn),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
 		TypeParamMap:    make(map[string]TemplateParamMap),
 	}
@@ -431,7 +431,18 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 	}
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
-		recordTree.InlinedRoutines.Insert(lowPC, highPC-1, rec)
+		fmt.Printf("INSERTING INLINED ENTRY: [%d %d] %#v\n", lowPC, highPC, rec)
+
+		entry, found := recordTree.InlinedRoutines.Find(lowPC, highPC)
+
+		if !found {
+			x := make([]InlineRecord, 0)
+			x = append(x, rec)
+			recordTree.InlinedRoutines.Insert(lowPC, highPC, x)
+		} else {
+			entry = append(entry, rec)
+			recordTree.InlinedRoutines.Insert(lowPC, highPC, entry)
+		}
 	}
 
 	if ent.Children {

@@ -753,13 +753,21 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		// fmt.Print("---------------------------------------------------------\n")
 
 		if m.Record != nil && tracking_call {
-			lineRecords, _ := frame.f.parent.source.PCRecord.Line.AllIntersections(offset, offset)
+
+			index := frame.f.parent.source.PCRecord
+
+			lineRecords, _ := index.Line.AllIntersections(offset, offset)
+
+			// inlinedLineRecords, _ := index.InlinedRoutines.AllIntersections(offset, offset)
 
 			if len(lineRecords) == 1 {
 				lineRecord := lineRecords[0]
+
 				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
 					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
+
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
+
 							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 						}
 
@@ -778,6 +786,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 									m.Record.RegisterVariable(v.Name, val)
 								}
 							}
+
 						}
 					}
 				}

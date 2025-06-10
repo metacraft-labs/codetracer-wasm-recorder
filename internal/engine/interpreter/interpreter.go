@@ -736,6 +736,10 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// tracking_call = true
 
 	var currLine wasmdebug.LineRecord
+	// 	var currInlined []wasmdebug.InlineRecord
+	//
+	// 	var currInlinedStart = -1
+	// 	var currInlinedEnd = -1
 
 	loggedCall := false
 
@@ -759,6 +763,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			lineRecords, _ := index.Line.AllIntersections(offset, offset)
 
 			// inlinedLineRecords, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+			inlineEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+
+			fmt.Printf("Offset %d has inlinedEntries: %#v\n", offset, inlineEntries)
 
 			if len(lineRecords) == 1 {
 				lineRecord := lineRecords[0]
@@ -767,7 +774,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
 
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
-
 							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 						}
 
@@ -788,6 +794,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							}
 
 						}
+
 					}
 				}
 			}
@@ -4547,6 +4554,21 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 
 	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
 	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+}
+
+func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
+	args := make([]trace_record.FullValueRecord, 0)
+	for _, argRec := range rec.Params {
+		fmt.Printf("%s has var: %s", rec.Name, argRec.Name)
+		val, err := readVariable(m, argRec, functionRecord, locals)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Can't read inline argument %s: %v\n", argRec.Name, err)
+		} else {
+			args = append(args, m.Record.Arg(argRec.Name, val))
+		}
+	}
+	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
+	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

@@ -115,10 +115,11 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 				fmt.Fprintf(os.Stderr, "error indexing compile unit: %v\n", err)
 			}
 
-		case dwarf.TagInlinedSubroutine:
-			if err := indexInlineEntry(r, ent, d, files, &ret); err != nil {
-				fmt.Fprintf(os.Stderr, "error indexing inlined subroutine:\n\t%#v\n\t%v\n", ent, err)
-			}
+		// case dwarf.TagInlinedSubroutine:
+		// 	fmt.Println("INDEXING INLINED ENTRY INFORMATION!")
+		// 	if err := indexInlineEntry(r, ent, d, files, &ret); err != nil {
+		// 		fmt.Fprintf(os.Stderr, "error indexing inlined subroutine:\n\t%#v\n\t%v\n", ent, err)
+		// 	}
 
 		case dwarf.TagSubprogram:
 			if err := indexFunctionEntry(r, ent, d, files, &ret, offset2function); err != nil {
@@ -430,24 +431,10 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 		rec.CallColumn, _ = colField.Val.(int64)
 	}
 
-	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
-		fmt.Printf("INSERTING INLINED ENTRY: [%d %d] %#v\n", lowPC, highPC, rec)
-
-		entry, found := recordTree.InlinedRoutines.Find(lowPC, highPC)
-
-		if !found {
-			x := make([]InlineRecord, 0)
-			x = append(x, rec)
-			recordTree.InlinedRoutines.Insert(lowPC, highPC, x)
-		} else {
-			entry = append(entry, rec)
-			recordTree.InlinedRoutines.Insert(lowPC, highPC, entry)
-		}
-	}
-
 	if ent.Children {
 		for ent.Children {
 			child, err := r.Next()
+
 			if err != nil {
 				return err
 			}
@@ -460,7 +447,7 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 				if err := indexInlineEntry(r, child, d, files, recordTree); err != nil {
 					return err
 				}
-			case dwarf.TagVariable, dwarf.TagFormalParameter:
+			case dwarf.TagVariable:
 				varTypeField := child.AttrField(dwarf.AttrType)
 				varNameField := child.AttrField(dwarf.AttrName)
 				varLocationField := child.AttrField(dwarf.AttrLocation)
@@ -486,7 +473,6 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 				}
 
 				if varNameField == nil || varLocationField == nil {
-					r.SkipChildren()
 					continue
 				}
 
@@ -514,10 +500,24 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 				} else {
 					rec.Params = append(rec.Params, VariableRecord{Name: varName, Offset: loc, Type: varType})
 				}
-			default:
-				r.SkipChildren()
 			}
 		}
+	}
+
+	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
+
+		entry, found := recordTree.InlinedRoutines.Find(lowPC, highPC)
+
+		if !found {
+			x := make([]InlineRecord, 0)
+			x = append(x, rec)
+			recordTree.InlinedRoutines.Insert(lowPC, highPC, x)
+		} else {
+			entry = append(entry, rec)
+			recordTree.InlinedRoutines.Insert(lowPC, highPC, entry)
+		}
+
+		fmt.Printf("INSERTING INLINE INTERVAL [%d %d] : %#v\n", lowPC, highPC, rec)
 	}
 
 	return nil

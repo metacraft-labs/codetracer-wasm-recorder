@@ -736,15 +736,19 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// tracking_call = true
 
 	var currLine wasmdebug.LineRecord
-	// 	var currInlined []wasmdebug.InlineRecord
-	//
-	// 	var currInlinedStart = -1
-	// 	var currInlinedEnd = -1
+
+	// Cache active inline entries to avoid duplicate trace events
+	// while the program counter remains within their range. The
+	// value tracks the end of the inline region, so we can remove
+	// the entry once execution exits it.
+	loggedInline := make(map[string]uint64)
 
 	loggedCall := false
 
 	paramCount := len(frame.f.funcType.Params)
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
+
+	stack := NewStack[uint64]()
 
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
@@ -762,8 +766,22 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 			lineRecords, _ := index.Line.AllIntersections(offset, offset)
 
-			// inlinedLineRecords, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+
+			// Remove any inline entries that have finished executing.
+			for k, end := range loggedInline {
+				if offset > end {
+
+					// m.Record.RegisterReturn(trace_record.NilValue())
+					delete(loggedInline, k)
+				}
+			}
+
+			// Look up any inline entries at the current offset.
 			inlineEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+
+			// for _, v := range lineRecords {
+			// 	if v.
+			// }
 
 			fmt.Printf("Offset %d has inlinedEntries: %#v\n", offset, inlineEntries)
 
@@ -778,6 +796,17 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 						}
 
 						if loggedCall {
+
+							for _, ies := range inlineEntries {
+								for _, ie := range ies {
+									k := inlineKey(ie)
+									if _, ok := loggedInline[k]; !ok {
+										loggedInline[k] = ie.HighPC
+										traceInlineEntry(m, ie, functionRecord, locals)
+									}
+								}
+							}
+
 							fmt.Printf("STEP: %v\n", lineRecord)
 							currLine = lineRecord
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
@@ -4556,6 +4585,12 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 }
 
+func inlineKey(rec wasmdebug.InlineRecord) string {
+	return fmt.Sprintf("%s|%s|%d|%s|%d|%d",
+		rec.Name, rec.FileName, rec.Line,
+		rec.CallFileName, rec.CallLine, rec.CallColumn)
+}
+
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
 	args := make([]trace_record.FullValueRecord, 0)
 	for _, argRec := range rec.Params {
@@ -4567,6 +4602,7 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 			args = append(args, m.Record.Arg(argRec.Name, val))
 		}
 	}
+	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
 	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
 }

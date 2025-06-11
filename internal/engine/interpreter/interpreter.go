@@ -741,14 +741,13 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// while the program counter remains within their range. The
 	// value tracks the end of the inline region, so we can remove
 	// the entry once execution exits it.
-	loggedInline := make(map[string]uint64)
 
 	loggedCall := false
 
 	paramCount := len(frame.f.funcType.Params)
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
 
-	stack := NewStack[uint64]()
+	stack := NewStack[wasmdebug.InlineRecord]()
 
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
@@ -766,26 +765,27 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 			lineRecords, _ := index.Line.AllIntersections(offset, offset)
 
+			// Look up any inline entries at the current offset.
+			inlinedEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
 
-			// Remove any inline entries that have finished executing.
-			for k, end := range loggedInline {
-				if offset > end {
+			fmt.Printf("Offset %d has inlinedEntries: %#v\n", offset, inlinedEntries)
 
-					// m.Record.RegisterReturn(trace_record.NilValue())
-					delete(loggedInline, k)
+			for stack.Len() > 0 {
+
+				if ie, ok := stack.Peek(); ok {
+					if ie.HighPC <= offset {
+						stack.Pop()
+					} else {
+						break
+					}
+				} else {
+					break
 				}
+
 			}
 
-			// Look up any inline entries at the current offset.
-			inlineEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
-
-			// for _, v := range lineRecords {
-			// 	if v.
-			// }
-
-			fmt.Printf("Offset %d has inlinedEntries: %#v\n", offset, inlineEntries)
-
 			if len(lineRecords) == 1 {
+
 				lineRecord := lineRecords[0]
 
 				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
@@ -797,12 +797,13 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 						if loggedCall {
 
-							for _, ies := range inlineEntries {
-								for _, ie := range ies {
-									k := inlineKey(ie)
-									if _, ok := loggedInline[k]; !ok {
-										loggedInline[k] = ie.HighPC
-										traceInlineEntry(m, ie, functionRecord, locals)
+							if len(inlinedEntries) > 0 {
+								for _, entry := range inlinedEntries {
+									for _, v := range entry {
+										if offset == v.LowPC {
+											stack.Push(v)
+											traceInlineEntry(m, v, functionRecord, locals)
+										}
 									}
 								}
 							}
@@ -811,14 +812,18 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							currLine = lineRecord
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
-							for _, v := range functionRecord.Locals {
-								val, err := readVariable(m, v, functionRecord, locals)
+							if stack.Len() > 0 {
+								//TODO: log inlined function variables
+							} else {
+								for _, v := range functionRecord.Locals {
+									val, err := readVariable(m, v, functionRecord, locals)
 
-								if err != nil {
-									fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-								} else {
-									fmt.Printf("local %v: %v\n", v.Name, val)
-									m.Record.RegisterVariable(v.Name, val)
+									if err != nil {
+										fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+									} else {
+										fmt.Printf("local %v: %v\n", v.Name, val)
+										m.Record.RegisterVariable(v.Name, val)
+									}
 								}
 							}
 
@@ -4592,6 +4597,8 @@ func inlineKey(rec wasmdebug.InlineRecord) string {
 }
 
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
+
+	fmt.Printf("INLINE CALL: %s\n", rec.Name)
 	args := make([]trace_record.FullValueRecord, 0)
 	for _, argRec := range rec.Params {
 		fmt.Printf("%s has var: %s", rec.Name, argRec.Name)
@@ -4602,6 +4609,18 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 			args = append(args, m.Record.Arg(argRec.Name, val))
 		}
 	}
+
+	// for _, v := range functionRecord.Locals {
+	// 	val, err := readVariable(m, v, functionRecord, locals)
+
+	// 	if err != nil {
+	// 		// fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+	// 	} else {
+	// 		// fmt.Printf("local %v: %v\n", v.Name, val)
+	// 		m.Record.RegisterVariable(v.Name, val)
+	// 	}
+	// }
+
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
 	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))

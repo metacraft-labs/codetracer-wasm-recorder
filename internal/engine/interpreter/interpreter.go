@@ -752,13 +752,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	for frame.pc < bodyLen {
 		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 
-		// fmt.Printf("FUNC: %s PC: 0x%x OFFSET: 0x%x\n", functionRecord.Name, frame.pc, frame.f.parent.offsetsInWasmBinary[frame.pc])
-
-		// for _, v := range lineRecords {
-		// fmt.Printf("%s:%d:%d\n", v.FileName, v.Line, v.Column)
-		// }
-		// fmt.Print("---------------------------------------------------------\n")
-
 		if m.Record != nil && tracking_call {
 
 			index := frame.f.parent.source.PCRecord
@@ -770,12 +763,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 			for stack.Len() > 0 {
 
-				if ie, ok := stack.Peek(); ok {
-					if ie.HighPC <= offset {
-						stack.Pop()
-					} else {
-						break
-					}
+				if ie, ok := stack.Peek(); ok && ie.HighPC <= offset {
+					m.Record.RegisterReturn(trace_record.NilValue())
+					stack.Pop()
 				} else {
 					break
 				}
@@ -799,8 +789,21 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 								for _, entry := range inlinedEntries {
 									for _, v := range entry {
 										if offset == v.LowPC {
+
+											// For some reason inlines can start at the instruction before it's actual invocation, so we trace locals
+											// traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+
+											if stack.Len() == 0 {
+												traceInlineEntry(m, v, functionRecord, locals, offset, &functionRecord.Locals)
+											} else {
+
+												if elem, ok := stack.Peek(); ok {
+													traceInlineEntry(m, v, functionRecord, locals, offset, &elem.Locals)
+												}
+
+											}
+
 											stack.Push(v)
-											traceInlineEntry(m, v, functionRecord, locals)
 										}
 									}
 								}
@@ -814,31 +817,10 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 								//TODO: log inlined function variables
 								inlineRecord, _ := stack.Peek()
 
-								for _, v := range inlineRecord.Locals {
-									if v.LowPC <= offset && offset <= v.HighPC {
-										val, err := readVariable(m, v, functionRecord, locals)
+								traceCurrentLocals(&inlineRecord.Locals, offset, m, &functionRecord, locals)
 
-										if err != nil {
-											fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-										} else {
-											fmt.Printf("local %v: %v\n", v.Name, val)
-											m.Record.RegisterVariable(v.Name, val)
-										}
-									}
-								}
 							} else {
-								for _, v := range functionRecord.Locals {
-									if v.LowPC <= offset && offset <= v.HighPC {
-										val, err := readVariable(m, v, functionRecord, locals)
-
-										if err != nil {
-											fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-										} else {
-											fmt.Printf("local %v: %v\n", v.Name, val)
-											m.Record.RegisterVariable(v.Name, val)
-										}
-									}
-								}
+								traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
 							}
 
 						}
@@ -4506,76 +4488,80 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	if m.Record != nil && tracking_call {
 		traceFunctionEntry(m, &loggedCall, functionRecord, locals)
 
-		if functionRecord.ReturnType == nil {
-			typeName := "void"
-			fmt.Printf("Return: %v\n", functionRecord.Name)
-			_, seen := m.TypesIndex[typeName]
+		traceReturnType(functionRecord, m, ce, &functionParams)
+	}
 
-			if !seen {
-				m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
-				typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
-				m.Record.RegisterTypeWithNewId(typeName, typeRecord)
-			}
+}
 
-			m.Record.RegisterReturn(trace_record.NilValue())
+func traceReturnType(functionRecord wasmdebug.FunctionRecord,
+	m *wasm.ModuleInstance, ce *callEngine, functionParams *[]uint64) {
+
+	if functionRecord.ReturnType == nil {
+		typeName := "void"
+		fmt.Printf("Return: %v\n", functionRecord.Name)
+		_, seen := m.TypesIndex[typeName]
+
+		if !seen {
+			m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+			typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+			m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+		}
+
+		m.Record.RegisterReturn(trace_record.NilValue())
+	} else {
+		rawValue := ce.stack[len(ce.stack)-1]
+		rvSize := (*functionRecord.ReturnType).Size()
+
+		fmt.Printf("RAW VAL: %d\n", rawValue)
+
+		fmt.Printf("FUNCTION: %s has return value size: %d and byte size: %d and other size: %d and type: %#v\n", functionRecord.Name, (*functionRecord.ReturnType).Size(), (*functionRecord.ReturnType).Common().ByteSize, (*functionRecord.ReturnType).Common().Size(), (*functionRecord.ReturnType))
+
+		var value trace_record.ValueRecord
+		if rvSize <= 8 {
+
+			rawBytes := make([]byte, 8)
+			binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+			// TODO: handle errors
+			value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 		} else {
-			rawValue := ce.stack[len(ce.stack)-1]
-			rvSize := (*functionRecord.ReturnType).Size()
 
-			fmt.Printf("RAW VAL: %d\n", rawValue)
+			switch rt := (*functionRecord.ReturnType).(type) {
+			case *dwarf.StructType:
+				// TODO: This is broken 🥹. Must fix.
+				// EDIT: It works now 🙂
 
-			fmt.Printf("FUNCTION: %s has return value size: %d and byte size: %d and other size: %d and type: %#v\n", functionRecord.Name, (*functionRecord.ReturnType).Size(), (*functionRecord.ReturnType).Common().ByteSize, (*functionRecord.ReturnType).Common().Size(), (*functionRecord.ReturnType))
+				// TODO: Singleton structures are on the stack, handle them separately
+				// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.ByteSize))
+				if !ok {
+					panic("Failed to read return value")
+				}
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			case *dwarf.ArrayType:
 
-			var value trace_record.ValueRecord
-			if rvSize <= 8 {
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.Size()))
+				if !ok {
+					panic("Failed to read Array return value")
+				}
 
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+
+			default:
+
+				// 16 147
+				// TODO: Should this be rvSize ?
 				rawBytes := make([]byte, 8)
 				binary.LittleEndian.PutUint64(rawBytes, rawValue)
 
 				// TODO: handle errors
 				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
-			} else {
-
-				switch rt := (*functionRecord.ReturnType).(type) {
-				case *dwarf.StructType:
-					// TODO: This is broken 🥹. Must fix.
-					// EDIT: It works now 🙂
-
-					fmt.Printf("Function %s has return type %s with size %d and byteSize: %d\n", f.definition().Name(), rt.String(), rt.Size(), rt.ByteSize)
-
-					// TODO: Singleton structures are on the stack, handle them separately
-					// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
-					rawBytes, ok := m.Memory().Read(uint32(functionParams[0]), uint32(rt.ByteSize))
-					if !ok {
-						panic("Failed to read return value")
-					}
-					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
-				case *dwarf.ArrayType:
-
-					rawBytes, ok := m.Memory().Read(uint32(functionParams[0]), uint32(rt.Size()))
-					if !ok {
-						panic("Failed to read Array return value")
-					}
-
-					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
-
-				default:
-
-					// 16 147
-					// TODO: Should this be rvSize ?
-					rawBytes := make([]byte, 8)
-					binary.LittleEndian.PutUint64(rawBytes, rawValue)
-
-					// TODO: handle errors
-					value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
-				}
 			}
-			m.Record.RegisterReturn(value)
-			fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)
 		}
 
+		m.Record.RegisterReturn(value)
+		fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)
 	}
-
 }
 
 func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
@@ -4610,7 +4596,24 @@ func inlineKey(rec wasmdebug.InlineRecord) string {
 		rec.CallFileName, rec.CallLine, rec.CallColumn)
 }
 
-func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
+func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
+	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64) {
+
+	for _, v := range *localRecords {
+		if v.LowPC <= offset && offset <= v.HighPC {
+			val, err := readVariable(m, v, *functionRecord, locals)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+			} else {
+				fmt.Printf("local %v: %v\n", v.Name, val)
+				m.Record.RegisterVariable(v.Name, val)
+			}
+		}
+	}
+}
+
+func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {
 
 	fmt.Printf("INLINE CALL: %s\n", rec.Name)
 	args := make([]trace_record.FullValueRecord, 0)
@@ -4624,19 +4627,11 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 		}
 	}
 
-	// for _, v := range functionRecord.Locals {
-	// 	val, err := readVariable(m, v, functionRecord, locals)
-
-	// 	if err != nil {
-	// 		// fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-	// 	} else {
-	// 		// fmt.Printf("local %v: %v\n", v.Name, val)
-	// 		m.Record.RegisterVariable(v.Name, val)
-	// 	}
-	// }
-
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
+	traceCurrentLocals(*&currLocals, offset, m, &functionRecord, locals)
+
 	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
+
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
 }
 

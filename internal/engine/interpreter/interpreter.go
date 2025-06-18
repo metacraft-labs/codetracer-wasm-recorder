@@ -768,8 +768,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			// Look up any inline entries at the current offset.
 			inlinedEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
 
-			fmt.Printf("Offset %d has inlinedEntries: %#v\n", offset, inlinedEntries)
-
 			for stack.Len() > 0 {
 
 				if ie, ok := stack.Peek(); ok {
@@ -814,15 +812,31 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 							if stack.Len() > 0 {
 								//TODO: log inlined function variables
+								inlineRecord, _ := stack.Peek()
+
+								for _, v := range inlineRecord.Locals {
+									if v.LowPC <= offset && offset <= v.HighPC {
+										val, err := readVariable(m, v, functionRecord, locals)
+
+										if err != nil {
+											fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+										} else {
+											fmt.Printf("local %v: %v\n", v.Name, val)
+											m.Record.RegisterVariable(v.Name, val)
+										}
+									}
+								}
 							} else {
 								for _, v := range functionRecord.Locals {
-									val, err := readVariable(m, v, functionRecord, locals)
+									if v.LowPC <= offset && offset <= v.HighPC {
+										val, err := readVariable(m, v, functionRecord, locals)
 
-									if err != nil {
-										fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
-									} else {
-										fmt.Printf("local %v: %v\n", v.Name, val)
-										m.Record.RegisterVariable(v.Name, val)
+										if err != nil {
+											fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+										} else {
+											fmt.Printf("local %v: %v\n", v.Name, val)
+											m.Record.RegisterVariable(v.Name, val)
+										}
 									}
 								}
 							}

@@ -35,6 +35,8 @@ type LineRecord struct {
 }
 
 type VariableRecord struct {
+	LowPC  uint64
+	HighPC uint64
 	Name   string
 	Offset uint64
 	Type   dwarf.Type
@@ -200,6 +202,104 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 	return nil
 }
 
+func indexLocalVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, lowPC uint64, highPC uint64) error {
+
+	varTypeField := varEntry.AttrField(dwarf.AttrType)
+
+	varNameField := varEntry.AttrField(dwarf.AttrName)
+	varLocationField := varEntry.AttrField(dwarf.AttrLocation)
+
+	if varNameField == nil || varLocationField == nil {
+		return fmt.Errorf("keep going :)")
+	}
+
+	varName := varNameField.Val.(string)
+
+	varTypeOffset := varTypeField.Val.(dwarf.Offset)
+
+	varType, _ := d.Type(varTypeOffset)
+
+	var varLocation uint64
+
+	switch v := varLocationField.Val.(type) {
+	case uint64:
+		varLocation = v
+
+	case []uint8:
+		res := parseLEB128(v[1:])
+		varLocation = res
+
+	default:
+		return fmt.Errorf("keep going :)")
+	}
+
+	fmt.Printf("ADDING VAR %s with range %d - %d", varName, lowPC, highPC)
+	*arr = append(*arr, VariableRecord{
+		Name:   varName,
+		Offset: varLocation,
+		Type:   varType,
+		LowPC:  lowPC,
+		HighPC: highPC,
+	})
+
+	return nil
+}
+
+func indexLexBlock(r *dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFile, d *dwarf.Data, locals *[]VariableRecord, params *[]VariableRecord, ret *PCRecord) error {
+
+	var lowPC uint64
+	var highPC uint64
+
+	if lowPcWrapped := lexEntry.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
+		switch v := lowPcWrapped.Val.(type) {
+		case uint64:
+			lowPC = v
+		// case int64:
+		//	record.LowPC = uint64(v)
+		default:
+			return fmt.Errorf("unrecognized lowPc format")
+		}
+	}
+
+	if highPcWrapped := lexEntry.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
+		switch highPcWrapped.Class {
+		case dwarf.ClassAddress: // we assume it's an absolute offset
+			highPC = highPcWrapped.Val.(uint64)
+		case dwarf.ClassConstant:
+			highPC = lowPC + uint64(highPcWrapped.Val.(int64))
+		default:
+			return fmt.Errorf("unrecognized highPc format")
+		}
+	}
+
+	if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
+		return fmt.Errorf("tombstone address")
+	}
+
+	for lexEntry.Children {
+		child, err := r.Next()
+
+		if err != nil {
+			return err
+		}
+
+		switch child.Tag {
+		case dwarf.TagInlinedSubroutine:
+			indexInlineEntry(r, child, d, files, ret)
+		case dwarf.TagLexDwarfBlock:
+			indexLexBlock(r, child, files, d, locals, params, ret)
+		case dwarf.TagVariable:
+			indexLocalVariable(locals, child, d, lowPC, highPC)
+		default:
+			r.SkipChildren()
+		}
+
+	}
+
+	return nil
+
+}
+
 func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, ret *PCRecord, offset2function map[dwarf.Offset]*FunctionRecord) error {
 	functionOffset := ent.Offset
 	if specWrapped := ent.AttrField(dwarf.AttrSpecification); specWrapped != nil {
@@ -289,16 +389,26 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			child, err := r.Next()
 
 			// End of subprogram's children
-			if err != nil {
-				return err
-			}
+			// if err != nil {
+			// 	return err
+			// }
 
-			if child == nil {
-				break
-			}
+			// if child == nil {
+			// 	break
+			// }
 
-			if child.Tag == 0 {
-				break
+			// if child.Tag == 0 {
+			// 	break
+			// }
+
+			switch t := child.Tag; t {
+			case dwarf.TagInlinedSubroutine:
+				fmt.Printf("FOUND INLINED SUBROUTINE FOR %s\n", record.Name)
+				if err := indexInlineEntry(r, child, d, files, ret); err != nil {
+					return err
+				}
+			case dwarf.TagLexDwarfBlock:
+
 			}
 
 			if child.Tag == dwarf.TagInlinedSubroutine {
@@ -307,6 +417,79 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 					return err
 				}
 				continue
+			}
+
+			if child.Tag == dwarf.TagLexDwarfBlock {
+
+				var lowPC uint64
+				var highPC uint64
+
+				if lowPcWrapped := ent.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
+					switch v := lowPcWrapped.Val.(type) {
+					case uint64:
+						lowPC = v
+					// case int64:
+					//	record.LowPC = uint64(v)
+					default:
+						return fmt.Errorf("unrecognized lowPc format")
+					}
+				}
+
+				if highPcWrapped := ent.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
+					switch highPcWrapped.Class {
+					case dwarf.ClassAddress: // we assume it's an absolute offset
+						highPC = highPcWrapped.Val.(uint64)
+					case dwarf.ClassConstant:
+						// TODO: This is wrong assumption if there is a case when pc record are in different entries
+						highPC = record.LowPC + uint64(highPcWrapped.Val.(int64))
+					default:
+						return fmt.Errorf("unrecognized highPc format")
+					}
+				}
+
+				if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
+					continue
+				}
+
+				var cnt uint64
+
+				if child.Children {
+					cnt = 1
+				} else {
+					cnt = 0
+				}
+
+				for cnt >= 1 {
+					// TODO: Handle error
+					lexChild, _ := r.Next()
+
+					if lexChild == nil {
+						break
+					}
+
+					fmt.Printf("CHILD %#v, lexCount: %d, for entry: %#v\n", lexChild, cnt, child)
+
+					if lexChild.Tag == 0 {
+						cnt--
+					}
+
+					if cnt == 0 {
+						break
+					}
+
+					if lexChild.Children {
+						cnt++
+					}
+
+					if lexChild.Tag == dwarf.TagFormalParameter {
+						indexLocalVariable(&params, lexChild, d, lowPC, highPC)
+					} else if lexChild.Tag == dwarf.TagVariable {
+						indexLocalVariable(&locals, lexChild, d, lowPC, highPC)
+					} else if lexChild.Tag == dwarf.TagInlinedSubroutine {
+						indexInlineEntry(r, lexChild, d, files, ret)
+					}
+				}
+
 			}
 
 			if child.Tag == dwarf.TagVariable || child.Tag == dwarf.TagFormalParameter {
@@ -360,6 +543,7 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			}
 		}
+
 		// TODO: append or rewrite?
 		record.Params = append(record.Params, params...)
 		record.Locals = append(record.Locals, locals...)
@@ -438,30 +622,107 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 
 	// if ent.Children {
 	var lexCount uint32
-	for ent.Children {
+
+	if ent.Children {
+		lexCount = 1
+	} else {
+		lexCount = 0
+	}
+
+	for lexCount >= 1 {
 		child, err := r.Next()
 
 		if err != nil {
 			return err
 		}
+
 		if child == nil || child.Tag == 0 {
-			if lexCount == 0 {
-				break
-			} else {
-				lexCount--
-			}
+			lexCount--
 		}
 
+		fmt.Printf("CHILD %#v, lexCount: %d\n", child, lexCount)
+
 		switch child.Tag {
-		case dwarf.TagLexDwarfBlock:
-			lexCount++
-			continue
 		case dwarf.TagInlinedSubroutine:
 			if err := indexInlineEntry(r, child, d, files, recordTree); err != nil {
 				return err
 			}
 			continue
+		case dwarf.TagLexDwarfBlock:
+			var lowPC uint64
+			var highPC uint64
+
+			if lowPcWrapped := ent.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
+				switch v := lowPcWrapped.Val.(type) {
+				case uint64:
+					lowPC = v
+				// case int64:
+				//	record.LowPC = uint64(v)
+				default:
+					return fmt.Errorf("unrecognized lowPc format")
+				}
+			}
+
+			if highPcWrapped := ent.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
+				switch highPcWrapped.Class {
+				case dwarf.ClassAddress: // we assume it's an absolute offset
+					highPC = highPcWrapped.Val.(uint64)
+				case dwarf.ClassConstant:
+					// TODO: This is wrong assumption if there is a case when pc record are in different entries
+					highPC = rec.LowPC + uint64(highPcWrapped.Val.(int64))
+				default:
+					return fmt.Errorf("unrecognized highPc format")
+				}
+			}
+
+			if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
+				continue
+			}
+
+			var cnt uint64
+
+			if child.Children {
+				cnt = 1
+			} else {
+				cnt = 0
+			}
+
+			for cnt >= 1 {
+				// TODO: Handle error
+				lexChild, _ := r.Next()
+
+				if lexChild == nil {
+					break
+				}
+
+				fmt.Printf("CHILD %#v, lexCount: %d, for entry: %#v\n", lexChild, cnt, child)
+
+				if lexChild.Tag == 0 {
+					cnt--
+				}
+
+				if cnt == 0 {
+					break
+				}
+
+				if lexChild.Children {
+					cnt++
+				}
+
+				if lexChild.Tag == dwarf.TagFormalParameter {
+					indexLocalVariable(&rec.Params, lexChild, d, lowPC, highPC)
+				} else if lexChild.Tag == dwarf.TagVariable {
+					indexLocalVariable(&rec.Locals, lexChild, d, lowPC, highPC)
+				} else if lexChild.Tag == dwarf.TagInlinedSubroutine {
+					indexInlineEntry(r, lexChild, d, files, recordTree)
+				}
+			}
 		case dwarf.TagVariable:
+
+			if child.Children {
+				lexCount++
+			}
+
 			varTypeField := child.AttrField(dwarf.AttrType)
 			varNameField := child.AttrField(dwarf.AttrName)
 			varLocationField := child.AttrField(dwarf.AttrLocation)
@@ -513,11 +774,12 @@ func indexInlineEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []
 			} else {
 				rec.Params = append(rec.Params, VariableRecord{Name: varName, Offset: loc, Type: varType})
 			}
+		default:
+			if child.Children {
+				lexCount++
+			}
 		}
 	}
-	// } else {
-	// 	r.SkipChildren()
-	// }
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
 

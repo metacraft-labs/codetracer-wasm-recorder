@@ -4575,6 +4575,8 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 
 	args := make([]trace_record.FullValueRecord, 0)
 
+	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+
 	for _, argRec := range functionRecord.Params {
 		fmt.Printf("\t")
 		val, err := readVariable(m, argRec, functionRecord, locals)
@@ -4586,7 +4588,6 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 		}
 	}
 
-	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
 	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 }
 

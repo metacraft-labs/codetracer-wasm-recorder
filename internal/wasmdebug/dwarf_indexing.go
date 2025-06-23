@@ -440,14 +440,17 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 				r.SkipChildren()
 			case dwarf.TagLexDwarfBlock:
 				if _, err := indexLexBlock(*r, child, files, d, &locals, &params, ret); err != nil {
+					// TODO: Error message
 				}
 				r.SkipChildren()
 			case dwarf.TagVariable:
 				if err := indexVariable(&locals, child, d, 0, math.MaxUint64); err != nil {
+					// TODO: Error message
 				}
 				r.SkipChildren()
 			case dwarf.TagFormalParameter:
 				if err := indexVariable(&params, child, d, 0, math.MaxUint64); err != nil {
+					// TODO: Error message
 				}
 				r.SkipChildren()
 			default:

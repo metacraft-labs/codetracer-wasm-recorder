@@ -813,6 +813,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							currLine = lineRecord
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
+							// Offset does not matter, function parameters come without information about their lexical scope
+							traceCurrentLocals(&functionRecord.Params, 1, m, &functionRecord, locals)
+
 							if stack.Len() > 0 {
 								//TODO: log inlined function variables
 								inlineRecord, _ := stack.Peek()
@@ -4575,8 +4578,6 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 
 	args := make([]trace_record.FullValueRecord, 0)
 
-	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
-
 	for _, argRec := range functionRecord.Params {
 		fmt.Printf("\t")
 		val, err := readVariable(m, argRec, functionRecord, locals)
@@ -4587,6 +4588,8 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 			args = append(args, m.Record.Arg(argRec.Name, val))
 		}
 	}
+
+	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
 
 	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 }
@@ -4612,6 +4615,7 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 			}
 		}
 	}
+
 }
 
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {

@@ -814,16 +814,17 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
 							// Offset does not matter, function parameters come without information about their lexical scope
-							traceCurrentLocals(&functionRecord.Params, 1, m, &functionRecord, locals)
 
 							if stack.Len() > 0 {
 								//TODO: log inlined function variables
 								inlineRecord, _ := stack.Peek()
 
 								traceCurrentLocals(&inlineRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&inlineRecord.Params, offset, m, &functionRecord, locals)
 
 							} else {
 								traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&functionRecord.Params, offset, m, &functionRecord, locals)
 							}
 
 						}
@@ -4632,8 +4633,9 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 		}
 	}
 
+	fmt.Printf("INLINED STEP: %v\n", rec.CallLine)
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
-	traceCurrentLocals(*&currLocals, offset, m, &functionRecord, locals)
+	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
 
 	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
 

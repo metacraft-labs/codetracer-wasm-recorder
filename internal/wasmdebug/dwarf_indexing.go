@@ -256,7 +256,7 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 		Offset: varLocation,
 		Type:   varType,
 		LowPC:  lowPC,
-		HighPC: highPC,
+		HighPC: highPC - 1,
 	})
 
 	return nil
@@ -276,8 +276,12 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 		// case int64:
 		//	record.LowPC = uint64(v)
 		default:
-			return entryOffset, fmt.Errorf("unrecognized lowPc format")
+			// return entryOffset, fmt.Errorf("unrecognized lowPc format")
+			lowPC = 0
 		}
+	} else {
+
+		lowPC = 0
 	}
 
 	if highPcWrapped := lexEntry.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
@@ -287,13 +291,16 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 		case dwarf.ClassConstant:
 			highPC = lowPC + uint64(highPcWrapped.Val.(int64))
 		default:
-			return entryOffset, fmt.Errorf("unrecognized highPc format")
+			//return entryOffset, fmt.Errorf("unrecognized highPc format")
+			highPC = math.MaxUint64
 		}
+	} else {
+		highPC = math.MaxUint64
 	}
 
-	if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
-		return entryOffset, fmt.Errorf("tombstone address")
-	}
+	// if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
+	// 	return entryOffset, fmt.Errorf("tombstone address")
+	// }
 
 	for lexEntry.Children {
 		child, err := r.Next()
@@ -504,7 +511,7 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 
 	rec := InlineRecord{
 		LowPC:  lowPC,
-		HighPC: highPC,
+		HighPC: highPC - 1,
 	}
 
 	if originField := inlinedEnt.AttrField(dwarf.AttrAbstractOrigin); originField != nil {
@@ -589,18 +596,18 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
 
-		entry, found := ret.InlinedRoutines.Find(lowPC, highPC)
+		entry, found := ret.InlinedRoutines.Find(lowPC, highPC-1)
 
 		if !found {
 			x := make([]InlineRecord, 0)
 			x = append(x, rec)
-			ret.InlinedRoutines.Insert(lowPC, highPC, x)
+			ret.InlinedRoutines.Insert(lowPC, highPC-1, x)
 		} else {
 			entry = append(entry, rec)
-			ret.InlinedRoutines.Insert(lowPC, highPC, entry)
+			ret.InlinedRoutines.Insert(lowPC, highPC-1, entry)
 		}
 
-		fmt.Printf("INSERTING INLINE INTERVAL [%d %d] : %#v\n", lowPC, highPC, rec)
+		fmt.Printf("INSERTING INLINE INTERVAL [%d %d] : %#v\n", lowPC, highPC-1, rec)
 	}
 
 	return exitOffset, nil

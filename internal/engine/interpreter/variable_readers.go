@@ -17,8 +17,12 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 
 	var memAddr uint32
 
-	if fb.Typ == wasmdebug.LocationTypeLocal {
-		memAddr = uint32(locals[fb.Index] + v.Offset)
+	// Of the variable has a `Direct` location type, it takes precedence over all
+	// all other types of location identification
+	if v.Location.Typ == wasmdebug.LocationTypeDirectLocal {
+		memAddr = uint32(locals[v.Location.Index])
+	} else if fb.Typ == wasmdebug.LocationTypeLocal {
+		memAddr = uint32(locals[fb.Index] + uint64(v.Location.Index))
 	} else if fb.Typ == wasmdebug.LocationTypeGlobal {
 		memAddr = uint32(m.Global(int(fb.Index)).Get())
 	} else if fb.Typ == wasmdebug.OperandStack {
@@ -292,7 +296,11 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	addr := binary.LittleEndian.Uint32(rawBytes)
 
 	// TODO: Handle errors
-	dereferencedRawBytes, _ := mem.Read(addr, uint32(dereferencedType.Size()))
+	dereferencedRawBytes, ok := mem.Read(addr, uint32(dereferencedType.Size()))
+
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
+	}
 
 	// NOTE: What do we do when the dereferencedType's size is 0 ?
 

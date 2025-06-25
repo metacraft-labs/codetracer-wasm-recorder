@@ -19,6 +19,7 @@ const (
 	LocationTypeLocal LocationType = iota
 	LocationTypeGlobal
 	OperandStack
+	LocationTypeDirectLocal
 )
 
 type MemoryLocation struct {
@@ -37,11 +38,11 @@ type LineRecord struct {
 }
 
 type VariableRecord struct {
-	LowPC  uint64
-	HighPC uint64
-	Name   string
-	Offset uint64
-	Type   dwarf.Type
+	LowPC    uint64
+	HighPC   uint64
+	Name     string
+	Location MemoryLocation
+	Type     dwarf.Type
 }
 
 type FunctionRecord struct {
@@ -236,27 +237,50 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 
 	varType, _ := d.Type(varTypeOffset)
 
-	var varLocation uint64
+	var varLocation MemoryLocation
 
 	switch v := varLocationField.Val.(type) {
 	case uint64:
-		varLocation = v
+		varLocation = MemoryLocation{
+			Typ: LocationTypeLocal,
+			// TODO: THIS CONVERSION IS BAD, FIX IT !
+			Index: uint32(v),
+		}
 
 	case []uint8:
-		res := parseLEB128(v[1:])
-		varLocation = res
+		if v[0] == 145 {
+			res := parseLEB128(v[1:])
+			varLocation = MemoryLocation{
+				Typ: LocationTypeLocal,
+				// TODO: THIS CONVERSION IS ALSO BAD, FIX IT !
+				Index: uint32(res),
+			}
+		} else {
+			fmt.Println("INTERESTING CYKA")
+			res := parseLEB128(v[2:])
+			varLocation = MemoryLocation{
+				Typ: LocationTypeDirectLocal,
+				// TODO: THIS CONVERSION IS ALSO BAD, FIX IT !
+				Index: uint32(res),
+			}
+
+		}
+
+	// This is probably some location field
 
 	default:
+		fmt.Printf("CYKA: %s - %#v\n", varName, varLocationField)
 		return fmt.Errorf("keep going :)")
 	}
 
-	fmt.Printf("ADDING VAR %s with range %d - %d\n", varName, lowPC, highPC)
+	fmt.Printf("ADDING VAR %s with range %d - %d and location: %#v\n", varName, lowPC, highPC, varLocationField)
 	*arr = append(*arr, VariableRecord{
-		Name:   varName,
-		Offset: varLocation,
-		Type:   varType,
-		LowPC:  lowPC,
-		HighPC: highPC - 1,
+		Name: varName,
+		// Offset: varLocation,
+		Location: varLocation,
+		Type:     varType,
+		LowPC:    lowPC,
+		HighPC:   highPC - 1,
 	})
 
 	return nil

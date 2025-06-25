@@ -335,3 +335,55 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	return trace_record.BigIntValue(bytes, false, typeId), typeId, nil
 }
+
+// Stylus contracts use https://crates.io/crates/alloy-primitives to store addresses. So we should handle them.
+func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+	typeName := typ.String()
+
+	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
+	if err != nil {
+		return nil, INVALID_TYPE_ID, err
+	}
+
+	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	if len(fields) != 1 {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	// Handle second nesting
+	rawStruct, ok := fields[0].(trace_record.StructValueRecord)
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	fields = rawStruct.(trace_record.StructValueRecord).Fields
+	if len(fields) != 1 {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	seq, ok := fields[0].(trace_record.SequenceValueRecord)
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	bytes := make([]byte, 0, len(seq.Elements))
+	for _, e := range seq.Elements {
+		iv, ok := e.(trace_record.IntValueRecord)
+		if !ok {
+			return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+		}
+		bytes = append(bytes, byte(iv.I))
+	}
+
+	hexStr := fmt.Sprintf("0x%x", bytes)
+
+	typeId, seen := m.TypesIndex[typeName]
+	if !seen {
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRING_TYPE_KIND, typeName)
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
+
+	return trace_record.StringValue(hexStr, typeId), typeId, nil
+}

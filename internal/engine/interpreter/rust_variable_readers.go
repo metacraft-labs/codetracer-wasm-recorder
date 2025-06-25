@@ -336,9 +336,7 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	return trace_record.BigIntValue(bytes, false, typeId), typeId, nil
 }
 
-// bytesToAddressRust handles types that represent an EVM address. The type is
-// expected to be a newtype wrapper over a 20-byte array. The bytes are returned
-// as a hexadecimal string.
+// Stylus contracts use https://crates.io/crates/alloy-primitives to store addresses. So we should handle them.
 func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	typeName := typ.String()
 
@@ -348,6 +346,17 @@ func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIn
 	}
 
 	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	if len(fields) != 1 {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	// Handle second nesting
+	rawStruct, ok := fields[0].(trace_record.StructValueRecord)
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	fields = rawStruct.(trace_record.StructValueRecord).Fields
 	if len(fields) != 1 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 	}

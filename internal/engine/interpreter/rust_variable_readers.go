@@ -335,3 +335,25 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	return trace_record.BigIntValue(bytes, false, typeId), typeId, nil
 }
+
+// bytesToAddressRust handles types that represent an EVM address. The type is
+// expected to be a newtype wrapper over a 20-byte array. The bytes are returned
+// as a hexadecimal string.
+func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+	typeName := typ.String()
+
+	// Address is a wrapper around a fixed-size byte array. The memory layout
+	// is exactly the bytes of the address. Convert these bytes to a hex
+	// string.
+	hexStr := fmt.Sprintf("0x%x", rawBytes)
+
+	typeId, seen := m.TypesIndex[typeName]
+	if !seen {
+		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		typeId = m.TypesIndex[typeName]
+		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRING_TYPE_KIND, typeName)
+		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+	}
+
+	return trace_record.StringValue(hexStr, typeId), typeId, nil
+}

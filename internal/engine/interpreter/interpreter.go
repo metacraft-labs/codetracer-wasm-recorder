@@ -4611,7 +4611,7 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
 			} else {
-				fmt.Printf("local %v: %v\n", v.Name, val)
+				// fmt.Printf("local %v: %v\n", v.Name, val)
 				m.Record.RegisterVariable(v.Name, val)
 			}
 		}

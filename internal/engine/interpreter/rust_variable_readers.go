@@ -342,10 +342,31 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
 	typeName := typ.String()
 
-	// Address is a wrapper around a fixed-size byte array. The memory layout
-	// is exactly the bytes of the address. Convert these bytes to a hex
-	// string.
-	hexStr := fmt.Sprintf("0x%x", rawBytes)
+	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
+	if err != nil {
+		return nil, INVALID_TYPE_ID, err
+	}
+
+	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	if len(fields) != 1 {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	seq, ok := fields[0].(trace_record.SequenceValueRecord)
+	if !ok {
+		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+	}
+
+	bytes := make([]byte, 0, len(seq.Elements))
+	for _, e := range seq.Elements {
+		iv, ok := e.(trace_record.IntValueRecord)
+		if !ok {
+			return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
+		}
+		bytes = append(bytes, byte(iv.I))
+	}
+
+	hexStr := fmt.Sprintf("0x%x", bytes)
 
 	typeId, seen := m.TypesIndex[typeName]
 	if !seen {

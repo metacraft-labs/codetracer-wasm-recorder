@@ -747,6 +747,11 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	paramCount := len(frame.f.funcType.Params)
 	functionParams := ce.stack[len(ce.stack)-paramCount:]
 
+	// NOTE: IDK if this is 100$% correct. Seems that the params and the locals share namespace
+	//       and the rust complier tells that the params are stored as local variables.
+	//       So we copy the params on the stack in the locals array in order to fix this. 😵‍💫
+	copy(locals, functionParams)
+
 	stack := NewStack[wasmdebug.InlineRecord]()
 
 	for frame.pc < bodyLen {
@@ -776,7 +781,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 				lineRecord := lineRecords[0]
 
-				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
+				if false || (strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo")) {
 					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
 
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {

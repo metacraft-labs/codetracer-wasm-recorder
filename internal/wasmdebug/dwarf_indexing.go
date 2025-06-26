@@ -248,6 +248,7 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 		}
 
 	case []uint8:
+		// Check if location is DW_OP_fbreg
 		if v[0] == 145 {
 			res := parseLEB128(v[1:])
 			varLocation = MemoryLocation{

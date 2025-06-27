@@ -289,43 +289,52 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 
 func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFile, d *dwarf.Data, locals *[]VariableRecord, params *[]VariableRecord, ret *PCRecord) (DwarfPC, error) {
 
-	var lowPC uint64
-	var highPC uint64
+	// var lowPC uint64
+	// var highPC uint64
 
 	entryOffset := DwarfPC(lexEntry.Offset)
 
-	if lowPcWrapped := lexEntry.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
-		switch v := lowPcWrapped.Val.(type) {
-		case uint64:
-			lowPC = v
-		// case int64:
-		//	record.LowPC = uint64(v)
-		default:
-			// return entryOffset, fmt.Errorf("unrecognized lowPc format")
-			lowPC = 0
-		}
-	} else {
+	// 	if lowPcWrapped := lexEntry.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
+	// 		switch v := lowPcWrapped.Val.(type) {
+	// 		case uint64:
+	// 			lowPC = v
+	// 		// case int64:
+	// 		//	record.LowPC = uint64(v)
+	// 		default:
+	// 			// return entryOffset, fmt.Errorf("unrecognized lowPc format")
+	// 			lowPC = 0
+	// 		}
+	// 	} else {
+	//
+	// 		lowPC = 0
+	// 	}
 
-		lowPC = 0
-	}
-
-	if highPcWrapped := lexEntry.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
-		switch highPcWrapped.Class {
-		case dwarf.ClassAddress: // we assume it's an absolute offset
-			highPC = highPcWrapped.Val.(uint64)
-		case dwarf.ClassConstant:
-			highPC = lowPC + uint64(highPcWrapped.Val.(int64))
-		default:
-			//return entryOffset, fmt.Errorf("unrecognized highPc format")
-			highPC = math.MaxUint64
-		}
-	} else {
-		highPC = math.MaxUint64
-	}
+	// if highPcWrapped := lexEntry.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
+	// 	switch highPcWrapped.Class {
+	// 	case dwarf.ClassAddress: // we assume it's an absolute offset
+	// 		highPC = highPcWrapped.Val.(uint64)
+	// 	case dwarf.ClassConstant:
+	// 		highPC = lowPC + uint64(highPcWrapped.Val.(int64))
+	// 	default:
+	// 		//return entryOffset, fmt.Errorf("unrecognized highPc format")
+	// 		highPC = math.MaxUint64
+	// 	}
+	// } else {
+	// 	highPC = math.MaxUint64
+	// }
 
 	// if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
 	// 	return entryOffset, fmt.Errorf("tombstone address")
 	// }
+
+	ranges, err := d.Ranges(lexEntry)
+	if err != nil {
+		return entryOffset, err
+	}
+
+	if len(ranges) == 0 {
+		ranges = append(ranges, [2]uint64{0, math.MaxUint64})
+	}
 
 	for lexEntry.Children {
 		child, err := r.Next()
@@ -348,11 +357,19 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 			}
 			r.SkipChildren()
 		case dwarf.TagVariable:
-			if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
+			// if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
+			// }
+			for _, pcs := range ranges {
+				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
+				}
 			}
 			r.SkipChildren()
 		case dwarf.TagFormalParameter:
-			if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
+			// if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
+			// }
+			for _, pcs := range ranges {
+				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
+				}
 			}
 			r.SkipChildren()
 		default:

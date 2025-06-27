@@ -350,10 +350,12 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 		switch child.Tag {
 		case dwarf.TagInlinedSubroutine:
 			if _, err := indexInlinedEntry(r, child, d, files, ret); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 		case dwarf.TagLexDwarfBlock:
 			if _, err := indexLexBlock(r, child, files, d, locals, params, ret); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 		case dwarf.TagVariable:
@@ -361,6 +363,7 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 			// }
 			for _, pcs := range ranges {
 				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
+					// TODO: Error message
 				}
 			}
 			r.SkipChildren()
@@ -369,6 +372,7 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 			// }
 			for _, pcs := range ranges {
 				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
+					// TODO: Error message
 				}
 			}
 			r.SkipChildren()

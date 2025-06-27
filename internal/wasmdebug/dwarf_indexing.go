@@ -617,11 +617,13 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 		switch child.Tag {
 		case dwarf.TagInlinedSubroutine:
 			if _, err := indexInlinedEntry(r, child, d, files, ret); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 
 		case dwarf.TagLexDwarfBlock:
 			if _, err := indexLexBlock(r, child, files, d, &rec.Locals, &rec.Params, ret); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 
@@ -629,10 +631,12 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 			// Here, we suppose that a variable entry CAN NOT have any children.
 			// PLEASE CORRECT IF NOT TRUE
 			if err := indexVariable(&rec.Locals, child, d, 0, math.MaxUint64); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 		case dwarf.TagFormalParameter:
 			if err := indexVariable(&rec.Params, child, d, 0, math.MaxUint64); err != nil {
+				// TODO: Error message
 			}
 			r.SkipChildren()
 		default:

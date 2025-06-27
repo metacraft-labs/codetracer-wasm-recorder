@@ -78,6 +78,8 @@ func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tra
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("args: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -87,8 +89,10 @@ func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			ptr := uint32(stack[0])
-			_ = readMemoryBytes(mem, ptr, uint32(stack[1]))
+			data := readMemoryBytes(mem, ptr, uint32(stack[1]))
 			_ = event
+			content := fmt.Sprintf("result: %s", hexBytes(data))
+			record.RegisterRecordEvent(trace_record.EventKindWriteOther, "", content)
 		})
 }
 
@@ -101,6 +105,8 @@ func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 			destPtr := uint32(stack[0])
 			writeMemoryBytes(mem, destPtr, event.outs)
 			stack[0] = uint64(len(event.outs))
+			content := fmt.Sprintf("return_data: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -120,6 +126,8 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 			revertPtr := uint32(stack[5])
 			writeMemoryBytes(mem, contractPtr, event.outs[:20])
 			writeMemoryBytes(mem, revertPtr, event.outs[20:])
+			content := fmt.Sprintf("contract: %s\nrevert: %s", hexBytes(event.outs[:20]), hexBytes(event.outs[20:]))
+			record.RegisterRecordEvent(trace_record.EventKindWriteOther, "", content)
 		})
 }
 
@@ -137,6 +145,8 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 			revertPtr := uint32(stack[4])
 			writeMemoryBytes(mem, contractPtr, event.outs[:20])
 			writeMemoryBytes(mem, revertPtr, event.outs[20:])
+			content := fmt.Sprintf("contract: %s\nrevert: %s", hexBytes(event.outs[:20]), hexBytes(event.outs[20:]))
+			record.RegisterRecordEvent(trace_record.EventKindWriteOther, "", content)
 		})
 }
 
@@ -146,9 +156,11 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			addrPtr := uint32(stack[0])
-			_ = readMemoryBytes(mem, addrPtr, 20)
+			addr := readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[1])
 			writeMemoryBytes(mem, destPtr, event.outs)
+			content := fmt.Sprintf("address: %s\nbalance: %s", hexBytes(addr), hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -159,10 +171,12 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			addrPtr := uint32(stack[0])
-			_ = readMemoryBytes(mem, addrPtr, 20)
+			addr := readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[3])
 			writeMemoryBytes(mem, destPtr, event.outs)
 			stack[0] = uint64(len(event.outs))
+			content := fmt.Sprintf("address: %s\ncode: %s", hexBytes(addr), hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -173,9 +187,11 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			addrPtr := uint32(stack[0])
-			_ = readMemoryBytes(mem, addrPtr, 20)
+			addr := readMemoryBytes(mem, addrPtr, 20)
 			val := binary.BigEndian.Uint32(event.outs)
 			stack[0] = uint64(val)
+			content := fmt.Sprintf("address: %s\ncode_size: %d", hexBytes(addr), val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -185,9 +201,11 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			addrPtr := uint32(stack[0])
-			_ = readMemoryBytes(mem, addrPtr, 20)
+			addr := readMemoryBytes(mem, addrPtr, 20)
 			destPtr := uint32(stack[1])
 			writeMemoryBytes(mem, destPtr, event.outs)
+			content := fmt.Sprintf("address: %s\ncodehash: %s", hexBytes(addr), hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -197,6 +215,8 @@ func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint32(event.outs)
 			stack[0] = uint64(val)
+			content := fmt.Sprintf("return_data_size: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -207,6 +227,8 @@ func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("contract_address: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -216,6 +238,8 @@ func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint32(event.outs)
 			stack[0] = uint64(val)
+			content := fmt.Sprintf("msg_reentrant: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -226,6 +250,8 @@ func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tr
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("msg_sender: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -236,6 +262,8 @@ func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tra
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("msg_value: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -245,6 +273,8 @@ func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint32(event.outs)
 			stack[0] = uint64(val)
+			content := fmt.Sprintf("tx_ink_price: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -255,6 +285,8 @@ func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("tx_gas_price: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -265,6 +297,8 @@ func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record *tra
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("tx_origin: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -275,9 +309,11 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 			mem := m.Memory()
 			inputPtr := uint32(stack[0])
 			inputLen := uint32(stack[1])
-			_ = readMemoryBytes(mem, inputPtr, inputLen)
+			data := readMemoryBytes(mem, inputPtr, inputLen)
 			destPtr := uint32(stack[2])
 			writeMemoryBytes(mem, destPtr, event.outs)
+			content := fmt.Sprintf("keccak256:\ninput: %s\noutput: %s", hexBytes(data), hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -322,6 +358,7 @@ func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, re
 		func(m api.Module, stack []uint64, event evmEvent) {
 			_ = event
 			// This is NOOP
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", "storage_flush_cache")
 		})
 }
 
@@ -332,8 +369,10 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 			mem := m.Memory()
 			dataPtr := uint32(stack[0])
 			len := uint32(stack[1])
-			_ = readMemoryBytes(mem, dataPtr, len)
+			data := readMemoryBytes(mem, dataPtr, len)
 			_ = event
+			content := fmt.Sprintf("emit_log:\n%s", hexBytes(data))
+			record.RegisterRecordEvent(trace_record.EventKindWriteOther, "", content)
 		})
 }
 
@@ -347,12 +386,14 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 			dataPtr := uint32(stack[1])
 			dataLen := uint32(stack[2])
 			valuePtr := uint32(stack[3])
-			_ = readMemoryBytes(mem, contractPtr, 20)
-			_ = readMemoryBytes(mem, dataPtr, dataLen)
-			_ = readMemoryBytes(mem, valuePtr, 32)
+			contract := readMemoryBytes(mem, contractPtr, 20)
+			data := readMemoryBytes(mem, dataPtr, dataLen)
+			value := readMemoryBytes(mem, valuePtr, 32)
 			retPtr := uint32(stack[5])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])
+			content := fmt.Sprintf("call_contract:\ncontract: %s\nvalue: %s\ndata: %s", hexBytes(contract), hexBytes(value), hexBytes(data))
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -365,11 +406,13 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace,
 			contractPtr := uint32(stack[0])
 			dataPtr := uint32(stack[1])
 			dataLen := uint32(stack[2])
-			_ = readMemoryBytes(mem, contractPtr, 20)
-			_ = readMemoryBytes(mem, dataPtr, dataLen)
+			contract := readMemoryBytes(mem, contractPtr, 20)
+			data := readMemoryBytes(mem, dataPtr, dataLen)
 			retPtr := uint32(stack[4])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])
+			content := fmt.Sprintf("delegate_call_contract:\ncontract: %s\ndata: %s", hexBytes(contract), hexBytes(data))
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -382,11 +425,13 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 			contractPtr := uint32(stack[0])
 			dataPtr := uint32(stack[1])
 			dataLen := uint32(stack[2])
-			_ = readMemoryBytes(mem, contractPtr, 20)
-			_ = readMemoryBytes(mem, dataPtr, dataLen)
+			contract := readMemoryBytes(mem, contractPtr, 20)
+			data := readMemoryBytes(mem, dataPtr, dataLen)
 			retPtr := uint32(stack[4])
 			writeMemoryBytes(mem, retPtr, event.outs[:4])
 			stack[0] = uint64(event.outs[4])
+			content := fmt.Sprintf("static_call_contract:\ncontract: %s\ndata: %s", hexBytes(contract), hexBytes(data))
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -397,6 +442,8 @@ func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("block_basefee: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -406,6 +453,8 @@ func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("chainid: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -416,6 +465,8 @@ func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 			mem := m.Memory()
 			ptr := uint32(stack[0])
 			writeMemoryBytes(mem, ptr, event.outs)
+			content := fmt.Sprintf("block_coinbase: %s", hexBytes(event.outs))
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -425,6 +476,8 @@ func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("block_gas_limit: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -434,6 +487,8 @@ func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record *
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("block_number: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -443,6 +498,8 @@ func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("block_timestamp: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -452,6 +509,8 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, rec
 		func(m api.Module, stack []uint64, event evmEvent) {
 			_ = event
 			// This is NOOP
+			content := "pay_for_memory_grow"
+			record.RegisterRecordEvent(trace_record.EventKindTraceLogEvent, "", content)
 		})
 }
 
@@ -461,6 +520,8 @@ func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("evm_gas_left: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -470,6 +531,8 @@ func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record *t
 		func(m api.Module, stack []uint64, event evmEvent) {
 			val := binary.BigEndian.Uint64(event.outs)
 			stack[0] = val
+			content := fmt.Sprintf("evm_ink_left: %d", val)
+			record.RegisterRecordEvent(trace_record.EventKindReadOther, "", content)
 		})
 }
 
@@ -486,4 +549,8 @@ func writeMemoryBytes(mem api.Memory, ptr uint32, bytes []byte) {
 	if !mem.Write(ptr, bytes) {
 		panic("Invalid memory access")
 	}
+}
+
+func hexBytes(b []byte) string {
+	return fmt.Sprintf("0x%x", b)
 }

@@ -4595,9 +4595,12 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 		}
 	}
 
+	if m.Record.CurrentCallsCount() > 0 {
+	    m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+	}
 	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
 
-	m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+	
 }
 
 func inlineKey(rec wasmdebug.InlineRecord) string {
@@ -4642,9 +4645,13 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
 	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
 
-	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
-
+	// assuming that this can't be the first recorded function, as there are steps up as well
+	// and usually the main/entry function is not inlined
+	// otherwise this will produce a wrong recording for now, as we currently assume
+	// we produce a call event before the first step I think (alexander)
+	// TODO: maybe an assert that `m.Record.CurrentCallsCount() > 0` ?
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
+	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

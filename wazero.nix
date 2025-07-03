@@ -9,5 +9,5 @@ pkgs.buildGoModule rec {
 
   subPackages = [ "cmd/wazero" ];
 
-  vendorHash = "sha256-bratRmw5Leuxx+vWg0bD34/0tley3UX+VKnBPKgHKso=";
+  vendorHash = "sha256-zY+MVDZO80VWIhpgnzPklA/glIdO8bD5PlwuSMu502Q=";
 }

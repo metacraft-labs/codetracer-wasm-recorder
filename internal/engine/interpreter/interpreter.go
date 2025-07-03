@@ -588,6 +588,9 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
+			if m.Record != nil {
+				m.Record.RegisterRecordEvent(trace_record.EventKindError, "runtime error", "runtime error")
+			}
 			err = ce.recoverOnCall(ctx, m, v)
 		}
 	}()
@@ -4596,11 +4599,9 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 	}
 
 	if m.Record.CurrentCallsCount() > 0 {
-	    m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+		m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
 	}
 	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
-
-	
 }
 
 func inlineKey(rec wasmdebug.InlineRecord) string {

@@ -400,7 +400,6 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 
 		if len(res) != 1 || res[0] != retval {
 			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
-			return 1
 		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.

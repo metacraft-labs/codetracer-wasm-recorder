@@ -122,12 +122,6 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 				fmt.Fprintf(os.Stderr, "error indexing compile unit: %v\n", err)
 			}
 
-		// case dwarf.TagInlinedSubroutine:
-		// 	fmt.Println("INDEXING INLINED ENTRY INFORMATION!")
-		// 	if err := indexInlineEntry(r, ent, d, files, &ret); err != nil {
-		// 		fmt.Fprintf(os.Stderr, "error indexing inlined subroutine:\n\t%#v\n\t%v\n", ent, err)
-		// 	}
-
 		case dwarf.TagSubprogram:
 			if err := indexFunctionEntry(r, ent, d, files, &ret, offset2function); err != nil {
 				fmt.Fprintf(os.Stderr, "error indexing function:\n\t%#v\n\t%v\n", ent, err)
@@ -140,16 +134,12 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 		}
 	}
 
-	fmt.Printf("Type param map: %#v\n", ret.TypeParamMap)
-
 	for _, record := range offset2function {
 		// TODO: are these all the cases when an entry is invalid?
 		if record == nil || isTombstoneAddr(record.LowPC) || isTombstoneAddr(record.HighPC) || record.Name == "" {
-			fmt.Fprintf(os.Stderr, "Malformed function entry %#v\n", record)
+			fmt.Fprintf(os.Stderr, "Malformed function entry %s %s:%d\n", record.Name, record.FileName, record.Line)
 			continue
 		}
-
-		fmt.Printf("INDEXED %#v\n", record)
 
 		ret.Function.Insert(record.LowPC, record.HighPC-1, *record)
 	}
@@ -160,8 +150,6 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 	sr := d.Reader()
 	sr.Seek(ent.Offset)
-
-	fmt.Printf("INDEXING TYPE PARAMS FOR STRUCT: %s\n", ent.AttrField(dwarf.AttrName).Val.(string))
 
 	for ent.Children {
 		child, err := sr.Next()
@@ -193,8 +181,6 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 			}
 
 			ret.TypeParamMap[typeName][templateName] = paramType
-
-			fmt.Printf("FOUND TYPE PARAM: %s %s %#v\n", typeName, templateName, paramType)
 		}
 
 	}
@@ -257,7 +243,6 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 				Index: uint32(res),
 			}
 		} else {
-			fmt.Println("INTERESTING CYKA")
 			res := parseLEB128(v[2:])
 			varLocation = MemoryLocation{
 				Typ: LocationTypeDirectLocal,
@@ -270,11 +255,9 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 	// This is probably some location field
 
 	default:
-		fmt.Printf("CYKA: %s - %#v\n", varName, varLocationField)
 		return fmt.Errorf("keep going :)")
 	}
 
-	fmt.Printf("ADDING VAR %s with range %d - %d and location: %#v\n", varName, lowPC, highPC, varLocationField)
 	*arr = append(*arr, VariableRecord{
 		Name: varName,
 		// Offset: varLocation,
@@ -288,44 +271,7 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 }
 
 func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFile, d *dwarf.Data, locals *[]VariableRecord, params *[]VariableRecord, ret *PCRecord) (DwarfPC, error) {
-
-	// var lowPC uint64
-	// var highPC uint64
-
 	entryOffset := DwarfPC(lexEntry.Offset)
-
-	// 	if lowPcWrapped := lexEntry.AttrField(dwarf.AttrLowpc); lowPcWrapped != nil {
-	// 		switch v := lowPcWrapped.Val.(type) {
-	// 		case uint64:
-	// 			lowPC = v
-	// 		// case int64:
-	// 		//	record.LowPC = uint64(v)
-	// 		default:
-	// 			// return entryOffset, fmt.Errorf("unrecognized lowPc format")
-	// 			lowPC = 0
-	// 		}
-	// 	} else {
-	//
-	// 		lowPC = 0
-	// 	}
-
-	// if highPcWrapped := lexEntry.AttrField(dwarf.AttrHighpc); highPcWrapped != nil {
-	// 	switch highPcWrapped.Class {
-	// 	case dwarf.ClassAddress: // we assume it's an absolute offset
-	// 		highPC = highPcWrapped.Val.(uint64)
-	// 	case dwarf.ClassConstant:
-	// 		highPC = lowPC + uint64(highPcWrapped.Val.(int64))
-	// 	default:
-	// 		//return entryOffset, fmt.Errorf("unrecognized highPc format")
-	// 		highPC = math.MaxUint64
-	// 	}
-	// } else {
-	// 	highPC = math.MaxUint64
-	// }
-
-	// if isTombstoneAddr(lowPC) || isTombstoneAddr(highPC) {
-	// 	return entryOffset, fmt.Errorf("tombstone address")
-	// }
 
 	ranges, err := d.Ranges(lexEntry)
 	if err != nil {
@@ -656,8 +602,6 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 			entry = append(entry, rec)
 			ret.InlinedRoutines.Insert(lowPC, highPC-1, entry)
 		}
-
-		fmt.Printf("INSERTING INLINE INTERVAL [%d %d] : %#v\n", lowPC, highPC-1, rec)
 	}
 
 	return exitOffset, nil
@@ -684,7 +628,6 @@ func parseLEB128(v []uint8) uint64 {
 }
 
 func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.LineFile, error) {
-	fmt.Println("---------------------------------------------------------")
 	lineReader, err := d.LineReader(cu)
 	if err != nil || lineReader == nil {
 		return nil, fmt.Errorf("can't initialize line reader: %v", err)
@@ -703,7 +646,6 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 
 		if prevLe != nil {
 			if prevLe.IsStmt {
-				fmt.Printf("LINE: %s:%d:%d RANGE: [%x; %x]\n", prevLe.File.Name, prevLe.Line, prevLe.Column, prevLe.Address, le.Address-1)
 				tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
 					FileName: prevLe.File.Name,
 					Line:     int64(prevLe.Line),

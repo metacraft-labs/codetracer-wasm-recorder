@@ -46,8 +46,6 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 }
 
 func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, typeId trace_record.TypeId, err error) {
-	fmt.Printf("PARSING BYTES FOR TYPE %v. SIZE IS %v AND RAW BYTES ARE %v\n", typ.String(), typ.Size(), len(rawBytes))
-
 	switch t := typ.(type) {
 	case *dwarf.IntType:
 		val, typeId, err = bytesToInt(rawBytes, t, m)
@@ -70,7 +68,6 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	case *dwarf.StructType:
 		// TODO: make these language specific
 		typeStr := typ.String()
-		fmt.Printf("Type str: %s\n", typeStr)
 		if typeStr == "struct &str" {
 			val, typeId, err = bytesToStringRust(rawBytes, t, m)
 		} else if strings.HasPrefix(typeStr, "struct (") && strings.HasSuffix(typeStr, ")") {
@@ -342,8 +339,6 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 	arrayLen := typ.Count
 
 	elems := make([]trace_record.ValueRecord, 0)
-
-	fmt.Printf("ARR HAS LEN: %d AND ELEM SIZE: %d\n", int(arrayLen), elemSize)
 
 	for i := 0; i < int(arrayLen); i++ {
 

@@ -720,15 +720,11 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	// TODO: Figure out a way to resolve how many local variables we need
 	locals := make([]uint64, 10000)
-	// 16d03 16d0d
-	// fmt.Printf("FRAME HAS BASE: %d\n", len(ce.stack))
 
 	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 
 	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
 	functionRecord, _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
-
-	// fmt.Printf("Function record: %v\n", functionRecord)
 
 	tracking_call := m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
 		!strings.HasPrefix(functionRecord.FileName, "/rustc") &&
@@ -817,7 +813,6 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 								}
 							}
 
-							fmt.Printf("STEP: %v\n", lineRecord)
 							currLine = lineRecord
 							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
 
@@ -840,27 +835,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 					}
 				}
 			}
-			// positions := frame.f.parent.source.DWARFLines.DebugPositions(frame.f.parent.offsetsInWasmBinary[frame.pc])
-
-			// // TODO: handle inline stuff
-			// if len(positions) == 1 {
-			// 	for _, line := range positions {
-			// 		if strings.HasSuffix(line.Line.FileName, ".rs") && !strings.HasPrefix(line.Line.FileName, "/rustc") && !strings.Contains(line.Line.FileName, ".rustup") && !strings.Contains(line.Line.FileName, ".cargo") && line.Line.Line != 0 {
-			// 			if currPosition.Line.FileName != line.Line.FileName || currPosition.Line.Line != line.Line.Line {
-			// 				fmt.Printf("Step: \"%v\"\n", line)
-			// 				m.Record.RegisterStep(line.Line.FileName, trace_record.Line(line.Line.Line))
-			// 				currPosition = line
-			// 			}
-			// 		}
-			// 	}
-			// }
 		}
-
-		// bytes, flag := m.Memory().Read(65520+12, 4)
-
-		// if flag {
-		// 	fmt.Printf("BYTES FOR LOCAL: %v\n", bytes)
-		// }
 
 		op := &body[frame.pc]
 
@@ -4510,7 +4485,6 @@ func traceReturnType(functionRecord wasmdebug.FunctionRecord,
 
 	if functionRecord.ReturnType == nil {
 		typeName := "void"
-		fmt.Printf("Return: %v\n", functionRecord.Name)
 		_, seen := m.TypesIndex[typeName]
 
 		if !seen {
@@ -4523,10 +4497,6 @@ func traceReturnType(functionRecord wasmdebug.FunctionRecord,
 	} else {
 		rawValue := ce.stack[len(ce.stack)-1]
 		rvSize := (*functionRecord.ReturnType).Size()
-
-		fmt.Printf("RAW VAL: %d\n", rawValue)
-
-		fmt.Printf("FUNCTION: %s has return value size: %d and byte size: %d and other size: %d and type: %#v\n", functionRecord.Name, (*functionRecord.ReturnType).Size(), (*functionRecord.ReturnType).Common().ByteSize, (*functionRecord.ReturnType).Common().Size(), (*functionRecord.ReturnType))
 
 		var value trace_record.ValueRecord
 		if rvSize <= 8 {
@@ -4572,7 +4542,6 @@ func traceReturnType(functionRecord wasmdebug.FunctionRecord,
 		}
 
 		m.Record.RegisterReturn(value)
-		fmt.Printf("Return: %v. Value: %v\n", functionRecord.Name, value)
 	}
 }
 
@@ -4583,17 +4552,13 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 
 	*loggedCall = true
 
-	fmt.Printf("Call: %v. Args:\n", functionRecord.Name)
-
 	args := make([]trace_record.FullValueRecord, 0)
 
 	for _, argRec := range functionRecord.Params {
-		fmt.Printf("\t")
 		val, err := readVariable(m, argRec, functionRecord, locals)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Can't read function argument %s: %v\n", argRec.Name, err)
 		} else {
-			fmt.Printf("\t%v: %v\n", argRec.Name, val)
 			args = append(args, m.Record.Arg(argRec.Name, val))
 		}
 	}
@@ -4620,7 +4585,6 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
 			} else {
-				// fmt.Printf("local %v: %v\n", v.Name, val)
 				m.Record.RegisterVariable(v.Name, val)
 			}
 		}
@@ -4629,11 +4593,8 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 }
 
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {
-
-	fmt.Printf("INLINE CALL: %s\n", rec.Name)
 	args := make([]trace_record.FullValueRecord, 0)
 	for _, argRec := range rec.Params {
-		fmt.Printf("%s has var: %s", rec.Name, argRec.Name)
 		val, err := readVariable(m, argRec, functionRecord, locals)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Can't read inline argument %s: %v\n", argRec.Name, err)
@@ -4642,7 +4603,6 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 		}
 	}
 
-	fmt.Printf("INLINED STEP: %v\n", rec.CallLine)
 	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
 	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
 

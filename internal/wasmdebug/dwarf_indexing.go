@@ -137,7 +137,12 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 	for _, record := range offset2function {
 		// TODO: are these all the cases when an entry is invalid?
 		if record == nil || isTombstoneAddr(record.LowPC) || isTombstoneAddr(record.HighPC) || record.Name == "" {
-			fmt.Fprintf(os.Stderr, "Malformed function entry %s %s:%d\n", record.Name, record.FileName, record.Line)
+			// TODO: too many cases, spamming the stderr: maybe fix this logic, or something else?
+			// try to detect when is this really invalid, when it's ok to ignore, when important to log
+			// and when to do something else
+			// for Stylus Milestone 5: a more finished version
+			// for now hide
+			// fmt.Fprintf(os.Stderr, "Malformed function entry %s %s:%d\n", record.Name, record.FileName, record.Line)
 			continue
 		}
 

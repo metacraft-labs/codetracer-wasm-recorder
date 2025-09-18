@@ -704,6 +704,22 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+func ensureSize[T any](s []T, index int) []T {
+
+	if index < len(s) {
+		return s
+	}
+
+	x := math.Log2(float64(index))
+
+	newSize := math.Pow(2, x+1)
+
+	newSlice := make([]T, int(newSize))
+	copy(newSlice, s)
+
+	return newSlice
+}
+
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -719,7 +735,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	bodyLen := uint64(len(body))
 
 	// TODO: Figure out a way to resolve how many local variables we need
-	locals := make([]uint64, 10000)
+	locals := make([]uint64, 1024)
 
 	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
 
@@ -945,6 +961,8 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				ce.stack[index] = value
 
 				localIndex := int(op.U2)
+
+				locals = ensureSize(locals, localIndex)
 				locals[localIndex] = value
 
 			}

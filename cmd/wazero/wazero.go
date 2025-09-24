@@ -210,13 +210,17 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	// TODO: maybe better usage description?
-	var stylusTracePath string
-	flags.StringVar(&stylusTracePath, "stylus", "",
-		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
+	var stylusTxHash string
+	flags.StringVar(&stylusTxHash, "stylus", "",
+		"Imports the EVM hook functions and mocks their IO using debug_traceTransaction for the given transaction hash.")
+
+	var stylusRpcUrl string
+	flags.StringVar(&stylusRpcUrl, "stylus-rpc", "http://localhost:8547",
+		"RPC endpoint used when fetching Stylus traces.")
 
 	var traceDir string
 	flags.StringVar(&traceDir, "trace-dir", "",
-		"Directory where to save the trace record. If empty - no trace is produced. Default \"\".")
+		"Directory where to save the trace record. If empty - no trace is produced. (default \"\")")
 
 	cacheDir := cacheDirFlag(flags)
 
@@ -343,8 +347,8 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	var stylusState *stylus.StylusTrace
-	if stylusTracePath != "" {
-		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, traceRecordPtr)
+	if stylusTxHash != "" {
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusRpcUrl, stylusTxHash, traceRecordPtr)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
 			return 1
@@ -382,7 +386,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	if stylusTracePath != "" {
+	if stylusTxHash != "" {
 		arg, err := stylusState.GetEntrypointArg()
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)

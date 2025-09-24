@@ -3,21 +3,42 @@ package stylus
 import (
 	"context"
 	"encoding/json"
-	"os"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 )
 
-func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string, record *trace_record.TraceRecord) (*StylusTrace, error) {
-	stylusTraceJson, err := os.ReadFile(stylusTracePath)
+func (client *RpcClient) requestDebugTraceTransaction(txHash string) ([]evmEvent, error) {
+	rawJson, err := client.Request(
+		"debug_traceTransaction",
+		[]interface{}{
+			txHash,
+			struct {
+				Tracer string `json:"tracer"`
+			}{
+				Tracer: "stylusTracer",
+			},
+		},
+	)
+
 	if err != nil {
 		return nil, err
 	}
 
-	stylusState := StylusTrace{}
+	var res []evmEvent
+	json.Unmarshal(rawJson, &res)
 
-	if err := json.Unmarshal(stylusTraceJson, &stylusState.events); err != nil {
+	return res, nil
+}
+
+func Instantiate(ctx context.Context, r wazero.Runtime, rpcUrl string, txHash string, record *trace_record.TraceRecord) (*StylusTrace, error) {
+	rpcClient := NewRpcClient(rpcUrl)
+
+	stylusState := StylusTrace{}
+	var err error
+
+	stylusState.events, err = rpcClient.requestDebugTraceTransaction(txHash)
+	if err != nil {
 		return nil, err
 	}
 

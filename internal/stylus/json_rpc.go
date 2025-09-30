@@ -26,6 +26,7 @@ func (client *RpcClient) Request(method string, params any) (json.RawMessage, er
 	if err != nil {
 		return nil, err
 	}
+	client.id++
 
 	resp, err := http.Post(client.url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
@@ -39,7 +40,7 @@ func (client *RpcClient) Request(method string, params any) (json.RawMessage, er
 	}
 
 	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("JSON RPC returned error: %v", rpcResp.Error)
+		return nil, fmt.Errorf("JSON RPC returned error: %v", *rpcResp.Error)
 	}
 
 	return rpcResp.Result, nil

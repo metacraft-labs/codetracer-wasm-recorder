@@ -346,7 +346,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		traceRecordPtr = &traceRecord
 	}
 
-	var stylusState *stylus.StylusTrace
+	var stylusState *stylus.StylusState
 	if stylusTxHash != "" {
 		stylusState, err = stylus.Instantiate(ctx, rt, stylusRpcUrl, stylusTxHash, traceRecordPtr)
 		if err != nil {

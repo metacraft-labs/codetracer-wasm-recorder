@@ -65,6 +65,8 @@ func (e *evmEvent) UnmarshalJSON(data []byte) error {
 type StylusTrace struct {
 	events  []evmEvent
 	current int
+
+	eventSignatureMap map[string]string
 }
 
 func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {

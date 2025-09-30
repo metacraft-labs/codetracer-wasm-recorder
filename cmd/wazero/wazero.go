@@ -214,6 +214,10 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
+	var stylusSignatureMapPath string
+	flags.StringVar(&stylusSignatureMapPath, "stylus-signature-map", "",
+		"Signature map of the EVM events. Used to decode events.")
+
 	var traceDir string
 	flags.StringVar(&traceDir, "trace-dir", "",
 		"Directory where to save the trace record. If empty - no trace is produced. Default \"\".")
@@ -344,7 +348,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 
 	var stylusState *stylus.StylusTrace
 	if stylusTracePath != "" {
-		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, traceRecordPtr)
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, stylusSignatureMapPath, traceRecordPtr)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
 			return 1

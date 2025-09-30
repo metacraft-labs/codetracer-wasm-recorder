@@ -376,12 +376,37 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 		func(m api.Module, stack []uint64, event evmEvent) {
 			mem := m.Memory()
 			dataPtr := uint32(stack[0])
-			len := uint32(stack[1])
-			data := readMemoryBytes(mem, dataPtr, len)
+			rawDataLen := uint32(stack[1])
+			numTopics := stack[2]
+
+			rawData := readMemoryBytes(mem, dataPtr, rawDataLen)
 			_ = event
 
-			// TODO: convert this to human readable format
-			record.RegisterRecordEvent(trace_record.EventKindEvmEvent, "emit_log", hexBytes(data))
+			topics := make([][]byte, numTopics)
+			for i := range numTopics {
+				topics[i] = rawData[i*32 : (i*32 + 32)]
+			}
+
+			data := rawData[numTopics*32:]
+
+			content := ""
+
+			if signature, hasSignature := trace.eventSignatureMap[hexBytes(topics[0])]; hasSignature {
+				content += signature
+				// TODO: display topics and data in human-readable way
+			} else {
+				// TODO: discuss if using https://www.4byte.directory/ as fallback for resolving signatures is a good idea
+			}
+
+			for i := range numTopics {
+				content = fmt.Sprintf("%s\nTOPIC[%d] = %s", content, i, hexBytes(topics[i]))
+			}
+
+			if len(data) > 0 {
+				content = fmt.Sprintf("%s\nDATA = %s", content, hexBytes(data))
+			}
+
+			record.RegisterRecordEvent(trace_record.EventKindEvmEvent, "emit_log", content)
 		})
 }
 

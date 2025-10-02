@@ -155,14 +155,18 @@ func DecodeModule(
 
 	if dwarfEnabled {
 		var err error
-
-		d, _ := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
-		m.DWARFData = d
-		m.DWARFLines = wasmdebug.NewDWARFLines(d)
-		m.PCRecord, err = wasmdebug.IndexDwarfData(d)
-		if err != nil {
-			// TODO: maybe fallback to WAT
-			fmt.Fprintf(os.Stderr, "Error indexing DWARF data. Tracing will not work: %v\n", err)
+		d, dwarfErr := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
+		if dwarfErr != nil {
+			fmt.Fprintf(os.Stderr, "Error constructing DWARF data. Tracing will not work: %v\n", dwarfErr)
+		}
+		if d != nil {
+			m.DWARFData = d
+			m.DWARFLines = wasmdebug.NewDWARFLines(d)
+			m.PCRecord, err = wasmdebug.IndexDwarfData(d)
+			if err != nil {
+				// TODO: maybe fallback to WAT
+				fmt.Fprintf(os.Stderr, "Error indexing DWARF data. Tracing will not work: %v\n", err)
+			}
 		}
 	}
 

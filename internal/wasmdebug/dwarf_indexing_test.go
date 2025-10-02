@@ -42,3 +42,13 @@ func TestIndexDwarfData_InlinedSubroutines(t *testing.T) {
 	require.True(t, len(pos) >= len(entries))
 	_ = wasmdebug.PCRecord{} // silence unused warning on import
 }
+
+func TestIndexDwarfData_NilData(t *testing.T) {
+	record, err := wasmdebug.IndexDwarfData(nil)
+	require.NoError(t, err)
+	require.NotNil(t, record.Line)
+	require.NotNil(t, record.Function)
+	require.NotNil(t, record.InlinedRoutines)
+	require.NotNil(t, record.Locals)
+	require.NotNil(t, record.TypeParamMap)
+}

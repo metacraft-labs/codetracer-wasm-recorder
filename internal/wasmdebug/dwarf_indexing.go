@@ -84,7 +84,7 @@ type PCRecord struct {
 	TypeParamMap    map[string]TemplateParamMap
 }
 
-func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
+func newPCRecord() PCRecord {
 	cmpFn := func(x, y uint64) int {
 		switch {
 		case x < y:
@@ -96,12 +96,19 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 		}
 	}
 
-	ret = PCRecord{
+	return PCRecord{
 		Line:            interval.NewSearchTree[LineRecord](cmpFn),
 		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
 		InlinedRoutines: interval.NewSearchTree[[]InlineRecord](cmpFn),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
 		TypeParamMap:    make(map[string]TemplateParamMap),
+	}
+}
+
+func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
+	ret = newPCRecord()
+	if d == nil {
+		return ret, nil
 	}
 
 	r := d.Reader()
@@ -239,6 +246,10 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 		}
 
 	case []uint8:
+		if len(v) == 0 {
+			return fmt.Errorf("empty location expression")
+		}
+
 		// Check if location is DW_OP_fbreg
 		if v[0] == 145 {
 			res := parseLEB128(v[1:])
@@ -401,7 +412,11 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 	if locationField := ent.AttrField(dwarf.AttrFrameBase); locationField != nil {
 		// TODO: handle more formats
-		locationFieldValue := locationField.Val.([]uint8)
+		locationFieldValue, ok := locationField.Val.([]uint8)
+		if !ok || len(locationFieldValue) < 2 {
+			return fmt.Errorf("invalid frame base location encoding")
+		}
+
 		locationFieldType := locationFieldValue[1]
 
 		if locationFieldType == 0 {
@@ -411,6 +426,9 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 			record.FrameBase.Typ = LocationTypeGlobal
 			record.FrameBase.Index = uint32(parseLEB128(locationFieldValue[2:]))
 		} else if locationFieldType == 3 {
+			if len(locationFieldValue) < 6 {
+				return fmt.Errorf("invalid global frame base encoding")
+			}
 			record.FrameBase.Typ = LocationTypeGlobal
 			record.FrameBase.Index = binary.LittleEndian.Uint32(locationFieldValue[2:6])
 		} else if locationFieldType == 2 {

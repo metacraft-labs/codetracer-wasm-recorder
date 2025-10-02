@@ -20,10 +20,10 @@
    - Hardened `DWARFLines.DebugPositions` against missing call-site metadata and absent subprogram entries, eliminating the TinyGo panic.
    - Verified with `GOCACHE=$(pwd)/.gocache go test ./internal/wasmdebug`.
 
-3. **Unblock interpreter compiler tests**
-   - Update every `newOperationSet` call in `internal/engine/interpreter/compiler_test.go` to pass the new `localIndex` argument.
-   - Audit other helper invocations (e.g., `local.tee` expectations) for the same signature change so the package compiles.
-   - Run `go test ./internal/engine/interpreter` to confirm the helper adjustments are sufficient.
+3. **Unblock interpreter compiler tests** ✅ _Completed 2025-10-02_
+   - Updated all `newOperationSet` expectations with the new local index and ensured tracing guards tolerate missing DWARF offsets/params.
+   - Hardened `callNativeFunc` to skip trace lookups when debug metadata is absent, avoiding nil dereferences in minimal modules.
+   - Verified with `GOCACHE=$(pwd)/.gocache go test ./internal/engine/interpreter`.
 
 4. **Fix amd64 stack cloning adjustments**
    - Instrument `AdjustClonedStack` (e.g., with temporary logging or targeted assertions) to understand the off-by-diff reported by `TestAdjustClonedStack` and align the pointer arithmetic with the new stack layout.

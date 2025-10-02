@@ -737,12 +737,20 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	// TODO: Figure out a way to resolve how many local variables we need
 	locals := make([]uint64, 1024)
 
-	initialOffset := frame.f.parent.offsetsInWasmBinary[frame.pc]
+	var (
+		initialOffset  uint64
+		functionRecord wasmdebug.FunctionRecord
+		hasSource      bool
+	)
 
-	// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
-	functionRecord, _ := frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+	if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) && frame.f.parent.source != nil {
+		initialOffset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+		// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
+		functionRecord, _ = frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+		hasSource = true
+	}
 
-	tracking_call := m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
+	tracking_call := hasSource && m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
 		!strings.HasPrefix(functionRecord.FileName, "/rustc") &&
 		!strings.Contains(functionRecord.FileName, ".rustup") &&
 		!strings.Contains(functionRecord.FileName, ".cargo") &&
@@ -759,18 +767,31 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 	loggedCall := false
 
-	paramCount := len(frame.f.funcType.Params)
-	functionParams := ce.stack[len(ce.stack)-paramCount:]
+	paramCount := 0
+	var functionParams []uint64
+	if frame.f.funcType != nil {
+		paramCount = len(frame.f.funcType.Params)
+	}
+	if paramCount > 0 {
+		functionParams = ce.stack[len(ce.stack)-paramCount:]
 
-	// NOTE: IDK if this is 100$% correct. Seems that the params and the locals share namespace
-	//       and the rust complier tells that the params are stored as local variables.
-	//       So we copy the params on the stack in the locals array in order to fix this. 😵‍💫
-	copy(locals, functionParams)
+		// NOTE: IDK if this is 100$% correct. Seems that the params and the locals share namespace
+		//       and the rust complier tells that the params are stored as local variables.
+		//       So we copy the params on the stack in the locals array in order to fix this. 😵‍💫
+		copy(locals, functionParams)
+	}
 
 	stack := NewStack[wasmdebug.InlineRecord]()
 
 	for frame.pc < bodyLen {
-		offset := frame.f.parent.offsetsInWasmBinary[frame.pc]
+		var offset uint64
+		if tracking_call {
+			if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) {
+				offset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+			} else {
+				tracking_call = false
+			}
+		}
 
 		if m.Record != nil && tracking_call {
 

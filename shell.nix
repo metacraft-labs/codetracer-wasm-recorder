@@ -21,7 +21,7 @@ mkShell {
 
   packages = [
 
-    go
+    go_1_24
     go-tools
     golangci-lint
 

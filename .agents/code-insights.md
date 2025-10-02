@@ -13,3 +13,7 @@
 ## 2025-10-02 (go test amd64 stack)
 - Under Go 1.24, `GOCACHE=$(pwd)/.gocache go test ./internal/engine/wazevo/backend/isa/amd64` now passes (Milestone 4 regression no longer reproduced).
 - The mismatch persists on Go 1.25, so keep the dev shell pinned to 1.24 until upstream resolves the issue.
+
+## 2025-10-02 (assemblyscript-stderr)
+- AssemblyScript sample stderr now intentionally includes the DWARF warning (`Error constructing DWARF data...`) ahead of the expected message; treat the warning as acceptable noise when asserting output.
+- Milestone 5 in `.agents/roadmaps/2025-10-02-failing-tests-plan.md` is marked complete—no further action unless the warning output changes meaningfully.

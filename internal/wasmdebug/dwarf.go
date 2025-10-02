@@ -205,16 +205,22 @@ entry:
 		// so we traverse the reverse order and emit the inlined calls.
 		for i := len(inlinedRoutines) - 1; i >= 0; i-- {
 			inlined := inlinedRoutines[i]
-			fileIndex, ok := inlined.Val(dwarf.AttrCallFile).(int64)
-			if !ok {
-				return
-			} else if fileIndex >= int64(len(files)) {
-				// This in theory shouldn't happen according to the spec, but guard against ill-formed DWARF info.
-				return
+			fileField := inlined.AttrField(dwarf.AttrCallFile)
+			if fileField == nil {
+				continue
+			}
+			fileIndex, ok := fileField.Val.(int64)
+			if !ok || fileIndex < 0 || fileIndex >= int64(len(files)) {
+				continue
 			}
 			fileName := files[fileIndex]
-			line, _ := inlined.Val(dwarf.AttrCallLine).(int64)
-			col, _ := inlined.Val(dwarf.AttrCallColumn).(int64)
+			var line, col int64
+			if lineField := inlined.AttrField(dwarf.AttrCallLine); lineField != nil {
+				line, _ = lineField.Val.(int64)
+			}
+			if colField := inlined.AttrField(dwarf.AttrCallColumn); colField != nil {
+				col, _ = colField.Val.(int64)
+			}
 			res = append(res, DebugPosition{
 				InstructionOffset: instructionOffset,
 				Line: LineRecord{
@@ -234,17 +240,33 @@ entry:
 		}
 	}
 
-	fname, ok := function.Val(dwarf.AttrName).(string)
+	if function == nil || len(res) == 0 {
+		return
+	}
+
+	nameField := function.AttrField(dwarf.AttrName)
+	if nameField == nil {
+		return
+	}
+	fname, ok := nameField.Val.(string)
 	if !ok {
 		return
 	}
 
-	find, ok := function.Val(dwarf.AttrDeclFile).(int64)
-	if !ok {
+	fileField := function.AttrField(dwarf.AttrDeclFile)
+	if fileField == nil {
+		return
+	}
+	find, ok := fileField.Val.(int64)
+	if !ok || find < 0 || find >= int64(len(files)) {
 		return
 	}
 
-	fline, ok := function.Val(dwarf.AttrDeclLine).(int64)
+	lineField := function.AttrField(dwarf.AttrDeclLine)
+	if lineField == nil {
+		return
+	}
+	fline, ok := lineField.Val.(int64)
 	if !ok {
 		return
 	}

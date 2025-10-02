@@ -22,6 +22,9 @@ mkShell {
   packages = [
 
     go
+    go-tools
+    golangci-lint
+
     wabt
     killall
 
@@ -39,6 +42,6 @@ mkShell {
   shellHook = ''
     export EM_CACHE=/tmp/emcc/
 
-    figlet "welcome to wasmi recorder"
+    figlet "Welcome to Codetracer WASM recorder!"
   '';
 }

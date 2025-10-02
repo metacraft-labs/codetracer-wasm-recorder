@@ -1036,7 +1036,7 @@ func TestCompile_Locals(t *testing.T) {
 				// [p[0].lo, p[1].hi] -> [p[0].lo, p[1].hi, 0x01, 0x02]
 				newOperationV128Const(0x01, 0x02),
 				// [p[0].lo, p[1].hi, 0x01, 0x02] -> [0x01, 0x02]
-				newOperationSet(3, true), // TODO: fix
+				newOperationSet(3, 0, true),
 				newOperationDrop(inclusiveRange{Start: 0, End: 1}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},
@@ -1054,7 +1054,7 @@ func TestCompile_Locals(t *testing.T) {
 			},
 			expected: []unionOperation{
 				newOperationConstI32(0x1),
-				newOperationSet(1, false),
+				newOperationSet(1, 0, false),
 				newOperationDrop(inclusiveRange{Start: 0, End: 0}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},
@@ -1080,7 +1080,7 @@ func TestCompile_Locals(t *testing.T) {
 				// [p[0].lo, p[1].hi] -> [p[0].lo, p[1].hi, 0x01, 0x02]
 				newOperationV128Const(0x01, 0x02),
 				// [p[0].lo, p[1].hi, 0x01, 0x02] -> [0x01, 0x02]
-				newOperationSet(3, true),
+				newOperationSet(3, 0, true),
 				newOperationDrop(inclusiveRange{Start: 0, End: 1}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},
@@ -1104,7 +1104,7 @@ func TestCompile_Locals(t *testing.T) {
 				// [p[0].lo, p[1].hi, 0x01, 0x02] -> [p[0].lo, p[1].hi, 0x01, 0x02, 0x01, 0x02]
 				newOperationPick(1, true),
 				// [p[0].lo, p[1].hi, 0x01, 0x02, 0x01, 0x02] -> [0x01, 0x02, 0x01, 0x02]
-				newOperationSet(5, true),
+				newOperationSet(5, 0, true),
 				newOperationDrop(inclusiveRange{Start: 0, End: 3}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},
@@ -1123,7 +1123,7 @@ func TestCompile_Locals(t *testing.T) {
 			expected: []unionOperation{
 				newOperationConstF32(math.Float32frombits(1)),
 				newOperationPick(0, false),
-				newOperationSet(2, false),
+				newOperationSet(2, 0, false),
 				newOperationDrop(inclusiveRange{Start: 0, End: 1}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},
@@ -1151,7 +1151,7 @@ func TestCompile_Locals(t *testing.T) {
 				// [p[0].lo, p[1].hi, 0x01, 0x02] -> [p[0].lo, p[1].hi, 0x01, 0x02, 0x01, 0x02]
 				newOperationPick(1, true),
 				// [p[0].lo, p[1].hi, 0x01, 0x02, 0x01, 0x2] -> [0x01, 0x02, 0x01, 0x02]
-				newOperationSet(5, true),
+				newOperationSet(5, 0, true),
 				newOperationDrop(inclusiveRange{Start: 0, End: 3}),
 				newOperationBr(newLabel(labelKindReturn, 0)), // return!
 			},

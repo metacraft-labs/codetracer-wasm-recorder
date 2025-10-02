@@ -10,6 +10,7 @@
 /wazero
 build
 dist
+.gocache/
 
 # Test binary, built with `go test -c`
 *.test

@@ -99,7 +99,7 @@ func newPCRecord() PCRecord {
 	return PCRecord{
 		Line:            interval.NewSearchTree[LineRecord](cmpFn),
 		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
-		InlinedRoutines: interval.NewSearchTree[[]InlineRecord](cmpFn),
+		InlinedRoutines: interval.NewSearchTreeWithOptions[[]InlineRecord](cmpFn, interval.TreeWithIntervalPoint()),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
 		TypeParamMap:    make(map[string]TemplateParamMap),
 	}
@@ -614,16 +614,17 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 	}
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
-
 		entry, found := ret.InlinedRoutines.Find(lowPC, highPC-1)
 
+		var err error
 		if !found {
-			x := make([]InlineRecord, 0)
-			x = append(x, rec)
-			ret.InlinedRoutines.Insert(lowPC, highPC-1, x)
+			err = ret.InlinedRoutines.Insert(lowPC, highPC-1, []InlineRecord{rec})
 		} else {
 			entry = append(entry, rec)
-			ret.InlinedRoutines.Insert(lowPC, highPC-1, entry)
+			err = ret.InlinedRoutines.Insert(lowPC, highPC-1, entry)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error indexing inline entry %s [%#x,%#x]: %v\n", rec.Name, lowPC, highPC-1, err)
 		}
 	}
 

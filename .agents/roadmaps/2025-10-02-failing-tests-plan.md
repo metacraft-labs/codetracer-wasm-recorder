@@ -15,10 +15,10 @@
    - Added regression coverage in `internal/wasm/binary` and `internal/wasmdebug` ensuring DWARF-free modules decode without panics.
    - Verified via `GOCACHE=$(pwd)/.gocache go test ./internal/wasmdebug` (remaining failures limited to existing inline/TinyGo expectations) and `GOCACHE=$(pwd)/.gocache go test ./examples/basic`.
 
-2. **Restore DWARF feature expectations**
-   - Investigate why `TestIndexDwarfData_InlinedSubroutines` only sees one inline entry; adjust the indexing logic (likely in `indexInlinedEntry` or its range handling) so nested inlines are preserved.
-   - Fix `TestDWARFLines_Line_TinyGo` by making `indexVariable` robust to empty location encodings and by covering the TinyGo-produced debug info layout with explicit test data.
-   - Extend tests to assert the corrected behavior, ensuring the new guard paths do not mask legitimate DWARF data.
+2. **Restore DWARF feature expectations** ✅ _Completed 2025-10-02_
+   - Enabled point-interval storage for `InlinedRoutines` and handled `Insert` errors, restoring nested inline coverage (`TestIndexDwarfData_InlinedSubroutines`).
+   - Hardened `DWARFLines.DebugPositions` against missing call-site metadata and absent subprogram entries, eliminating the TinyGo panic.
+   - Verified with `GOCACHE=$(pwd)/.gocache go test ./internal/wasmdebug`.
 
 3. **Unblock interpreter compiler tests**
    - Update every `newOperationSet` call in `internal/engine/interpreter/compiler_test.go` to pass the new `localIndex` argument.

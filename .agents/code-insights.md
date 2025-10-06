@@ -17,3 +17,8 @@
 ## 2025-10-02 (assemblyscript-stderr)
 - AssemblyScript sample stderr now intentionally includes the DWARF warning (`Error constructing DWARF data...`) ahead of the expected message; treat the warning as acceptable noise when asserting output.
 - Milestone 5 in `.agents/roadmaps/2025-10-02-failing-tests-plan.md` is marked complete—no further action unless the warning output changes meaningfully.
+
+## 2025-10-03 (cat-example-stderr)
+- Added `maintester.StripKnownDWARFWarnings` to remove the `Error constructing DWARF data...` line for minimal fixtures.
+- Cat and AssemblyScript examples now sanitize stderr before assertions; filecache integration tests reuse the helper when comparing recursive test invocations.
+- Helper is unit-tested in `internal/testing/maintester` to guard the known warning string and ensure other stderr remains untouched.

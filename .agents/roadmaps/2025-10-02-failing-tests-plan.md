@@ -37,33 +37,37 @@
    - Future updates should keep the sample message intact while tolerating or suppressing toolchain warnings as needed.
    - See `.agents/code-insights.md` for the current guidance on rerunning the package tests.
 
-6. **Run full test suite**
+6. **Resolve cat example stderr warnings** ✅ _Completed 2025-10-03_
+   - Added `maintester.StripKnownDWARFWarnings` and updated cat/AssemblyScript examples plus filecache integration tests to sanitize stderr prior to assertions.
+   - Documented the helper in `.agents/code-insights.md` and verified the updated packages pass (`go test` on examples and `internal/integration_test/filecache`).
+
+7. **Run full test suite**
    - Execute `GOCACHE=$(pwd)/.gocache go test ./...` (or the equivalent for the active toolchain) and confirm the entire suite passes in the current environment.
    - When every package passes, record the successful run and proceed to the following milestones; otherwise, immediately insert a new milestone ahead of this one that outlines a remediation plan for each failing package before re-running the suite.
 
-7. **Test DWARF variable readers**
+8. **Test DWARF variable readers**
    - Expand coverage for `indexVariable` and related helpers in `internal/wasmdebug` by constructing fixtures with locals, parameters, and direct memory locations.
    - Add table-driven tests that cover DW_OP_fbreg, abstract origin fallback, and malformed location encodings, asserting graceful degradation.
    - Ensure variable lookup results integrate with tracing consumers (e.g., locals and inlined scopes).
 
-8. **Add DWARF regression tests**
+9. **Add DWARF regression tests**
    - Implement unit tests that exercise DWARF indexing edge cases (nested inlines, empty location expressions, unsupported opcodes).
    - Validate guards from milestones 1–2 by decoding modules without DWARF data and asserting no panics plus correct fallback behavior.
    - Track coverage for `internal/wasmdebug` and related packages with `go test -cover`.
 
-9. **Add tracing regression tests**
+10. **Add tracing regression tests**
    - Introduce tests covering runtime tracing hooks and `trace_record` integration, including minimal modules, multi-module traces, and error propagation.
    - Verify trace metadata generation stays stable when DWARF data is present or absent.
    - Re-run targeted packages with coverage flags to confirm improvements and guard against regressions.
 
-10. **Exercise Stylus rendering paths**
+11. **Exercise Stylus rendering paths**
    - Create new scenario tests in `internal/stylus` covering varied instruction sequences, error handling, and formatting options.
    - Add an integration test that wires stylus output into tracing or diagnostics, ensuring stylistic artifacts align with expectations.
    - Track coverage for the stylus package (`go test -cover ./internal/stylus`).
 
-11. **Handle sandbox-only failures**
+12. **Handle sandbox-only failures**
    - When tests fail solely due to sandbox restrictions (e.g., TCP bind permission errors), surface a clear message instructing the user to rerun the affected package outside the sandbox instead of modifying the tests.
 
-12. **Full regression sweep**
+13. **Full regression sweep**
    - After applying the above fixes, run the targeted suites (`go test ./...` with `GOCACHE=$(pwd)/.gocache`) to ensure no remaining panics or compilation errors.
    - Capture any residual failures for follow-up (e.g., CLI exit codes) and update `.agents/code-insights.md` once the suite passes.

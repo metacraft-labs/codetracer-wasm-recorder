@@ -41,9 +41,10 @@
    - Added `maintester.StripKnownDWARFWarnings` and updated cat/AssemblyScript examples plus filecache integration tests to sanitize stderr prior to assertions.
    - Documented the helper in `.agents/code-insights.md` and verified the updated packages pass (`go test` on examples and `internal/integration_test/filecache`).
 
-7. **Run full test suite**
+7. **Run full test suite** ✅ _Completed 2025-10-03_
    - Execute `GOCACHE=$(pwd)/.gocache go test ./...` (or the equivalent for the active toolchain) and confirm the entire suite passes in the current environment.
-   - When every package passes, record the successful run and proceed to the following milestones; otherwise, immediately insert a new milestone ahead of this one that outlines a remediation plan for each failing package before re-running the suite.
+   - Verified via user-run suite on 2025-10-03; no package failures observed.
+   - When regressions appear, insert a remediation milestone before rerunning the suite.
 
 8. **Test DWARF variable readers**
    - Expand coverage for `indexVariable` and related helpers in `internal/wasmdebug` by constructing fixtures with locals, parameters, and direct memory locations.

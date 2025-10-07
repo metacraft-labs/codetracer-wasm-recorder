@@ -62,29 +62,37 @@ func (e *evmEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type StylusTrace struct {
-	events  []evmEvent
-	current int
+type StylusState struct {
+	txHash      string
+	address     string
+	blockNumber string
+	blockHash   string
+	txIndex     string
+
+	evmEvents    []evmEvent
+	currentEvent int
+
+	storageSlots map[string][]byte
 }
 
-func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {
-	fmt.Printf("Current event requested: %v (%v/%v)\n", event, st.current+1, len(st.events))
+func (st *StylusState) nextEvent(event string) (evmEvent, error) {
+	fmt.Printf("Current event requested: %v (%v/%v)\n", event, st.currentEvent+1, len(st.evmEvents))
 	// TODO: maybe validate arguments?
-	if st.current >= len(st.events) {
+	if st.currentEvent >= len(st.evmEvents) {
 		return evmEvent{}, fmt.Errorf("no next stylus event")
 	}
 
-	res := st.events[st.current]
+	res := st.evmEvents[st.currentEvent]
 	if res.name != event {
 		return evmEvent{}, fmt.Errorf("mismatched event types: expected %v but found %v", event, res.name)
 	}
 
-	st.current++
+	st.currentEvent++
 
 	return res, nil
 }
 
-func (st *StylusTrace) GetEntrypointArg() (uint64, error) {
+func (st *StylusState) GetEntrypointArg() (uint64, error) {
 	event, err := st.nextEvent("user_entrypoint")
 	if err != nil {
 		return 0, err
@@ -94,7 +102,7 @@ func (st *StylusTrace) GetEntrypointArg() (uint64, error) {
 	return uint64(arg), err
 }
 
-func (st *StylusTrace) GetReturnedValue() (uint64, error) {
+func (st *StylusState) GetReturnedValue() (uint64, error) {
 	event, err := st.nextEvent("user_returned")
 	if err != nil {
 		return 0, err

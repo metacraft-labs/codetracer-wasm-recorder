@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
@@ -382,31 +384,84 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record *trac
 			rawData := readMemoryBytes(mem, dataPtr, rawDataLen)
 			_ = event
 
-			topics := make([][]byte, numTopics)
-			for i := range numTopics {
-				topics[i] = rawData[i*32 : (i*32 + 32)]
+			requestedTopics := numTopics
+			if requestedTopics > uint64(math.MaxInt) {
+				requestedTopics = uint64(math.MaxInt)
 			}
 
-			data := rawData[numTopics*32:]
-
-			content := ""
-
-			if signature, hasSignature := trace.eventSignatureMap[hexBytes(topics[0])]; hasSignature {
-				content += signature
-				// TODO: display topics and data in human-readable way
-			} else {
-				// TODO: discuss if using https://www.4byte.directory/ as fallback for resolving signatures is a good idea
+			topicCount := int(requestedTopics)
+			maxTopics := len(rawData) / 32
+			if topicCount > maxTopics {
+				topicCount = maxTopics
 			}
 
-			for i := range numTopics {
-				content = fmt.Sprintf("%s\nTOPIC[%d] = %s", content, i, hexBytes(topics[i]))
+			topics := make([][]byte, topicCount)
+			for i := 0; i < topicCount; i++ {
+				start := i * 32
+				topics[i] = rawData[start : start+32]
+			}
+
+			data := rawData[topicCount*32:]
+
+			var builder strings.Builder
+			var warnings []string
+
+			if topicCount > 0 && trace != nil && trace.eventSignatureMap != nil {
+				if signature, hasSignature := trace.eventSignatureMap[hexBytes(topics[0])]; hasSignature {
+					parsed, err := parseEventSignature(signature)
+					if err != nil {
+						builder.WriteString(signature)
+						warnings = append(warnings, fmt.Sprintf("failed to parse event signature: %v", err))
+					} else {
+						builder.WriteString(parsed.Name)
+						values, decodeWarnings := decodeEventParameters(parsed, topics[1:], data)
+						warnings = append(warnings, decodeWarnings...)
+						for i, pv := range values {
+							value := pv.value
+							if value == "" {
+								value = "<not decoded>"
+							}
+
+							label := parameterLabel(pv.param, i)
+							prefix := ""
+							if pv.param.Indexed {
+								prefix = "indexed "
+							}
+
+							builder.WriteString(fmt.Sprintf("\n%s%s = %s", prefix, label, value))
+							if pv.warning != "" {
+								builder.WriteString(fmt.Sprintf(" (%s)", pv.warning))
+							}
+						}
+					}
+				}
+			}
+
+			if builder.Len() == 0 {
+				if topicCount > 0 {
+					builder.WriteString(hexBytes(topics[0]))
+				} else {
+					builder.WriteString("emit_log")
+				}
+			}
+
+			if topicCount < int(requestedTopics) {
+				warnings = append(warnings, fmt.Sprintf("requested %d topics but payload exposes %d", numTopics, topicCount))
+			}
+
+			for _, warn := range warnings {
+				builder.WriteString(fmt.Sprintf("\n! %s", warn))
+			}
+
+			for i := 0; i < topicCount; i++ {
+				builder.WriteString(fmt.Sprintf("\nTOPIC[%d] = %s", i, hexBytes(topics[i])))
 			}
 
 			if len(data) > 0 {
-				content = fmt.Sprintf("%s\nDATA = %s", content, hexBytes(data))
+				builder.WriteString(fmt.Sprintf("\nDATA = %s", hexBytes(data)))
 			}
 
-			record.RegisterRecordEvent(trace_record.EventKindEvmEvent, "emit_log", content)
+			record.RegisterRecordEvent(trace_record.EventKindEvmEvent, "emit_log", builder.String())
 		})
 }
 

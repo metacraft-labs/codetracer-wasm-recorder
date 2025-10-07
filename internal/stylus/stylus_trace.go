@@ -17,7 +17,9 @@ type evmEvent struct {
 
 func (e *evmEvent) UnmarshalJSON(data []byte) error {
 	var obj map[string]interface{}
-	json.Unmarshal(data, &obj)
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("parse stylus event: %w", err)
+	}
 
 	var ok bool
 	e.name, ok = obj["name"].(string)

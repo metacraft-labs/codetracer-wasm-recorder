@@ -22,6 +22,7 @@ const (
 	abiBytes
 	abiString
 	abiArray
+	abiTuple
 )
 
 type abiType struct {
@@ -30,6 +31,7 @@ type abiType struct {
 	byteSize int
 	length   int // -1 for dynamic arrays
 	elem     *abiType
+	tuple    []abiType
 	raw      string
 }
 
@@ -45,6 +47,13 @@ func (t abiType) isDynamic() bool {
 			return true
 		}
 		return t.elem.isDynamic()
+	case abiTuple:
+		for _, comp := range t.tuple {
+			if comp.isDynamic() {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -66,6 +75,19 @@ func (t abiType) staticSize() (int, error) {
 			return 0, err
 		}
 		return t.length * elemSize, nil
+	case abiTuple:
+		if t.isDynamic() {
+			return 0, fmt.Errorf("tuple contains dynamic components")
+		}
+		total := 0
+		for _, comp := range t.tuple {
+			size, err := comp.staticSize()
+			if err != nil {
+				return 0, err
+			}
+			total += size
+		}
+		return total, nil
 	default:
 		return 0, fmt.Errorf("type %q has no static size", t.raw)
 	}
@@ -80,6 +102,36 @@ func (t abiType) topicEncodable() bool {
 		return false
 	}
 	return size == 32
+}
+
+func parseTupleType(base, raw string) (abiType, error) {
+	var inner string
+	switch {
+	case strings.HasPrefix(base, "(") && strings.HasSuffix(base, ")"):
+		inner = base[1 : len(base)-1]
+	case strings.HasPrefix(base, "tuple(") && strings.HasSuffix(base, ")"):
+		inner = base[len("tuple(") : len(base)-1]
+	default:
+		return abiType{kind: abiInvalid, raw: raw}, fmt.Errorf("unrecognized tuple type %q", raw)
+	}
+
+	components := []abiType{}
+	if strings.TrimSpace(inner) != "" {
+		parts, err := splitTupleComponents(inner)
+		if err != nil {
+			return abiType{kind: abiInvalid, raw: raw}, err
+		}
+		components = make([]abiType, len(parts))
+		for i, part := range parts {
+			child, err := parseABIType(part)
+			if err != nil {
+				return abiType{kind: abiInvalid, raw: raw}, err
+			}
+			components[i] = child
+		}
+	}
+
+	return abiType{kind: abiTuple, tuple: components, raw: raw}, nil
 }
 
 func parseABIType(typeStr string) (abiType, error) {
@@ -146,6 +198,13 @@ func parseABIType(typeStr string) (abiType, error) {
 	t := abiType{raw: typeStr}
 
 	switch {
+	case strings.HasPrefix(base, "(") && strings.HasSuffix(base, ")"),
+		strings.HasPrefix(base, "tuple(") && strings.HasSuffix(base, ")"):
+		tuple, err := parseTupleType(base, typeStr)
+		if err != nil {
+			return abiType{kind: abiInvalid, raw: typeStr}, err
+		}
+		t = tuple
 	case base == "address":
 		t.kind = abiAddress
 	case base == "bool":
@@ -416,6 +475,11 @@ func decodeStaticBytes(t abiType, chunk []byte) (string, error) {
 			return "", fmt.Errorf("invalid fixed bytes size %d", len(chunk))
 		}
 		return fmt.Sprintf("0x%s", hex.EncodeToString(chunk[:t.byteSize])), nil
+	case abiTuple:
+		if t.isDynamic() {
+			return "", fmt.Errorf("dynamic tuple treated as static")
+		}
+		return decodeStaticTuple(t, chunk)
 	case abiArray:
 		if t.length < 0 {
 			return "", fmt.Errorf("dynamic array treated as static")
@@ -457,6 +521,8 @@ func decodeDynamicValue(t abiType, data []byte, offset int) (string, error) {
 			return "", fmt.Errorf("array missing element type")
 		}
 		return decodeDynamicArray(t, data, offset)
+	case abiTuple:
+		return decodeDynamicTuple(t, data, offset)
 	default:
 		return "", fmt.Errorf("type %q is not dynamic", t.raw)
 	}
@@ -576,6 +642,122 @@ func decodeStaticTopicValue(t abiType, topic []byte) (string, error) {
 		return "", fmt.Errorf("topic length %d", len(topic))
 	}
 	return decodeStaticBytes(t, topic)
+}
+
+func splitTupleComponents(spec string) ([]string, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+
+	var result []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(spec); i++ {
+		switch spec[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return nil, fmt.Errorf("unbalanced parentheses in tuple type (%s)", spec)
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				part := strings.TrimSpace(spec[start:i])
+				if part == "" {
+					return nil, fmt.Errorf("empty component in tuple type (%s)", spec)
+				}
+				result = append(result, part)
+				start = i + 1
+			}
+		}
+	}
+
+	if depth != 0 {
+		return nil, fmt.Errorf("unbalanced parentheses in tuple type (%s)", spec)
+	}
+
+	tail := strings.TrimSpace(spec[start:])
+	if tail == "" {
+		return nil, fmt.Errorf("empty component in tuple type (%s)", spec)
+	}
+	result = append(result, tail)
+	return result, nil
+}
+
+func decodeStaticTuple(t abiType, chunk []byte) (string, error) {
+	values := make([]string, len(t.tuple))
+	cursor := 0
+	for i, comp := range t.tuple {
+		size, err := comp.staticSize()
+		if err != nil {
+			return "", err
+		}
+		if cursor+size > len(chunk) {
+			return "", fmt.Errorf("tuple component %d truncated", i)
+		}
+		val, err := decodeStaticBytes(comp, chunk[cursor:cursor+size])
+		if err != nil {
+			return "", err
+		}
+		values[i] = val
+		cursor += size
+	}
+	return "(" + strings.Join(values, ", ") + ")", nil
+}
+
+func decodeDynamicTuple(t abiType, data []byte, offset int) (string, error) {
+	values := make([]string, len(t.tuple))
+	type tupleJob struct {
+		index  int
+		typ    abiType
+		offset int
+	}
+	var jobs []tupleJob
+
+	cursor := offset
+	for i, comp := range t.tuple {
+		if comp.isDynamic() {
+			if cursor+32 > len(data) {
+				return "", fmt.Errorf("tuple component %d offset out of bounds", i)
+			}
+			ptr, err := wordToInt(data[cursor : cursor+32])
+			if err != nil {
+				return "", fmt.Errorf("invalid tuple component %d offset: %w", i, err)
+			}
+			jobs = append(jobs, tupleJob{index: i, typ: comp, offset: ptr})
+			cursor += 32
+			continue
+		}
+		size, err := comp.staticSize()
+		if err != nil {
+			return "", err
+		}
+		if cursor+size > len(data) {
+			return "", fmt.Errorf("tuple component %d truncated", i)
+		}
+		val, err := decodeStaticBytes(comp, data[cursor:cursor+size])
+		if err != nil {
+			return "", err
+		}
+		values[i] = val
+		cursor += size
+	}
+
+	for _, job := range jobs {
+		elemOffset := offset + job.offset
+		if elemOffset < offset || elemOffset > len(data) {
+			return "", fmt.Errorf("tuple component %d offset outside payload", job.index)
+		}
+		val, err := decodeDynamicValue(job.typ, data, elemOffset)
+		if err != nil {
+			return "", err
+		}
+		values[job.index] = val
+	}
+
+	return "(" + strings.Join(values, ", ") + ")", nil
 }
 
 func decodeUint(word []byte) string {

@@ -117,6 +117,58 @@ func TestDecodeEventParameters_IndexedDynamic(t *testing.T) {
 	}
 }
 
+func TestDecodeEventParameters_TupleStatic(t *testing.T) {
+	sig := eventSignature{
+		Name: "Pair",
+		Params: []eventParameter{
+			{Type: "(uint256,bool)", Name: "pair"},
+		},
+	}
+
+	data := make([]byte, 64)
+	copy(data[0:32], word(big.NewInt(42)))
+	boolWord := make([]byte, 32)
+	boolWord[31] = 1
+	copy(data[32:64], boolWord)
+
+	values, warnings := decodeEventParameters(sig, nil, data)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if got, want := values[0].value, "(42, true)"; got != want {
+		t.Fatalf("pair value = %s, want %s", got, want)
+	}
+}
+
+func TestDecodeEventParameters_TupleWithDynamic(t *testing.T) {
+	sig := eventSignature{
+		Name: "Details",
+		Params: []eventParameter{
+			{Type: "(address,string)", Name: "details"},
+		},
+	}
+
+	addr := bytesRepeat([]byte{0x11}, 20)
+	message := []byte("hello")
+
+	data := make([]byte, 32*5)
+	copy(data[0:32], word(big.NewInt(32)))
+	copy(data[32:64], padAddress(addr))
+	copy(data[64:96], word(big.NewInt(64)))
+	copy(data[96:128], word(big.NewInt(int64(len(message)))))
+	copy(data[128:], padRight(message, 32))
+
+	values, warnings := decodeEventParameters(sig, nil, data)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+
+	wantAddr := "0x" + hex.EncodeToString(addr)
+	if got, want := values[0].value, "("+wantAddr+", \"hello\")"; got != want {
+		t.Fatalf("details value = %s, want %s", got, want)
+	}
+}
+
 func padAddress(addr []byte) []byte {
 	word := make([]byte, 32)
 	copy(word[32-len(addr):], addr)

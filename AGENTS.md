@@ -5,16 +5,16 @@
 The file `.agents/code-insights.md` is your checklist before interacting the codebase. Treat it as mandatory reading and maintenance.
 
 - **Before starting any task, ALWAYS open and review** `.agents/code-insights.md` so you inherit the latest context.
-- Capture new insights, architectural notes, domain knowledge, debugging breadcrumbs, surprising findings, edge cases, and other non-trivial behaviors in `.agents/code-insights.md`.
-- Keep entries in that insights file clear, concise, and dated when helpful so others can trust the context quickly.
-- Update the insights file continuously: add new learnings immediately, revise stale items, and REMOVE information the moment it stops being true.
-- If you are unsure whether something belongs in `.agents/code-insights.md`, err on the side of writing it down.
+- Capture only non-trivial insights—complex behaviors, surprising findings, architectural pivots, or tricky edge cases—in `.agents/code-insights.md`.
+- Do not record routine task updates or obvious observations; keep the file focused on durable, high-signal knowledge.
+- Keep entries concise so others can trust the context quickly, and prune or revise them when they stop being accurate or relevant.
 
 Maintaining `.agents/code-insights.md` is part of completing every task.
 
 ## Testing Standards
 
 - Always design and commit comprehensive tests that cover baseline behavior and all edge cases **before** implementing the associated functionality.
+- Keep test output minimal: successful runs must be silent, and failures should surface only the information necessary to pinpoint the fault.
 - Consider a task complete only after all relevant tests run and pass.
 
 ## Code Comments

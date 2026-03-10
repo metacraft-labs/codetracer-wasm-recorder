@@ -21,20 +21,46 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Clone trace_record
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Clone sibling repos
         run: |
           PINS=".github/sibling-pins.json"
+
+          # Clone trace_record
+          TR_REF="master"
           if [[ -f "$PINS" ]]; then
             TR_REF=$(grep '"trace_record"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+            TR_REF="${TR_REF:-master}"
           fi
-          TR_REF="${TR_REF:-master}"
           echo "Cloning trace_record at ref: $TR_REF"
           git clone https://github.com/metacraft-labs/trace_record.git ../trace_record
-          cd ../trace_record
-          git checkout "$TR_REF"
+          cd ../trace_record && git checkout "$TR_REF" && cd ..
+
+          # Clone codetracer-trace-format
+          TF_REF="main"
+          if [[ -f "$PINS" ]]; then
+            TF_REF=$(grep '"codetracer-trace-format"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+            TF_REF="${TF_REF:-main}"
+          fi
+          echo "Cloning codetracer-trace-format at ref: $TF_REF"
+          git clone https://github.com/metacraft-labs/codetracer-trace-format.git ../codetracer-trace-format
+          cd ../codetracer-trace-format && git checkout "$TF_REF"
+
+      - name: Build FFI library
+        run: |
+          cd ../codetracer-trace-format
+          cargo build -p codetracer_trace_writer_ffi --release
+          echo "FFI library built:"
+          ls -la target/release/libcodetracer_trace_writer_ffi.*
 
       - name: Install just
         uses: extractions/setup-just@v2
 
       - name: Run tracewriter tests
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: "-L${{ github.workspace }}/../codetracer-trace-format/target/release"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/../codetracer-trace-format/target/release"
         run: just test-tracewriter

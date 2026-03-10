@@ -1,4 +1,5 @@
 {
   "codetracer": "latest-trace-format",
+  "codetracer-trace-format": "main",
   "trace_record": "master"
 }

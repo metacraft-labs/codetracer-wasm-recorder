@@ -328,7 +328,7 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 
 	// TODO: Record pointer Type info
 
-	return trace_record.ReferenceValue(dereferencedValueRecord, addr, false, typeId), typeId, nil
+	return trace_record.ReferenceValue(dereferencedValueRecord, uint64(addr), false, typeId), typeId, nil
 
 }
 

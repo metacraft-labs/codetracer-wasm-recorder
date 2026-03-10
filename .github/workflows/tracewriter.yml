@@ -1,0 +1,40 @@
+name: Tracewriter Tests
+
+on:
+  pull_request:
+    branches: [wasm-tracing, main]
+  push:
+    branches: [wasm-tracing, main]
+
+env:
+  GO_VERSION: "1.24"
+
+jobs:
+  tracewriter:
+    name: Tracewriter tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Clone trace_record
+        run: |
+          PINS=".github/sibling-pins.json"
+          if [[ -f "$PINS" ]]; then
+            TR_REF=$(grep '"trace_record"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+          fi
+          TR_REF="${TR_REF:-master}"
+          echo "Cloning trace_record at ref: $TR_REF"
+          git clone https://github.com/metacraft-labs/trace_record.git ../trace_record
+          cd ../trace_record
+          git checkout "$TR_REF"
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Run tracewriter tests
+        run: just test-tracewriter

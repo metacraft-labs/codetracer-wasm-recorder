@@ -274,6 +274,10 @@ func (w *RustTraceWriter) ProduceTrace(traceDir string, programName string, work
 		C.free(unsafe.Pointer(cPath))
 	}
 
+	cWorkdir := C.CString(workdir)
+	C.trace_writer_set_workdir(handle, cWorkdir)
+	C.free(unsafe.Pointer(cWorkdir))
+
 	if !bool(C.trace_writer_finish_metadata(handle)) {
 		return fmt.Errorf("trace_writer_finish_metadata failed: %s", C.GoString(C.trace_writer_last_error()))
 	}
@@ -345,7 +349,7 @@ func (w *RustTraceWriter) replayEvent(handle *C.struct_TraceWriterHandle, event 
 		C.trace_writer_register_call(handle, C.uintptr_t(event.functionId))
 
 	case rustEventReturn:
-		C.trace_writer_register_return(handle)
+		w.replayReturnValue(handle, event.returnValue)
 
 	case rustEventVariable, rustEventFullValue:
 		// Variables are registered as raw values through the FFI
@@ -357,9 +361,11 @@ func (w *RustTraceWriter) replayEvent(handle *C.struct_TraceWriterHandle, event 
 		w.replayValueRecord(handle, name, event.value)
 
 	case rustEventRecordEvent:
+		cMetadata := C.CString(event.metadata)
 		cContent := C.CString(event.content)
 		ffiKind := goRecordEventKindToFfi(event.recordEventKind)
-		C.trace_writer_register_special_event(handle, ffiKind, cContent)
+		C.trace_writer_register_special_event(handle, ffiKind, cMetadata, cContent)
+		C.free(unsafe.Pointer(cMetadata))
 		C.free(unsafe.Pointer(cContent))
 
 	case rustEventFunction:
@@ -499,6 +505,62 @@ func (w *RustTraceWriter) replayValueRecord(handle *C.struct_TraceWriterHandle, 
 		cTypeName := C.CString("unknown")
 		cRepr := C.CString(fmt.Sprintf("%v", value))
 		C.trace_writer_register_variable_raw(handle, cName, cRepr, typeKind, cTypeName)
+		C.free(unsafe.Pointer(cTypeName))
+		C.free(unsafe.Pointer(cRepr))
+	}
+}
+
+// replayReturnValue dispatches the return value through the appropriate FFI function.
+func (w *RustTraceWriter) replayReturnValue(handle *C.struct_TraceWriterHandle, value trace_record.ValueRecord) {
+	if value == nil {
+		C.trace_writer_register_return(handle)
+		return
+	}
+
+	switch v := value.(type) {
+	case trace_record.IntValueRecord:
+		typeKind := goTypeKindToFfi(trace_record.INT_TYPE_KIND)
+		cTypeName := C.CString("i64")
+		C.trace_writer_register_return_int(handle, C.int64_t(v.I), typeKind, cTypeName)
+		C.free(unsafe.Pointer(cTypeName))
+
+	case trace_record.NilValueRecord:
+		C.trace_writer_register_return(handle)
+
+	case trace_record.FloatValueRecord:
+		typeKind := goTypeKindToFfi(trace_record.FLOAT_TYPE_KIND)
+		cTypeName := C.CString("f64")
+		repr := fmt.Sprintf("%g", v.F)
+		cRepr := C.CString(repr)
+		C.trace_writer_register_return_raw(handle, cRepr, typeKind, cTypeName)
+		C.free(unsafe.Pointer(cTypeName))
+		C.free(unsafe.Pointer(cRepr))
+
+	case trace_record.BoolValueRecord:
+		typeKind := goTypeKindToFfi(trace_record.BOOL_TYPE_KIND)
+		cTypeName := C.CString("bool")
+		repr := "false"
+		if v.B {
+			repr = "true"
+		}
+		cRepr := C.CString(repr)
+		C.trace_writer_register_return_raw(handle, cRepr, typeKind, cTypeName)
+		C.free(unsafe.Pointer(cTypeName))
+		C.free(unsafe.Pointer(cRepr))
+
+	case trace_record.StringValueRecord:
+		typeKind := goTypeKindToFfi(trace_record.STRING_TYPE_KIND)
+		cTypeName := C.CString("string")
+		cRepr := C.CString(v.Text)
+		C.trace_writer_register_return_raw(handle, cRepr, typeKind, cTypeName)
+		C.free(unsafe.Pointer(cTypeName))
+		C.free(unsafe.Pointer(cRepr))
+
+	default:
+		typeKind := C.enum_FfiTypeKind(C.TK_RAW)
+		cTypeName := C.CString("unknown")
+		cRepr := C.CString(fmt.Sprintf("%v", value))
+		C.trace_writer_register_return_raw(handle, cRepr, typeKind, cTypeName)
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 	}

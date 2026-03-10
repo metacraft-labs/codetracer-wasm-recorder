@@ -1,13 +1,13 @@
 name: Test
 on:
   pull_request:
-    branches: [main]
+    branches: [main, wasm-tracing]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'
       - 'netlify.toml'
   push:
-    branches: [main]
+    branches: [main, wasm-tracing]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'

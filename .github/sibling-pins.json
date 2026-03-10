@@ -1,5 +1,5 @@
 {
-  "codetracer": "latest-trace-format",
-  "codetracer-trace-format": "ffi-crate-and-format-fixes",
-  "trace_record": "master"
+  "codetracer": "679a39391d8b1bdbbde8a03c6ef83f6ff4e37752",
+  "codetracer-trace-format": "295a9acfaa8b4b84616a21e0165c3fec8b5848f7",
+  "trace_record": "b8a5a24619c8579e4d6de1074326e17526051d11"
 }

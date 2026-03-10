@@ -6,65 +6,140 @@ on:
   push:
     branches: [wasm-tracing, main]
 
-env:
-  GO_VERSION: "1.24"
+permissions:
+  contents: read
 
 jobs:
   tracewriter:
     name: Tracewriter tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, nixos]
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - name: Checkout wasm-recorder
+        uses: actions/checkout@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          path: codetracer-wasm-recorder
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Clone sibling repos
+      - name: Check required secrets
         run: |
-          PINS=".github/sibling-pins.json"
-          SIBLING_DIR="${GITHUB_WORKSPACE}/.."
+          TOKEN="${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}"
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::GH_READ_METACRAFT_PRIVATE_REPOS secret is not configured."
+            exit 1
+          fi
 
-          # Clone trace_record
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Configure Nix and Git authentication
+        run: |
+          mkdir -p $HOME/.config/nix
+          cat << EOF > "$HOME/.config/nix/nix.conf"
+            accept-flake-config = true
+            allow-import-from-derivation = true
+            substituters = https://cache.nixos.org ${{ vars.SUBSTITUTERS }}
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ vars.TRUSTED_PUBLIC_KEYS }}
+            access-tokens = github.com=${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          EOF
+
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        if: vars.CACHIX_CACHE != ''
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Resolve sibling refs
+        id: resolve-refs
+        run: |
+          PINS="codetracer-wasm-recorder/.github/sibling-pins.json"
+
+          CT_REF="main"
+          if [[ -f "$PINS" ]]; then
+            CT_REF=$(grep '"codetracer"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+            CT_REF="${CT_REF:-main}"
+          fi
+          echo "codetracer_ref=$CT_REF" >> "$GITHUB_OUTPUT"
+
           TR_REF="master"
           if [[ -f "$PINS" ]]; then
             TR_REF=$(grep '"trace_record"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
             TR_REF="${TR_REF:-master}"
           fi
-          echo "Cloning trace_record at ref: $TR_REF"
-          git clone https://github.com/metacraft-labs/trace_record.git "$SIBLING_DIR/trace_record"
-          cd "$SIBLING_DIR/trace_record" && git checkout "$TR_REF"
+          echo "trace_record_ref=$TR_REF" >> "$GITHUB_OUTPUT"
 
-          # Clone codetracer-trace-format
           TF_REF="main"
-          if [[ -f "$GITHUB_WORKSPACE/$PINS" ]]; then
-            TF_REF=$(grep '"codetracer-trace-format"' "$GITHUB_WORKSPACE/$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+          if [[ -f "$PINS" ]]; then
+            TF_REF=$(grep '"codetracer-trace-format"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
             TF_REF="${TF_REF:-main}"
           fi
-          echo "Cloning codetracer-trace-format at ref: $TF_REF"
-          git clone https://github.com/metacraft-labs/codetracer-trace-format.git "$SIBLING_DIR/codetracer-trace-format"
-          cd "$SIBLING_DIR/codetracer-trace-format" && git checkout "$TF_REF"
+          echo "trace_format_ref=$TF_REF" >> "$GITHUB_OUTPUT"
 
-      - name: Install capnproto
-        run: sudo apt-get install -y capnproto
+          echo "Resolved codetracer ref: $CT_REF"
+          echo "Resolved trace_record ref: $TR_REF"
+          echo "Resolved trace-format ref: $TF_REF"
 
-      - name: Build FFI library
+      - name: Clone codetracer
         run: |
-          cd "${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          cargo build -p codetracer_trace_writer_ffi --release
-          echo "FFI library built:"
-          ls -la target/release/libcodetracer_trace_writer_ffi.*
+          REF="${{ steps.resolve-refs.outputs.codetracer_ref }}"
+          echo "Cloning codetracer at ref: $REF"
 
-      - name: Install just
-        uses: extractions/setup-just@v2
+          rm -rf codetracer
+          git clone --recursive \
+            "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer.git" \
+            codetracer
+          cd codetracer
+          git checkout "$REF"
+          git submodule update --init --recursive
 
-      - name: Run tracewriter tests
-        env:
-          CGO_ENABLED: "1"
-          CGO_LDFLAGS: "-L${{ github.workspace }}/../codetracer-trace-format/target/release"
-          LD_LIBRARY_PATH: "${{ github.workspace }}/../codetracer-trace-format/target/release"
-        run: just test-tracewriter
+          sed -i 's|git@github.com:|https://github.com/|g' .gitmodules
+          sed -i 's|ssh://git@github.com/|https://github.com/|g' .gitmodules
+          git add .gitmodules
+          git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: rewrite submodule URLs to HTTPS" || true
+
+      - name: Clone trace_record
+        run: |
+          REF="${{ steps.resolve-refs.outputs.trace_record_ref }}"
+          echo "Cloning trace_record at ref: $REF"
+          rm -rf trace_record
+          git clone \
+            "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/trace_record.git" \
+            trace_record
+          cd trace_record
+          git checkout "$REF"
+
+      - name: Clone codetracer-trace-format
+        run: |
+          REF="${{ steps.resolve-refs.outputs.trace_format_ref }}"
+          echo "Cloning codetracer-trace-format at ref: $REF"
+          rm -rf codetracer-trace-format
+          git clone \
+            "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer-trace-format.git" \
+            codetracer-trace-format
+          cd codetracer-trace-format
+          git checkout "$REF"
+
+      - name: Build FFI library and run tracewriter tests
+        run: |
+          cd codetracer-wasm-recorder
+          nix develop ../codetracer?submodules=1 --command bash -c '
+            set -e
+
+            # Build the FFI library
+            cd ../codetracer-trace-format
+            cargo build -p codetracer_trace_writer_ffi --release
+            echo "FFI library built:"
+            ls -la target/release/libcodetracer_trace_writer_ffi.*
+            FFI_LIB_DIR="$(pwd)/target/release"
+
+            # Run tracewriter tests with CGO linking to the FFI library
+            cd ../codetracer-wasm-recorder
+            CGO_ENABLED=1 \
+            CGO_LDFLAGS="-L${FFI_LIB_DIR}" \
+            LD_LIBRARY_PATH="${FFI_LIB_DIR}" \
+              go test ./tracewriter/ -v
+          '

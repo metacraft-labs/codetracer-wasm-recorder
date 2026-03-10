@@ -67,22 +67,12 @@ jobs:
         id: resolve-refs
         run: |
           PINS="codetracer-wasm-recorder/.github/sibling-pins.json"
-          echo "Sibling pins file exists: $(test -f "$PINS" && echo yes || echo no)"
-          if [[ -f "$PINS" ]]; then
-            echo "Sibling pins content:"
-            cat "$PINS"
-          fi
 
           # Resolve codetracer ref
           if [[ -n "${{ github.event.inputs.codetracer_ref }}" ]]; then
             CT_REF="${{ github.event.inputs.codetracer_ref }}"
           elif [[ -f "$PINS" ]]; then
-            CT_REF=$(python3 -c "
-          import json
-          with open('$PINS') as f:
-              pins = json.load(f)
-          print(pins.get('codetracer', ''))
-          ")
+            CT_REF=$(grep '"codetracer"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
           fi
           CT_REF="${CT_REF:-main}"
           echo "codetracer_ref=$CT_REF" >> "$GITHUB_OUTPUT"
@@ -91,12 +81,7 @@ jobs:
           if [[ -n "${{ github.event.inputs.trace_record_ref }}" ]]; then
             TR_REF="${{ github.event.inputs.trace_record_ref }}"
           elif [[ -f "$PINS" ]]; then
-            TR_REF=$(python3 -c "
-          import json
-          with open('$PINS') as f:
-              pins = json.load(f)
-          print(pins.get('trace_record', ''))
-          ")
+            TR_REF=$(grep '"trace_record"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
           fi
           TR_REF="${TR_REF:-master}"
           echo "trace_record_ref=$TR_REF" >> "$GITHUB_OUTPUT"

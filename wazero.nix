@@ -9,7 +9,7 @@ pkgs.buildGoModule rec {
 
   subPackages = [ "cmd/wazero" ];
 
-  vendorHash = "sha256-zY+MVDZO80VWIhpgnzPklA/glIdO8bD5PlwuSMu502Q=";
+  vendorHash = null;
 
   # When the Rust FFI trace writer library is provided, enable cgo and link
   # against it. This makes the --use-rust-writer flag functional at runtime.

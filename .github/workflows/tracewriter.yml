@@ -129,6 +129,10 @@ jobs:
           nix develop ../codetracer?submodules=1 --command bash -c '
             set -e
 
+            # rustup override is directory-specific to codetracer workspace;
+            # set RUSTUP_TOOLCHAIN so cargo works from other directories too
+            export RUSTUP_TOOLCHAIN=1.89
+
             # Build the FFI library
             cd ../codetracer-trace-format
             cargo build -p codetracer_trace_writer_ffi --release

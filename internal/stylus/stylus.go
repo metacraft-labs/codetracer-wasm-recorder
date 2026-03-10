@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
-func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string, record *trace_record.TraceRecord) (*StylusTrace, error) {
+func Instantiate(ctx context.Context, r wazero.Runtime, stylusTracePath string, record tracewriter.TraceRecorder) (*StylusTrace, error) {
 	stylusTraceJson, err := os.ReadFile(stylusTracePath)
 	if err != nil {
 		return nil, err

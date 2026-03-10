@@ -28,6 +28,7 @@ import (
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 func main() {
@@ -218,6 +219,11 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&traceDir, "trace-dir", "",
 		"Directory where to save the trace record. If empty - no trace is produced. Default \"\".")
 
+	var useRustWriter bool
+	flags.BoolVar(&useRustWriter, "use-rust-writer", false,
+		"Use the Rust FFI trace writer instead of the Go trace writer. "+
+			"Requires the binary to be built with cgo and the codetracer_trace_writer_ffi library.")
+
 	cacheDir := cacheDirFlag(flags)
 
 	_ = flags.Parse(args)
@@ -336,15 +342,24 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	traceRecord := trace_record.MakeTraceRecord()
-	var traceRecordPtr *trace_record.TraceRecord
+	var recorder tracewriter.TraceRecorder
 	if traceDir != "" {
-		traceRecordPtr = &traceRecord
+		if useRustWriter {
+			rw, rwErr := tracewriter.NewRustTraceWriter()
+			if rwErr != nil {
+				fmt.Fprintf(stdErr, "error creating rust trace writer: %v\n", rwErr)
+				return 1
+			}
+			recorder = rw
+		} else {
+			goRecord := trace_record.MakeTraceRecord()
+			recorder = tracewriter.NewGoWriter(&goRecord)
+		}
 	}
 
 	var stylusState *stylus.StylusTrace
 	if stylusTracePath != "" {
-		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, traceRecordPtr)
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, recorder)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
 			return 1
@@ -366,7 +381,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 
 	var module api.Module
 	if err == nil {
-		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, traceRecordPtr)
+		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, recorder)
 	}
 
 	if err != nil {
@@ -375,7 +390,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
-			produceTrace(traceDir, wasmFile, traceRecord)
+			produceTrace(traceDir, wasmFile, recorder)
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
@@ -405,17 +420,17 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		// We're done, _start was called as part of instantiating the module.
 	}
 
-	produceTrace(traceDir, wasmFile, traceRecord)
+	produceTrace(traceDir, wasmFile, recorder)
 
 	return 0
 }
 
-func produceTrace(traceDir string, fileName string, traceRecord trace_record.TraceRecord) {
+func produceTrace(traceDir string, fileName string, recorder tracewriter.TraceRecorder) {
 
 	// TODO: Handle error
 	workDir, _ := os.Getwd()
-	if traceDir != "" {
-		err := traceRecord.ProduceTrace(traceDir, fileName, workDir)
+	if traceDir != "" && recorder != nil {
+		err := recorder.ProduceTrace(traceDir, fileName, workDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
 		}

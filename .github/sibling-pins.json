@@ -1,5 +1,5 @@
 {
   "codetracer": "latest-trace-format",
-  "codetracer-trace-format": "main",
+  "codetracer-trace-format": "ffi-crate-and-format-fixes",
   "trace_record": "master"
 }

@@ -27,6 +27,7 @@ jobs:
       - name: Clone sibling repos
         run: |
           PINS=".github/sibling-pins.json"
+          SIBLING_DIR="${GITHUB_WORKSPACE}/.."
 
           # Clone trace_record
           TR_REF="master"
@@ -35,22 +36,22 @@ jobs:
             TR_REF="${TR_REF:-master}"
           fi
           echo "Cloning trace_record at ref: $TR_REF"
-          git clone https://github.com/metacraft-labs/trace_record.git ../trace_record
-          cd ../trace_record && git checkout "$TR_REF" && cd ..
+          git clone https://github.com/metacraft-labs/trace_record.git "$SIBLING_DIR/trace_record"
+          cd "$SIBLING_DIR/trace_record" && git checkout "$TR_REF"
 
           # Clone codetracer-trace-format
           TF_REF="main"
-          if [[ -f "$PINS" ]]; then
-            TF_REF=$(grep '"codetracer-trace-format"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
+          if [[ -f "$GITHUB_WORKSPACE/$PINS" ]]; then
+            TF_REF=$(grep '"codetracer-trace-format"' "$GITHUB_WORKSPACE/$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
             TF_REF="${TF_REF:-main}"
           fi
           echo "Cloning codetracer-trace-format at ref: $TF_REF"
-          git clone https://github.com/metacraft-labs/codetracer-trace-format.git ../codetracer-trace-format
-          cd ../codetracer-trace-format && git checkout "$TF_REF"
+          git clone https://github.com/metacraft-labs/codetracer-trace-format.git "$SIBLING_DIR/codetracer-trace-format"
+          cd "$SIBLING_DIR/codetracer-trace-format" && git checkout "$TF_REF"
 
       - name: Build FFI library
         run: |
-          cd ../codetracer-trace-format
+          cd "${GITHUB_WORKSPACE}/../codetracer-trace-format"
           cargo build -p codetracer_trace_writer_ffi --release
           echo "FFI library built:"
           ls -la target/release/libcodetracer_trace_writer_ffi.*

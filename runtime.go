@@ -17,6 +17,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	binaryformat "github.com/tetratelabs/wazero/internal/wasm/binary"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 // Runtime allows embedding of WebAssembly modules.
@@ -124,7 +125,7 @@ type Runtime interface {
 	//     cancellation or deadline triggered before a start function returned.
 	InstantiateModule(ctx context.Context, compiled CompiledModule, config ModuleConfig) (api.Module, error)
 
-	InstantiateModuleWithRecord(ctx context.Context, compiled CompiledModule, config ModuleConfig, record *trace_record.TraceRecord) (api.Module, error)
+	InstantiateModuleWithRecord(ctx context.Context, compiled CompiledModule, config ModuleConfig, record tracewriter.TraceRecorder) (api.Module, error)
 
 	// CloseWithExitCode closes all the modules that have been initialized in this Runtime with the provided exit code.
 	// An error is returned if any module returns an error when closed.
@@ -319,7 +320,7 @@ func (r *runtime) InstantiateModuleWithRecord(
 	ctx context.Context,
 	compiled CompiledModule,
 	mConfig ModuleConfig,
-	traceRecord *trace_record.TraceRecord,
+	traceRecord tracewriter.TraceRecorder,
 ) (mod api.Module, err error) {
 	if err = r.failIfClosed(); err != nil {
 		return nil, err

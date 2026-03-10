@@ -16,6 +16,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/leb128"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 // nameToModuleShrinkThreshold is the size the nameToModule map can grow to
@@ -129,7 +130,7 @@ type (
 		// CloseNotifier is an experimental hook called once on close.
 		CloseNotifier experimental.CloseNotifier
 
-		Record *trace_record.TraceRecord
+		Record tracewriter.TraceRecorder
 
 		TypesIndex map[string]trace_record.TypeId
 

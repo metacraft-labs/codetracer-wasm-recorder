@@ -13,7 +13,8 @@ pkgs.buildGoModule rec {
 
   # When the Rust FFI trace writer library is provided, enable cgo and link
   # against it. This makes the --use-rust-writer flag functional at runtime.
-  CGO_ENABLED = if codetracer-trace-writer-ffi != null then "1" else "0";
+  # CGO_ENABLED goes in `env` to avoid conflicts with buildGoModule internals.
+  env.CGO_ENABLED = if codetracer-trace-writer-ffi != null then "1" else "0";
 
   buildInputs = pkgs.lib.optionals (codetracer-trace-writer-ffi != null) [
     codetracer-trace-writer-ffi

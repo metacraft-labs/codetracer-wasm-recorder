@@ -49,6 +49,9 @@ jobs:
           git clone https://github.com/metacraft-labs/codetracer-trace-format.git "$SIBLING_DIR/codetracer-trace-format"
           cd "$SIBLING_DIR/codetracer-trace-format" && git checkout "$TF_REF"
 
+      - name: Install capnproto
+        run: sudo apt-get install -y capnproto
+
       - name: Build FFI library
         run: |
           cd "${GITHUB_WORKSPACE}/../codetracer-trace-format"

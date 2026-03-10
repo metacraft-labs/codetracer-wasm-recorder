@@ -1,13 +1,13 @@
 name: Test
 on:
   pull_request:
-    branches: [main, wasm-tracing]
+    branches: [main]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'
       - 'netlify.toml'
   push:
-    branches: [main, wasm-tracing]
+    branches: [main]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'
@@ -275,20 +275,3 @@ jobs:
       # Run a bit longer on main branch push!
       - run: make fuzz fuzz_timeout_seconds=180
         if: ${{ github.event_name  == 'push' }}
-
-  tracewriter:
-    name: Tracewriter tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install just
-        uses: extractions/setup-just@v2
-
-      - name: Run tracewriter tests
-        run: just test-tracewriter

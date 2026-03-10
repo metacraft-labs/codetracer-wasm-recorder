@@ -43,7 +43,7 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 	str := ""
 
 	for i := 0; i < int(length); i++ {
-		data, _ := mem.Read(addr+uint32(i), 1)
+		data, _ := mem.Read(uint32(addr)+uint32(i), 1)
 		str += string(data[0])
 	}
 
@@ -110,7 +110,7 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	var addr uint32
 	if addrRecord, ok := fields[0].(trace_record.ReferenceValueRecord); ok {
-		addr = addrRecord.Address
+		addr = uint32(addrRecord.Address)
 	} else {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a slice")
 	}
@@ -145,7 +145,7 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	elems := make([]trace_record.ValueRecord, 0)
 	for i := uint32(0); i < length; i++ {
-		elemBytes, ok := mem.Read(addr+i*elemSize, elemSize)
+		elemBytes, ok := mem.Read(uint32(addr)+i*elemSize, elemSize)
 		if !ok {
 			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
 		}
@@ -251,7 +251,7 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 
 	elems := make([]trace_record.ValueRecord, 0)
 	for i := uint32(0); i < length; i++ {
-		elemBytes, ok := mem.Read(addr+i*elemSize, elemSize)
+		elemBytes, ok := mem.Read(uint32(addr)+i*elemSize, elemSize)
 		if !ok {
 			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
 		}

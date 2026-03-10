@@ -16,3 +16,5 @@ require (
 	github.com/metacraft-labs/trace_record v0.0.0-20250703085553-b8a5a24619c8
 	github.com/rdleal/intervalst v1.5.0
 )
+
+replace github.com/metacraft-labs/trace_record => ../trace_record

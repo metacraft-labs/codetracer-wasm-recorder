@@ -42,7 +42,15 @@ func doMain(stdOut io.Writer, stdErr logging.Writer) int {
 	var help bool
 	flag.BoolVar(&help, "h", false, "Prints usage.")
 
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Prints version.")
+
 	flag.Parse()
+
+	if showVersion {
+		fmt.Fprintln(stdOut, "wazero", version.GetWazeroVersion())
+		return 0
+	}
 
 	if help || flag.NArg() == 0 {
 		printUsage(stdErr)
@@ -215,9 +223,9 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
-	var traceDir string
-	flags.StringVar(&traceDir, "trace-dir", "",
-		"Directory where to save the trace record. If empty - no trace is produced. Default \"\".")
+	var outDir string
+	flags.StringVar(&outDir, "out-dir", "",
+		"Directory where to save the trace record. If empty - no trace is produced.")
 
 	var useRustWriter bool
 	flags.BoolVar(&useRustWriter, "use-rust-writer", false,
@@ -343,7 +351,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	var recorder tracewriter.TraceRecorder
-	if traceDir != "" {
+	if outDir != "" {
 		if useRustWriter {
 			rw, rwErr := tracewriter.NewRustTraceWriter()
 			if rwErr != nil {
@@ -390,7 +398,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
-			produceTrace(traceDir, wasmFile, recorder)
+			produceTrace(outDir, wasmFile, recorder)
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
@@ -420,17 +428,17 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		// We're done, _start was called as part of instantiating the module.
 	}
 
-	produceTrace(traceDir, wasmFile, recorder)
+	produceTrace(outDir, wasmFile, recorder)
 
 	return 0
 }
 
-func produceTrace(traceDir string, fileName string, recorder tracewriter.TraceRecorder) {
+func produceTrace(outDir string, fileName string, recorder tracewriter.TraceRecorder) {
 
 	// TODO: Handle error
 	workDir, _ := os.Getwd()
-	if traceDir != "" && recorder != nil {
-		err := recorder.ProduceTrace(traceDir, fileName, workDir)
+	if outDir != "" && recorder != nil {
+		err := recorder.ProduceTrace(outDir, fileName, workDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
 		}

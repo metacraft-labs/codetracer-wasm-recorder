@@ -2,6 +2,7 @@
   pkgs,
   self',
   inputs',
+  preCommit,
 }:
 let
   wasm-rust =
@@ -37,11 +38,12 @@ mkShell {
     just
 
     figlet
-  ];
+  ] ++ preCommit.enabledPackages;
 
   shellHook = ''
     export EM_CACHE=/tmp/emcc/
 
     figlet "Welcome to Codetracer WASM recorder!"
+    ${preCommit.shellHook}
   '';
 }

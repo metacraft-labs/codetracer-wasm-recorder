@@ -6,6 +6,7 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    pre-commit-hooks.url = "github:cachix/git-hooks.nix";
   };
 
   outputs =
@@ -17,13 +18,27 @@
           pkgs,
           inputs',
           self',
+          system,
           ...
         }:
+        let
+          preCommit = inputs.pre-commit-hooks.lib.${system}.run {
+            src = ./.;
+            hooks = {
+              lint = {
+                enable = true;
+                name = "Lint";
+                entry = "just lint";
+                language = "system";
+                pass_filenames = false;
+              };
+            };
+          };
+        in
         {
-
-          devShells.default = import ./shell.nix { inherit pkgs self' inputs'; };
+          checks.pre-commit-check = preCommit;
+          devShells.default = import ./shell.nix { inherit pkgs self' inputs' preCommit; };
           packages.default = import ./wazero.nix { inherit pkgs; };
-
         };
     };
 }

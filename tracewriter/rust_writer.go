@@ -445,7 +445,7 @@ func (w *RustTraceWriter) replayValueRecord(handle *C.struct_TraceWriterHandle, 
 		C.free(unsafe.Pointer(cRepr))
 
 	case trace_record.NilValueRecord:
-		typeKind := C.enum_FfiTypeKind(C.TK_NONE)
+		typeKind := C.enum_Tk(C.TK_NONE)
 		cTypeName := C.CString("None")
 		cRepr := C.CString("None")
 		C.trace_writer_register_variable_raw(handle, cName, cRepr, typeKind, cTypeName)
@@ -501,7 +501,7 @@ func (w *RustTraceWriter) replayValueRecord(handle *C.struct_TraceWriterHandle, 
 
 	default:
 		// Unknown value type, register as raw
-		typeKind := C.enum_FfiTypeKind(C.TK_RAW)
+		typeKind := C.enum_Tk(C.TK_RAW)
 		cTypeName := C.CString("unknown")
 		cRepr := C.CString(fmt.Sprintf("%v", value))
 		C.trace_writer_register_variable_raw(handle, cName, cRepr, typeKind, cTypeName)
@@ -557,7 +557,7 @@ func (w *RustTraceWriter) replayReturnValue(handle *C.struct_TraceWriterHandle, 
 		C.free(unsafe.Pointer(cRepr))
 
 	default:
-		typeKind := C.enum_FfiTypeKind(C.TK_RAW)
+		typeKind := C.enum_Tk(C.TK_RAW)
 		cTypeName := C.CString("unknown")
 		cRepr := C.CString(fmt.Sprintf("%v", value))
 		C.trace_writer_register_return_raw(handle, cRepr, typeKind, cTypeName)
@@ -575,15 +575,15 @@ func (w *RustTraceWriter) variableNameById(id trace_record.VariableId) string {
 }
 
 // goTypeKindToFfi converts a trace_record.TypeKind to the FFI FfiTypeKind enum.
-func goTypeKindToFfi(kind trace_record.TypeKind) C.enum_FfiTypeKind {
+func goTypeKindToFfi(kind trace_record.TypeKind) C.enum_Tk {
 	// The integer values match between Go and Rust enums.
-	return C.enum_FfiTypeKind(kind)
+	return C.enum_Tk(kind)
 }
 
 // goRecordEventKindToFfi converts a trace_record.RecordEventKind to the FFI FfiEventLogKind enum.
-func goRecordEventKindToFfi(kind trace_record.RecordEventKind) C.enum_FfiEventLogKind {
+func goRecordEventKindToFfi(kind trace_record.RecordEventKind) C.enum_Elk {
 	// The integer values match between Go and Rust enums.
-	return C.enum_FfiEventLogKind(kind)
+	return C.enum_Elk(kind)
 }
 
 // Compile-time check that RustTraceWriter implements TraceRecorder.

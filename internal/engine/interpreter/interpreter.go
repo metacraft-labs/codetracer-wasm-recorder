@@ -817,7 +817,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 				lineRecord := lineRecords[0]
 
-				if false || (strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo")) {
+				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
 					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
 
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {

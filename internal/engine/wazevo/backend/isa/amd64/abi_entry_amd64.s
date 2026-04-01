@@ -4,10 +4,10 @@
 // entrypoint(preambleExecutable, functionExecutable *byte, executionContextPtr uintptr, moduleContextPtr *byte, paramResultPtr *uint64, goAllocatedStackSlicePtr uintptr
 TEXT ·entrypoint(SB), NOSPLIT|NOFRAME, $0-48
 	MOVQ preambleExecutable+0(FP), R11
-	MOVQ functionExectuable+8(FP), R14
+	MOVQ functionExecutable+8(FP), R14
 	MOVQ executionContextPtr+16(FP), AX       // First argument is passed in AX.
 	MOVQ moduleContextPtr+24(FP), BX          // Second argument is passed in BX.
-	MOVQ paramResultSlicePtr+32(FP), R12
+	MOVQ paramResultPtr+32(FP), R12
 	MOVQ goAllocatedStackSlicePtr+40(FP), R13
 	JMP  R11
 

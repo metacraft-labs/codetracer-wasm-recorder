@@ -22,7 +22,7 @@ test-tracewriter:
 
 # Lint Go code
 lint-go:
-    go vet ./...
+    go vet -stdmethods=false ./...
 
 # Lint Nix files
 lint-nix:
@@ -42,5 +42,13 @@ format-nix:
 # Format all code
 format: format-go format-nix
 
-# Run all local checks
+# Run all local checks (lint + tracewriter tests with FFI)
 check-all: lint test-tracewriter
+
+# Verify the Nix flake builds successfully
+nix-build:
+    nix build .#default
+
+# Run cross-repo integration tests against sibling codetracer repo
+cross-test *ARGS:
+    bash scripts/run-cross-repo-tests.sh {{ ARGS }}

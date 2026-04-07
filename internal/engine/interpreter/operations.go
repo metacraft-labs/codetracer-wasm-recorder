@@ -857,6 +857,7 @@ type unionOperation struct {
 	U1, U2 uint64
 	U3     uint64
 	Us     []uint64
+	offsetInCodeSection uint64
 }
 
 // String implements fmt.Stringer.
@@ -1243,8 +1244,8 @@ func newOperationPick(depth int, isTargetVector bool) unionOperation {
 //
 // depth is the location of the set target in the uint64 value stack at runtime.
 // If isTargetVector=true, this points the location of the lower 64-bits of the vector.
-func newOperationSet(depth int, isTargetVector bool) unionOperation {
-	return unionOperation{Kind: operationKindSet, U1: uint64(depth), B3: isTargetVector}
+func newOperationSet(depth int, localIndex uint32, isTargetVector bool) unionOperation {
+	return unionOperation{Kind: operationKindSet, U1: uint64(depth), U2: uint64(localIndex), B3: isTargetVector}
 }
 
 // NewOperationGlobalGet is a constructor for unionOperation with operationKindGlobalGet.

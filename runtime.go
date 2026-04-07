@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	experimentalapi "github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/engine/interpreter"
@@ -16,6 +17,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	binaryformat "github.com/tetratelabs/wazero/internal/wasm/binary"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 // Runtime allows embedding of WebAssembly modules.
@@ -122,6 +124,8 @@ type Runtime interface {
 	//   - RuntimeConfig.WithCloseOnContextDone was enabled and a context
 	//     cancellation or deadline triggered before a start function returned.
 	InstantiateModule(ctx context.Context, compiled CompiledModule, config ModuleConfig) (api.Module, error)
+
+	InstantiateModuleWithRecord(ctx context.Context, compiled CompiledModule, config ModuleConfig, record tracewriter.TraceRecorder) (api.Module, error)
 
 	// CloseWithExitCode closes all the modules that have been initialized in this Runtime with the provided exit code.
 	// An error is returned if any module returns an error when closed.
@@ -309,6 +313,15 @@ func (r *runtime) InstantiateModule(
 	compiled CompiledModule,
 	mConfig ModuleConfig,
 ) (mod api.Module, err error) {
+	return r.InstantiateModuleWithRecord(ctx, compiled, mConfig, nil)
+}
+
+func (r *runtime) InstantiateModuleWithRecord(
+	ctx context.Context,
+	compiled CompiledModule,
+	mConfig ModuleConfig,
+	traceRecord tracewriter.TraceRecorder,
+) (mod api.Module, err error) {
 	if err = r.failIfClosed(); err != nil {
 		return nil, err
 	}
@@ -334,7 +347,7 @@ func (r *runtime) InstantiateModule(
 	}
 
 	// Instantiate the module.
-	mod, err = r.store.Instantiate(ctx, code.module, name, sysCtx, code.typeIDs)
+	moduleInstance, err := r.store.Instantiate(ctx, code.module, name, sysCtx, code.typeIDs)
 	if err != nil {
 		// If there was an error, don't leak the compiled module.
 		if code.closeWithModule {
@@ -342,6 +355,10 @@ func (r *runtime) InstantiateModule(
 		}
 		return nil, err
 	}
+
+	moduleInstance.Record = traceRecord
+	moduleInstance.TypesIndex = make(map[string]trace_record.TypeId)
+	mod = moduleInstance
 
 	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {
 		mod.(*wasm.ModuleInstance).CloseNotifier = closeNotifier

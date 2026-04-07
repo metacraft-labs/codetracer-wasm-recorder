@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -22,9 +24,11 @@ import (
 	"github.com/tetratelabs/wazero/experimental/sock"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/internal/stylus"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 func main() {
@@ -38,7 +42,15 @@ func doMain(stdOut io.Writer, stdErr logging.Writer) int {
 	var help bool
 	flag.BoolVar(&help, "h", false, "Prints usage.")
 
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Prints version.")
+
 	flag.Parse()
+
+	if showVersion {
+		fmt.Fprintln(stdOut, "wazero", version.GetWazeroVersion())
+		return 0
+	}
 
 	if help || flag.NArg() == 0 {
 		printUsage(stdErr)
@@ -156,7 +168,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.BoolVar(&help, "h", false, "Prints usage.")
 
 	var useInterpreter bool
-	flags.BoolVar(&useInterpreter, "interpreter", false,
+	flags.BoolVar(&useInterpreter, "interpreter", true,
 		"Interprets WebAssembly modules instead of compiling them into native code.")
 
 	var envs sliceFlag
@@ -206,6 +218,20 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			"Enables memory profiling and writes the profile at the given path.")
 	}
 
+	// TODO: maybe better usage description?
+	var stylusTracePath string
+	flags.StringVar(&stylusTracePath, "stylus", "",
+		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
+
+	var outDir string
+	flags.StringVar(&outDir, "out-dir", "",
+		"Directory where to save the trace record. If empty - no trace is produced.")
+
+	var useRustWriter bool
+	flags.BoolVar(&useRustWriter, "use-rust-writer", false,
+		"Use the Rust FFI trace writer instead of the Go trace writer. "+
+			"Requires the binary to be built with cgo and the codetracer_trace_writer_ffi library.")
+
 	cacheDir := cacheDirFlag(flags)
 
 	_ = flags.Parse(args)
@@ -231,6 +257,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	wasmPath := flags.Arg(0)
+	wasmFile := path.Base(wasmPath)
 	wasmArgs := flags.Args()[1:]
 	if len(wasmArgs) > 1 {
 		// Skip "--" if provided
@@ -323,22 +350,46 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	var recorder tracewriter.TraceRecorder
+	if outDir != "" {
+		if useRustWriter {
+			rw, rwErr := tracewriter.NewRustTraceWriter()
+			if rwErr != nil {
+				fmt.Fprintf(stdErr, "error creating rust trace writer: %v\n", rwErr)
+				return 1
+			}
+			recorder = rw
+		} else {
+			goRecord := trace_record.MakeTraceRecord()
+			recorder = tracewriter.NewGoWriter(&goRecord)
+		}
+	}
+
+	var stylusState *stylus.StylusTrace
+	if stylusTracePath != "" {
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, recorder)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
+			return 1
+		}
+		conf = conf.WithStartFunctions()
+	}
+
+	// TODO: detect if the stylus functions are present and show error if there is no stylus trace file
 	switch detectImports(guest.ImportedFunctions()) {
 	case modeWasi:
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-		_, err = rt.InstantiateModule(ctx, guest, conf)
 	case modeWasiUnstable:
 		// Instantiate the current WASI functions under the wasi_unstable
 		// instead of wasi_snapshot_preview1.
 		wasiBuilder := rt.NewHostModuleBuilder("wasi_unstable")
 		wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(wasiBuilder)
 		_, err = wasiBuilder.Instantiate(ctx)
-		if err == nil {
-			// Instantiate our binary, but using the old import names.
-			_, err = rt.InstantiateModule(ctx, guest, conf)
-		}
-	case modeDefault:
-		_, err = rt.InstantiateModule(ctx, guest, conf)
+	}
+
+	var module api.Module
+	if err == nil {
+		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, recorder)
 	}
 
 	if err != nil {
@@ -347,14 +398,51 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
+			produceTrace(outDir, wasmFile, recorder)
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
 		return 1
 	}
 
-	// We're done, _start was called as part of instantiating the module.
+	if stylusTracePath != "" {
+		arg, err := stylusState.GetEntrypointArg()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)
+		}
+
+		res, err := module.ExportedFunction("user_entrypoint").Call(ctx, arg)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error executing stylus entrypoint: %v\n", err)
+		}
+
+		retval, err := stylusState.GetReturnedValue()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus user returned result: %v\n", err)
+		}
+
+		if len(res) != 1 || res[0] != retval {
+			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
+		}
+	} else {
+		// We're done, _start was called as part of instantiating the module.
+	}
+
+	produceTrace(outDir, wasmFile, recorder)
+
 	return 0
+}
+
+func produceTrace(outDir string, fileName string, recorder tracewriter.TraceRecorder) {
+
+	// TODO: Handle error
+	workDir, _ := os.Getwd()
+	if outDir != "" && recorder != nil {
+		err := recorder.ProduceTrace(outDir, fileName, workDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
+		}
+	}
 }
 
 func validateMounts(mounts sliceFlag, stdErr logging.Writer) (rc int, rootPath string, config wazero.FSConfig) {

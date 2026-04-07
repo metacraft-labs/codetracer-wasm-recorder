@@ -322,6 +322,7 @@ func newCompiler(enabledFeatures api.CoreFeatures, callFrameStackSizeInUint64 in
 			wasmTypes:     types,
 		},
 		needSourceOffset: module.DWARFLines != nil,
+		// needSourceOffset: true,
 	}
 	return c, nil
 }
@@ -866,13 +867,13 @@ operatorSwitch:
 			c.emit(
 				// +2 because we already popped the operands for this operation from the c.stack before
 				// called localDepth ^^,
-				newOperationSet(depth+2, isVector),
+				newOperationSet(depth+2, index, isVector),
 			)
 		} else {
 			c.emit(
 				// +1 because we already popped the operands for this operation from the c.stack before
 				// called localDepth ^^,
-				newOperationSet(depth+1, isVector),
+				newOperationSet(depth+1, index, isVector),
 			)
 		}
 	case wasm.OpcodeLocalTee:
@@ -880,11 +881,11 @@ operatorSwitch:
 		isVector := c.localType(index) == wasm.ValueTypeV128
 		if isVector {
 			c.emit(newOperationPick(1, isVector))
-			c.emit(newOperationSet(depth+2, isVector))
+			c.emit(newOperationSet(depth+2, index, isVector))
 		} else {
 			c.emit(
 				newOperationPick(0, isVector))
-			c.emit(newOperationSet(depth+1, isVector))
+			c.emit(newOperationSet(depth+1, index, isVector))
 		}
 	case wasm.OpcodeGlobalGet:
 		c.emit(

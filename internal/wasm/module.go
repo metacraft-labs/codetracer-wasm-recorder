@@ -3,6 +3,7 @@ package wasm
 import (
 	"bytes"
 	"crypto/sha256"
+	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -185,6 +186,9 @@ type Module struct {
 	// as described in https://yurydelendik.github.io/webassembly-dwarf/, though it is not specified in the Wasm
 	// specification: https://github.com/WebAssembly/debugging/issues/1
 	DWARFLines *wasmdebug.DWARFLines
+
+	DWARFData *dwarf.Data
+	PCRecord  wasmdebug.PCRecord
 }
 
 // ModuleID represents sha256 hash value uniquely assigned to Module.

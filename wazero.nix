@@ -1,4 +1,8 @@
-{ pkgs, codetracer-trace-writer-ffi ? null, ... }:
+{
+  pkgs,
+  codetracer-trace-writer-ffi ? null,
+  ...
+}:
 pkgs.buildGoModule rec {
   name = "wazero";
   pname = name;

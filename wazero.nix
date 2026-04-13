@@ -27,6 +27,6 @@ pkgs.buildGoModule rec {
   # Point cgo at the FFI library's include and lib directories.
   preBuild = pkgs.lib.optionalString (codetracer-trace-writer-ffi != null) ''
     export CGO_CFLAGS="-I${codetracer-trace-writer-ffi}/include"
-    export CGO_LDFLAGS="-L${codetracer-trace-writer-ffi}/lib -lcodetracer_trace_writer_ffi -ldl -lm -lpthread"
+    export CGO_LDFLAGS="-L${codetracer-trace-writer-ffi}/lib -lcodetracer_trace_writer_ffi -ldl -lm -lpthread -Wl,-rpath,${codetracer-trace-writer-ffi}/lib"
   '';
 }

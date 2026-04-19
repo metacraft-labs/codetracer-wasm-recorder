@@ -18,6 +18,7 @@ import (
 	v1 "github.com/tetratelabs/wazero/internal/integration_test/spectest/v1"
 	"github.com/tetratelabs/wazero/internal/platform"
 	"github.com/tetratelabs/wazero/internal/testing/binaryencoding"
+	"github.com/tetratelabs/wazero/internal/testing/maintester"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
@@ -64,7 +65,10 @@ func testSpecTestCompilerCache(t *testing.T, config wazero.RuntimeConfig) {
 		for i := 0; i < 2; i++ {
 			cmd := exec.Command(testExecutable)
 			cmd.Args = append(cmd.Args, fmt.Sprintf("-test.run=%s", t.Name()))
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", cachePathKey, cacheDir))
+			// Inherit the parent environment so that LD_LIBRARY_PATH and other
+			// necessary variables (e.g. for finding libcodetracer_trace_writer_ffi.so)
+			// are available in the subprocess.
+			cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", cachePathKey, cacheDir))
 			cmd.Stdout = buf
 			cmd.Stderr = buf
 			err = cmd.Run()
@@ -73,7 +77,8 @@ func testSpecTestCompilerCache(t *testing.T, config wazero.RuntimeConfig) {
 		}
 
 		// Ensures that the tests actually run 2 times.
-		require.Equal(t, strings.Join(exp, ""), buf.String())
+		sanitizedOutput := maintester.StripKnownDWARFWarnings(buf.String())
+		require.Equal(t, strings.Join(exp, ""), sanitizedOutput)
 
 		// Check the number of cache files is greater than zero.
 		files, err = os.ReadDir(cacheDir)

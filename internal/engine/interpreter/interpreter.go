@@ -2,14 +2,20 @@ package interpreter
 
 import (
 	"context"
+	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
+	"strings"
 	"sync"
 	"unsafe"
 
+	// Dwarf
+
+	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/expctxkeys"
@@ -582,6 +588,9 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
+			if m.Record != nil {
+				m.Record.RegisterRecordEvent(trace_record.EventKindError, "runtime error", "runtime error")
+			}
 			err = ce.recoverOnCall(ctx, m, v)
 		}
 	}()
@@ -695,6 +704,22 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+func ensureSize[T any](s []T, index int) []T {
+
+	if index < len(s) {
+		return s
+	}
+
+	x := math.Log2(float64(index))
+
+	newSize := math.Pow(2, x+1)
+
+	newSlice := make([]T, int(newSize))
+	copy(newSlice, s)
+
+	return newSlice
+}
+
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -708,8 +733,149 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.pushFrame(frame)
 	body := frame.f.parent.body
 	bodyLen := uint64(len(body))
+
+	// TODO: Figure out a way to resolve how many local variables we need
+	locals := make([]uint64, 1024)
+
+	var (
+		initialOffset  uint64
+		functionRecord wasmdebug.FunctionRecord
+		hasSource      bool
+	)
+
+	if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) && frame.f.parent.source != nil {
+		initialOffset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+		// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
+		functionRecord, _ = frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+		hasSource = true
+	}
+
+	tracking_call := hasSource && m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
+		!strings.HasPrefix(functionRecord.FileName, "/rustc") &&
+		!strings.Contains(functionRecord.FileName, ".rustup") &&
+		!strings.Contains(functionRecord.FileName, ".cargo") &&
+		!strings.Contains(functionRecord.FileName, "/rust/deps"))
+
+	// tracking_call = true
+
+	var currLine wasmdebug.LineRecord
+
+	// Cache active inline entries to avoid duplicate trace events
+	// while the program counter remains within their range. The
+	// value tracks the end of the inline region, so we can remove
+	// the entry once execution exits it.
+
+	loggedCall := false
+
+	paramCount := 0
+	var functionParams []uint64
+	if frame.f.funcType != nil {
+		paramCount = len(frame.f.funcType.Params)
+	}
+	if paramCount > 0 {
+		functionParams = ce.stack[len(ce.stack)-paramCount:]
+
+		// NOTE: IDK if this is 100$% correct. Seems that the params and the locals share namespace
+		//       and the rust complier tells that the params are stored as local variables.
+		//       So we copy the params on the stack in the locals array in order to fix this. 😵‍💫
+		copy(locals, functionParams)
+	}
+
+	stack := NewStack[wasmdebug.InlineRecord]()
+
 	for frame.pc < bodyLen {
+		var offset uint64
+		if tracking_call {
+			if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) {
+				offset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+			} else {
+				tracking_call = false
+			}
+		}
+
+		if m.Record != nil && tracking_call {
+
+			index := frame.f.parent.source.PCRecord
+
+			lineRecords, _ := index.Line.AllIntersections(offset, offset)
+
+			// Look up any inline entries at the current offset.
+			inlinedEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+
+			for stack.Len() > 0 {
+
+				if ie, ok := stack.Peek(); ok && ie.HighPC <= offset {
+					m.Record.RegisterReturn(trace_record.NilValue())
+					stack.Pop()
+				} else {
+					break
+				}
+
+			}
+
+			if len(lineRecords) == 1 {
+
+				lineRecord := lineRecords[0]
+
+				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
+					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
+
+						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
+							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
+						}
+
+						if loggedCall {
+
+							if len(inlinedEntries) > 0 {
+								for _, entry := range inlinedEntries {
+									for _, v := range entry {
+										if offset == v.LowPC {
+
+											// For some reason inlines can start at the instruction before it's actual invocation, so we trace locals
+											// traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+
+											if stack.Len() == 0 {
+												traceInlineEntry(m, v, functionRecord, locals, offset, &functionRecord.Locals)
+											} else {
+
+												if elem, ok := stack.Peek(); ok {
+													traceInlineEntry(m, v, functionRecord, locals, offset, &elem.Locals)
+												}
+
+											}
+
+											stack.Push(v)
+										}
+									}
+								}
+							}
+
+							currLine = lineRecord
+							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+
+							// Offset does not matter, function parameters come without information about their lexical scope
+
+							if stack.Len() > 0 {
+								//TODO: log inlined function variables
+								inlineRecord, _ := stack.Peek()
+
+								traceCurrentLocals(&inlineRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&inlineRecord.Params, offset, m, &functionRecord, locals)
+
+							} else {
+								traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&functionRecord.Params, offset, m, &functionRecord, locals)
+							}
+
+						}
+
+					}
+				}
+			}
+		}
+
 		op := &body[frame.pc]
+
 		// TODO: add description of each operation/case
 		// on, for example, how many args are used,
 		// how the stack is modified, etc.
@@ -810,8 +976,16 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				hi, lo := ce.popValue(), ce.popValue()
 				ce.stack[lowIndex], ce.stack[highIndex] = lo, hi
 			} else {
+				// funcIndex := f.parent.index;
 				index := len(ce.stack) - 1 - int(op.U1)
-				ce.stack[index] = ce.popValue()
+				value := ce.popValue()
+				ce.stack[index] = value
+
+				localIndex := int(op.U2)
+
+				locals = ensureSize(locals, localIndex)
+				locals[localIndex] = value
+
 			}
 			frame.pc++
 		case operationKindGlobalGet:
@@ -4341,6 +4515,148 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		}
 	}
 	ce.popFrame()
+
+	if m.Record != nil && tracking_call {
+		traceFunctionEntry(m, &loggedCall, functionRecord, locals)
+
+		traceReturnType(functionRecord, m, ce, &functionParams)
+	}
+
+}
+
+func traceReturnType(functionRecord wasmdebug.FunctionRecord,
+	m *wasm.ModuleInstance, ce *callEngine, functionParams *[]uint64) {
+
+	if functionRecord.ReturnType == nil {
+		typeName := "void"
+		_, seen := m.TypesIndex[typeName]
+
+		if !seen {
+			m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+			typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+			m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+		}
+
+		m.Record.RegisterReturn(trace_record.NilValue())
+	} else {
+		rawValue := ce.stack[len(ce.stack)-1]
+		rvSize := (*functionRecord.ReturnType).Size()
+
+		var value trace_record.ValueRecord
+		if rvSize <= 8 {
+
+			rawBytes := make([]byte, 8)
+			binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+			// TODO: handle errors
+			value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+		} else {
+
+			switch rt := (*functionRecord.ReturnType).(type) {
+			case *dwarf.StructType:
+				// TODO: This is broken 🥹. Must fix.
+				// EDIT: It works now 🙂
+
+				// TODO: Singleton structures are on the stack, handle them separately
+				// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.ByteSize))
+				if !ok {
+					panic("Failed to read return value")
+				}
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			case *dwarf.ArrayType:
+
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.Size()))
+				if !ok {
+					panic("Failed to read Array return value")
+				}
+
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+
+			default:
+
+				// 16 147
+				// TODO: Should this be rvSize ?
+				rawBytes := make([]byte, 8)
+				binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+				// TODO: handle errors
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			}
+		}
+
+		m.Record.RegisterReturn(value)
+	}
+}
+
+func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
+	if *loggedCall {
+		return
+	}
+
+	*loggedCall = true
+
+	args := make([]trace_record.FullValueRecord, 0)
+
+	for _, argRec := range functionRecord.Params {
+		val, err := readVariable(m, argRec, functionRecord, locals)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Can't read function argument %s: %v\n", argRec.Name, err)
+		} else {
+			args = append(args, m.Record.Arg(argRec.Name, val))
+		}
+	}
+
+	if m.Record.CurrentCallsCount() > 0 {
+		m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+	}
+	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+}
+
+func inlineKey(rec wasmdebug.InlineRecord) string {
+	return fmt.Sprintf("%s|%s|%d|%s|%d|%d",
+		rec.Name, rec.FileName, rec.Line,
+		rec.CallFileName, rec.CallLine, rec.CallColumn)
+}
+
+func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
+	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64) {
+
+	for _, v := range *localRecords {
+		if v.LowPC <= offset && offset <= v.HighPC {
+			val, err := readVariable(m, v, *functionRecord, locals)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+			} else {
+				m.Record.RegisterVariable(v.Name, val)
+			}
+		}
+	}
+
+}
+
+func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {
+	args := make([]trace_record.FullValueRecord, 0)
+	for _, argRec := range rec.Params {
+		val, err := readVariable(m, argRec, functionRecord, locals)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Can't read inline argument %s: %v\n", argRec.Name, err)
+		} else {
+			args = append(args, m.Record.Arg(argRec.Name, val))
+		}
+	}
+
+	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
+	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
+
+	// assuming that this can't be the first recorded function, as there are steps up as well
+	// and usually the main/entry function is not inlined
+	// otherwise this will produce a wrong recording for now, as we currently assume
+	// we produce a call event before the first step I think (alexander)
+	// TODO: maybe an assert that `m.Record.CurrentCallsCount() > 0` ?
+	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
+	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

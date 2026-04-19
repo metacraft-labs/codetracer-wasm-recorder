@@ -1,0 +1,198 @@
+# Cross-Repo Integration Tests
+#
+# PURPOSE:
+# Builds the wazero binary from this repository and runs the WASM flow
+# integration tests defined in the sibling codetracer repo
+# (metacraft-labs/codetracer). This validates that changes to the
+# wasm-recorder do not break the CodeTracer WASM debugging flow.
+#
+# WORKSPACE LAYOUT:
+# The cross-repo test script expects both repositories side-by-side:
+#
+#   $GITHUB_WORKSPACE/../
+#     codetracer/                  <-- cloned by this workflow
+#     codetracer-wasm-recorder/    <-- checked out by actions/checkout
+#     codetracer-trace-format/     <-- cloned for FFI library
+#
+# POLICY: All CI steps should be reproducible locally via `just` targets.
+# Local equivalent:
+#   just cross-test
+#
+# Codetracer revision pinning:
+#   Priority cascade for resolving the codetracer ref:
+#     1. workflow_dispatch input `codetracer_ref` (manual override)
+#     2. repository_dispatch `client_payload.codetracer_ref` (bidirectional)
+#     3. `.github/sibling-pins` (lock file)
+#     4. Fallback to `main`
+
+name: Cross-Repo Integration Tests
+
+on:
+  pull_request:
+    branches: [wasm-tracing, main]
+  push:
+    branches: [wasm-tracing, main]
+
+  # Manual trigger with configurable codetracer revision.
+  workflow_dispatch:
+    inputs:
+      codetracer_ref:
+        description: 'Git ref (branch/tag/SHA) of the codetracer repo to test against'
+        required: false
+        default: 'main'
+
+  # Bidirectional trigger: the codetracer repo can dispatch this event when
+  # WASM-related files change (e.g. db-backend WASM flow support).
+  #
+  # Expected payload:
+  #   {
+  #     "event_type": "cross-repo-test",
+  #     "client_payload": {
+  #       "codetracer_ref": "<git-ref-or-sha>",
+  #       "triggered_by": "codetracer PR #123"
+  #     }
+  #   }
+  repository_dispatch:
+    types: [cross-repo-test]
+
+permissions:
+  contents: read
+
+jobs:
+  cross-repo-tests:
+    runs-on: [self-hosted, nixos]
+    # Cross-repo tests need access to private repos, which requires the
+    # GH_READ_METACRAFT_PRIVATE_REPOS secret. Skip gracefully on forks.
+    if: ${{ github.event_name == 'repository_dispatch' || github.repository == 'metacraft-labs/codetracer-wasm-recorder' }}
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout this repository (codetracer-wasm-recorder)
+      # ------------------------------------------------------------------
+      - name: Checkout codetracer-wasm-recorder
+        uses: actions/checkout@v5
+
+      - name: Check required secrets
+        run: |
+          TOKEN="${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::GH_READ_METACRAFT_PRIVATE_REPOS secret is not configured."
+            echo "::error::This secret is required for cross-repo tests (private sibling repos)."
+            echo "::error::Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------
+      # 2. Set up Nix and Git authentication
+      # ------------------------------------------------------------------
+      - name: Setup Nix and Git authentication
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
+        with:
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          cachix-cache: ${{ vars.CACHIX_CACHE }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+
+      # ------------------------------------------------------------------
+      # 3. Resolve sibling refs using priority cascade
+      # ------------------------------------------------------------------
+      - name: Resolve sibling refs
+        id: resolve-ref
+        run: |
+          PINS=".github/sibling-pins"
+
+          # --- Resolve codetracer ref ---
+          # 1. workflow_dispatch input (manual trigger)
+          DISPATCH_REF="${{ github.event.inputs.codetracer_ref }}"
+          if [ -n "${DISPATCH_REF}" ] && [ "${DISPATCH_REF}" != "main" ]; then
+            CT_REF="${DISPATCH_REF}"
+            echo "Resolved codetracer ref from workflow_dispatch: ${CT_REF}"
+          # 2. repository_dispatch payload (bidirectional trigger)
+          elif [ -n "${{ github.event.client_payload.codetracer_ref }}" ]; then
+            CT_REF="${{ github.event.client_payload.codetracer_ref }}"
+            TRIGGERED_BY="${{ github.event.client_payload.triggered_by }}"
+            echo "Resolved codetracer ref from repository_dispatch: ${CT_REF}"
+            echo "  (triggered by: ${TRIGGERED_BY:-unknown})"
+          # 3. sibling-pins
+          elif [ -f "$PINS" ]; then
+            CT_REF="$(grep '^codetracer ' "$PINS" | cut -d' ' -f2)" || true
+            echo "Resolved codetracer ref from sibling-pins: ${CT_REF:-main}"
+          fi
+          # 4. Fallback
+          CT_REF="${CT_REF:-main}"
+          echo "codetracer_ref=$CT_REF" >> "$GITHUB_OUTPUT"
+
+          # --- Resolve codetracer-trace-format ref ---
+          if [ -f "$PINS" ]; then
+            TF_REF="$(grep '^codetracer-trace-format ' "$PINS" | cut -d' ' -f2)" || true
+          fi
+          TF_REF="${TF_REF:-main}"
+          echo "trace_format_ref=$TF_REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved trace-format ref: $TF_REF"
+
+      # ------------------------------------------------------------------
+      # 4. Clone sibling repositories
+      # ------------------------------------------------------------------
+      - name: Clone codetracer
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer
+          ref: ${{ steps.resolve-ref.outputs.codetracer_ref }}
+          path: ${{ github.workspace }}/../codetracer
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          submodules: 'true'
+
+      - name: Clone codetracer-trace-format
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-trace-format
+          ref: ${{ steps.resolve-ref.outputs.trace_format_ref }}
+          path: ${{ github.workspace }}/../codetracer-trace-format
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+
+      # ------------------------------------------------------------------
+      # 5. Build wazero binary
+      # ------------------------------------------------------------------
+      - name: Build wazero
+        run: |
+          nix develop ../codetracer?submodules=1 --command bash -c '
+            go build -o wazero ./cmd/wazero
+            echo "Built wazero: $(./wazero version 2>/dev/null || echo unknown)"
+          '
+
+      # ------------------------------------------------------------------
+      # 6. Run WASM flow integration tests in the codetracer repo
+      # ------------------------------------------------------------------
+      - name: Run WASM flow integration tests
+        run: |
+          WAZERO_PATH="$(pwd)/wazero"
+          cd ../codetracer
+          nix develop .?submodules=1 --command bash -c "
+            set -e
+            rustup target add wasm32-wasip1 2>/dev/null || true
+            export CODETRACER_WASM_VM_PATH='$WAZERO_PATH'
+            echo \"Using wazero: \$CODETRACER_WASM_VM_PATH\"
+            echo 'Running WASM flow integration test...'
+            cd src/db-backend
+            OUTPUT=\$(cargo test --test wasm_flow_integration -- --nocapture 2>&1) || { echo \"\$OUTPUT\"; exit 1; }
+            echo \"\$OUTPUT\"
+            if echo \"\$OUTPUT\" | grep -q 'running 0 tests'; then
+              echo 'ERROR: wasm_flow_integration test binary compiled but no tests ran'
+              exit 1
+            fi
+            echo 'WASM flow integration test passed!'
+          "
+
+      # ------------------------------------------------------------------
+      # 7. Upload test logs on failure
+      # ------------------------------------------------------------------
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-repo-test-logs
+          path: |
+            ../codetracer/target/
+          retention-days: 14
+          if-no-files-found: ignore

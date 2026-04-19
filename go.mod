@@ -11,3 +11,8 @@ retract (
 	v1.0.0-beta.2
 	v1.0.0-beta.1
 )
+
+require (
+	github.com/metacraft-labs/trace_record v0.0.0-20260310152425-2bffa2f09708
+	github.com/rdleal/intervalst v1.5.0
+)

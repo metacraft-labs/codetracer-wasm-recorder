@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/internal/leb128"
@@ -153,8 +154,20 @@ func DecodeModule(
 	}
 
 	if dwarfEnabled {
-		d, _ := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
-		m.DWARFLines = wasmdebug.NewDWARFLines(d)
+		var err error
+		d, dwarfErr := dwarf.New(abbrev, nil, nil, info, line, nil, ranges, str)
+		if dwarfErr != nil {
+			fmt.Fprintf(os.Stderr, "Error constructing DWARF data. Tracing will not work: %v\n", dwarfErr)
+		}
+		if d != nil {
+			m.DWARFData = d
+			m.DWARFLines = wasmdebug.NewDWARFLines(d)
+			m.PCRecord, err = wasmdebug.IndexDwarfData(d)
+			if err != nil {
+				// TODO: maybe fallback to WAT
+				fmt.Fprintf(os.Stderr, "Error indexing DWARF data. Tracing will not work: %v\n", err)
+			}
+		}
 	}
 
 	functionCount, codeCount := m.SectionElementCount(wasm.SectionIDFunction), m.SectionElementCount(wasm.SectionIDCode)

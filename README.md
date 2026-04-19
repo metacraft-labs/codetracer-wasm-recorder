@@ -155,7 +155,7 @@ ecosystem. Related repositories:
 | [codetracer-trace-format](https://github.com/metacraft-labs/codetracer-trace-format) | Trace format crates, including `codetracer_trace_writer_ffi` |
 | [trace_record](https://github.com/metacraft-labs/trace_record) | Go library for trace recording (used by GoWriter) |
 | [codetracer-python-recorder](https://github.com/metacraft-labs/codetracer-python-recorder) | Python execution recorder |
-| [codetracer-rr-backend](https://github.com/metacraft-labs/codetracer-rr-backend) | Record/replay backend (rr-based) |
+| [codetracer-native-backend](https://github.com/metacraft-labs/codetracer-native-backend) | Record/replay backend |
 | [codetracer-shell-recorders](https://github.com/metacraft-labs/codetracer-shell-recorders) | Bash/Zsh recorders |
 
 ## License

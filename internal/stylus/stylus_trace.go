@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 type evmEvent struct {
@@ -65,6 +67,12 @@ func (e *evmEvent) UnmarshalJSON(data []byte) error {
 type StylusTrace struct {
 	events  []evmEvent
 	current int
+
+	// errorRecord receives EventKindError special events when an EVM-trace /
+	// wasm-execution mismatch panics out of a Stylus host hook.  Populated by
+	// exportSylusFunctions; nil when the recorder is disabled or trace export
+	// is off.  See CTFS audit section 1.60.
+	errorRecord tracewriter.TraceRecorder
 }
 
 func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {

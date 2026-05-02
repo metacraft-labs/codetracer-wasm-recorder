@@ -232,6 +232,27 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		"Use the Rust FFI trace writer instead of the Go trace writer. "+
 			"Requires the binary to be built with cgo and the codetracer_trace_writer_ffi library.")
 
+	// CTFS audit (mission goals #5/#6, /tmp/isonim-migration.txt section 1.60):
+	// expose an explicit -format flag mirroring the per-recorder default-Ctfs
+	// CLI idiom landed for Leo (1.59), Circom (1.58), TON (1.57), Miden (1.56),
+	// PolkaVM (1.55), Fuel (1.53), Flow (1.52), Cairo (1.50), Cardano (1.48),
+	// Move (1.46), Solana (1.44).  The default is "ctfs" so that future FFI
+	// extensions surface the canonical multi-stream .ct container without a
+	// behaviour change at the call site.  The current FFI does NOT yet expose a
+	// Ctfs variant -- "ctfs" therefore prints a clear error and exits, mirroring
+	// the FFI-extension blocker shared with the PHP recorder (1.41).  Selecting
+	// "binary" routes the rust writer through FMT_BINARY (CBOR+Zstd, the
+	// closest-to-modern legacy variant); "json" preserves the pre-audit
+	// behaviour for CI compatibility; "go" forces the in-process Go trace
+	// writer regardless of the cgo build tag.
+	var traceFormat string
+	flags.StringVar(&traceFormat, "format", "ctfs",
+		"Trace output format. One of: ctfs (canonical multi-stream .ct, default; "+
+			"requires an FFI extension exposing FMT_CTFS, currently blocked), "+
+			"binary (legacy CBOR+Zstd via the Rust FFI), "+
+			"json (legacy three-file JSON via the Rust FFI), "+
+			"go (in-process Go writer, three-file JSON; preserves pre-audit behaviour).")
+
 	cacheDir := cacheDirFlag(flags)
 
 	_ = flags.Parse(args)
@@ -350,18 +371,36 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	// CTFS audit (mission goals #5/#6, /tmp/isonim-migration.txt section 1.60):
+	// resolve the requested -format into a tracewriter.Format and pick the
+	// recorder backend.  -use-rust-writer remains supported for backwards
+	// compatibility -- when set, "go" is rejected (cgo path was explicitly
+	// requested) and any of the FFI-routed formats are honoured.  When
+	// -use-rust-writer is unset, "ctfs"/"binary"/"json" still imply the FFI
+	// path because the in-process Go writer cannot produce those formats; the
+	// "go" value is the only way to keep the in-process backend.
 	var recorder tracewriter.TraceRecorder
 	if outDir != "" {
-		if useRustWriter {
-			rw, rwErr := tracewriter.NewRustTraceWriter()
+		ffiFormat, formatKind, formatErr := resolveTraceFormat(traceFormat)
+		if formatErr != nil {
+			fmt.Fprintf(stdErr, "error: %v\n", formatErr)
+			return 1
+		}
+		switch formatKind {
+		case formatKindGo:
+			if useRustWriter {
+				fmt.Fprintln(stdErr, "error: -use-rust-writer is incompatible with -format=go")
+				return 1
+			}
+			goRecord := trace_record.MakeTraceRecord()
+			recorder = tracewriter.NewGoWriter(&goRecord)
+		case formatKindFFI:
+			rw, rwErr := tracewriter.NewRustTraceWriterWithFormat(ffiFormat)
 			if rwErr != nil {
 				fmt.Fprintf(stdErr, "error creating rust trace writer: %v\n", rwErr)
 				return 1
 			}
 			recorder = rw
-		} else {
-			goRecord := trace_record.MakeTraceRecord()
-			recorder = tracewriter.NewGoWriter(&goRecord)
 		}
 	}
 
@@ -621,6 +660,49 @@ func writeHeapProfile(stdErr io.Writer, path string) {
 	runtime.GC()
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		fmt.Fprintf(stdErr, "error writing memory profile: %v\n", err)
+	}
+}
+
+// formatKind selects the trace-recorder backend.  See the -format CLI flag
+// docstring for the canonical list of values.
+type formatKind int
+
+const (
+	formatKindGo formatKind = iota
+	formatKindFFI
+)
+
+// resolveTraceFormat parses the -format CLI value into the FFI format byte
+// (when applicable) and the recorder-backend kind.  It centralises the
+// per-format error messages so the call site stays small.  See section 1.60
+// of /tmp/isonim-migration.txt for the design rationale.
+//
+// "ctfs" is the canonical multi-stream .ct format documented in the
+// codetracer-trace-format-spec.  The current FFI header
+// (tracewriter/codetracer_trace_writer.h) only exposes FMT_JSON, FMT_BINARY_V0
+// and FMT_BINARY -- there is no FMT_CTFS yet.  Selecting "ctfs" therefore
+// returns a descriptive error pointing at the FFI-extension follow-up shared
+// with the PHP recorder (codetracer-php-recorder/AUDIT-CTFS-2026-05.md).
+func resolveTraceFormat(name string) (tracewriter.RustFormat, formatKind, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "ctfs":
+		return 0, formatKindFFI, fmt.Errorf(
+			"-format=ctfs is not yet wired through: the codetracer_trace_writer FFI " +
+				"does not expose FMT_CTFS (tracewriter/codetracer_trace_writer.h " +
+				"FfiTraceFormat enum). Track the cross-cutting follow-up in " +
+				"codetracer-php-recorder/AUDIT-CTFS-2026-05.md (FFI extension). " +
+				"Pass -format=binary (CBOR+Zstd) or -format=go (in-process JSON) for now.")
+	case "binary":
+		return tracewriter.RustFormatBinary, formatKindFFI, nil
+	case "binary_v0", "binaryv0":
+		return tracewriter.RustFormatBinaryV0, formatKindFFI, nil
+	case "json":
+		return tracewriter.RustFormatJSON, formatKindFFI, nil
+	case "go":
+		return 0, formatKindGo, nil
+	default:
+		return 0, formatKindGo, fmt.Errorf(
+			"unknown -format %q (valid values: ctfs, binary, binary_v0, json, go)", name)
 	}
 }
 

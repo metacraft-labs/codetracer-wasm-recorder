@@ -98,3 +98,37 @@ func TestRustTraceWriterInterfaceCompliance(t *testing.T) {
 		t.Errorf("Arg variable ID mismatch")
 	}
 }
+
+// TestRustTraceWriterFormatConstants pins the FfiTraceFormat enum mapping
+// so a future re-cbindgen of codetracer_trace_writer.h cannot silently
+// reorder the variants and corrupt the wasm recorder's on-disk format.
+// See CTFS audit, /tmp/isonim-migration.txt section 1.60.
+func TestRustTraceWriterFormatConstants(t *testing.T) {
+	if RustFormatJSON != 0 {
+		t.Errorf("RustFormatJSON drifted from FMT_JSON (0): got %d", RustFormatJSON)
+	}
+	if RustFormatBinaryV0 != 1 {
+		t.Errorf("RustFormatBinaryV0 drifted from FMT_BINARY_V0 (1): got %d", RustFormatBinaryV0)
+	}
+	if RustFormatBinary != 2 {
+		t.Errorf("RustFormatBinary drifted from FMT_BINARY (2): got %d", RustFormatBinary)
+	}
+}
+
+// TestRustTraceWriterWithFormatBinary smoke-tests the explicit-format
+// constructor.  The resulting trace artefacts only need to exist; the FFI
+// library is responsible for the on-disk shape.
+func TestRustTraceWriterWithFormatBinary(t *testing.T) {
+	rw, err := NewRustTraceWriterWithFormat(RustFormatBinary)
+	if err != nil {
+		t.Fatalf("NewRustTraceWriterWithFormat(Binary) failed: %v", err)
+	}
+	rw.RegisterStep("main.rs", 1)
+	rw.RegisterCall("main", "main.rs", 1, nil)
+	rw.RegisterReturn(trace_record.NilValue())
+
+	traceDir := t.TempDir()
+	if err := rw.ProduceTrace(traceDir, "wasm_audit_format_binary", "/tmp"); err != nil {
+		t.Fatalf("ProduceTrace() failed: %v", err)
+	}
+}

@@ -13,16 +13,51 @@ import (
 
 // exportFunc reduces boilerplate for building Stylus host hooks. It fetches the
 // next event and forwards it to fn.
+//
+// CTFS audit (mission goals #5/#6, /tmp/isonim-migration.txt section 1.60):
+// when the recorded EVM trace does not line up with the wasm execution
+// (mismatched event name, exhausted event list, memory-access failure inside
+// fn) we previously panicked unconditionally with no breadcrumb in the .ct
+// container.  Now we route the failure through register_special_event with
+// EventKindError + a "stylus_trace_mismatch" / "stylus_host_panic" metadata
+// tag before re-raising the panic, mirroring the EVM 1.39 / Cairo 1.50 /
+// PolkaVM 1.55 / Miden 1.56 / TON 1.57 Error-routing pattern.  The recorder
+// pipeline is responsible for finalising the partial trace before exit.
 func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 	params, results []api.ValueType,
 	fn func(m api.Module, stack []uint64, event evmEvent)) wazero.HostModuleBuilder {
+	// trace.errorRecord is set by exportSylusFunctions via the package-level
+	// wiring below.  Capturing it on the closure here keeps the existing 34
+	// call sites unchanged while still routing failures through the recorder.
+	record := trace.errorRecord
 	return mb.NewFunctionBuilder().
 		WithGoModuleFunction(api.GoModuleFunc(
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(name)
 				if err != nil {
+					if record != nil {
+						record.RegisterRecordEvent(
+							trace_record.EventKindError,
+							"stylus_trace_mismatch",
+							fmt.Sprintf("hook %q: %v", name, err))
+					}
 					panic(fmt.Sprint(err))
 				}
+				// Convert downstream panics from fn (e.g. wasm memory access
+				// failures inside readMemoryBytes/writeMemoryBytes) into an
+				// Error special-event before propagating, so the .ct
+				// container records the failure point.
+				defer func() {
+					if r := recover(); r != nil {
+						if record != nil {
+							record.RegisterRecordEvent(
+								trace_record.EventKindError,
+								"stylus_host_panic",
+								fmt.Sprintf("hook %q: %v", name, r))
+						}
+						panic(r)
+					}
+				}()
 				fn(m, stack, event)
 			}),
 			params, results,
@@ -30,6 +65,10 @@ func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 }
 
 func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+	// Hand the recorder to the trace state so exportFunc can route panic /
+	// trace-mismatch failures through register_special_event(Error, ...).
+	// See exportFunc's docstring (CTFS audit, section 1.60) for context.
+	trace.errorRecord = record
 	result := mb
 	result = exportReadArgs(result, trace, record)
 	result = exportWriteResult(result, trace, record)

@@ -71,6 +71,30 @@ type rustBufferedEvent struct {
 	typeRecord trace_record.TypeRecord
 }
 
+// RustFormat is a public, build-tag-independent re-export of the FFI's
+// FfiTraceFormat enum.  It lets callers (such as cmd/wazero) request a
+// specific on-disk format without depending on cgo themselves.  The numeric
+// values mirror the FFI header tracewriter/codetracer_trace_writer.h so a
+// future FMT_CTFS variant can be added without touching call sites.
+//
+// CTFS audit context (mission goals #5/#6, /tmp/isonim-migration.txt
+// section 1.60): the canonical multi-stream .ct container ("ctfs") is the
+// target format for every recorder.  The codetracer_trace_writer FFI does
+// not yet expose it, so the wasm recorder currently falls back to the
+// closest-to-modern "binary" (CBOR+Zstd) variant -- the same blocker the
+// PHP recorder hit in 1.41.  Tracked in
+// codetracer-php-recorder/AUDIT-CTFS-2026-05.md (FFI extension follow-up).
+type RustFormat int
+
+// RustFormat values.  Keep in sync with FfiTraceFormat in
+// tracewriter/codetracer_trace_writer.h.
+const (
+	RustFormatJSON      RustFormat = 0 // FMT_JSON: legacy three-file JSON
+	RustFormatBinaryV0  RustFormat = 1 // FMT_BINARY_V0: legacy CBOR+Zstd v0
+	RustFormatBinary    RustFormat = 2 // FMT_BINARY: CBOR+Zstd (current)
+	// RustFormatCtfs would be added here when the FFI exposes FMT_CTFS.
+)
+
 // RustTraceWriter implements TraceRecorder using the Rust FFI trace writer library.
 //
 // During recording, events are buffered in memory (same as the Go TraceRecord).
@@ -86,10 +110,21 @@ type RustTraceWriter struct {
 	variableNames     map[trace_record.VariableId]string // reverse lookup
 	types             map[string]trace_record.TypeId
 	currentCallsCount int
+	format            RustFormat // Selected FFI on-disk format (FMT_*).
 }
 
-// NewRustTraceWriter creates a new RustTraceWriter.
+// NewRustTraceWriter creates a new RustTraceWriter using the legacy JSON
+// format.  Preserved for backwards compatibility with existing tests; new
+// call sites should prefer NewRustTraceWriterWithFormat to make the format
+// choice explicit.
 func NewRustTraceWriter() (TraceRecorder, error) {
+	return NewRustTraceWriterWithFormat(RustFormatJSON)
+}
+
+// NewRustTraceWriterWithFormat creates a new RustTraceWriter that emits the
+// given on-disk format.  See RustFormat for the available values and the
+// CTFS audit context.
+func NewRustTraceWriterWithFormat(format RustFormat) (TraceRecorder, error) {
 	return &RustTraceWriter{
 		events:        make([]rustBufferedEvent, 0),
 		functions:     make(map[string]trace_record.FunctionId),
@@ -98,6 +133,7 @@ func NewRustTraceWriter() (TraceRecorder, error) {
 		variables:     make(map[string]trace_record.VariableId),
 		variableNames: make(map[trace_record.VariableId]string),
 		types:         make(map[string]trace_record.TypeId),
+		format:        format,
 	}, nil
 }
 
@@ -251,7 +287,12 @@ func (w *RustTraceWriter) ProduceTrace(traceDir string, programName string, work
 	cProgram := C.CString(programName)
 	defer C.free(unsafe.Pointer(cProgram))
 
-	handle := C.trace_writer_new(cProgram, C.FMT_JSON)
+	// CTFS audit (mission goals #5/#6, section 1.60): pass the configured FFI
+	// format byte rather than hard-coding FMT_JSON.  The default constructor
+	// preserves the legacy JSON behaviour; cmd/wazero can request FMT_BINARY
+	// (CBOR+Zstd) via -format=binary.  FMT_CTFS is not yet exposed by the FFI;
+	// see RustFormat docs.
+	handle := C.trace_writer_new(cProgram, C.enum_FfiTraceFormat(w.format))
 	if handle == nil {
 		return fmt.Errorf("trace_writer_new failed: %s", C.GoString(C.trace_writer_last_error()))
 	}

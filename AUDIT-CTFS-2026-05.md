@@ -216,10 +216,31 @@ flagged as a writer-side fix.
 
 The new `TestRustTraceWriterWithFormatBinary` smoke-tests that
 `ProduceTrace` runs without error. It does not walk the resulting
-file and assert specific event records. Open for the wasm recorder
-plus all 9+ sibling recorders (Cairo, Cardano, Flow, Fuel, PolkaVM,
-Miden, TON, Circom, Leo). Adding the Nim trace-reader as a Go test
-dep is the cross-cutting blocker.
+file and assert specific event records.
+
+This is now explicitly **blocked by follow-up A** for the wasm/wazero
+recorder. The currently supported Rust FFI formats are JSON,
+BinaryV0, and Binary; none of them produce the canonical multi-stream
+CTFS `.ct` container consumed by `NimTraceReaderHandle`. The available
+binary path is the legacy CBOR+Zstd format produced through the same
+three-phase `trace.json` / `trace_metadata.json` / `trace_paths.json`
+FFI calls, so adding a Nim-reader test today would only prove that the
+reader cannot open the expected format.
+
+Once follow-up A adds `FMT_CTFS`, the minimal recorder-side test shape
+is:
+
+1. Add `RustFormatCtfs` in `rust_writer.go` / `rust_writer_stub.go`
+   and route `-format=ctfs` through `NewRustTraceWriterWithFormat`.
+2. Extend `tracewriter/rust_writer_test.go` (or add a nearby cgo-only
+   test) to record a tiny function with one step, one call, one staged
+   argument, and one return using `RustFormatCtfs`.
+3. Open the produced `.ct` container through the Nim CTFS reader and
+   assert concrete content: function name, source path/line, the step,
+   and `Call.args[]`.
+4. Add a Stylus-host mismatch/panic fixture only if the FFI test already
+   proves the basic call/step/return stream is reader-visible; then
+   assert the `Error` special event content.
 
 ## Cross-cutting findings affecting other audits
 

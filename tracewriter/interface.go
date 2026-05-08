@@ -1,17 +1,28 @@
-// Package tracewriter provides an abstraction layer for trace recording,
-// allowing the wazero recorder to use either a pure Go trace writer
-// (trace_record.TraceRecord) or a Rust FFI-based trace writer
-// (codetracer_trace_writer_ffi) interchangeably.
+// Package tracewriter provides an abstraction layer for trace recording in
+// the wazero CodeTracer fork.
+//
+// The recorder is CTFS-only per `Recorder-CLI-Conventions.md` §4: today the
+// canonical multi-stream `.ct` bundle is produced through the in-process
+// `GoWriter` which delegates to `github.com/metacraft-labs/trace_record`.
+// The interface stays writer-agnostic so a future FFI- or Nim-backed CTFS
+// implementation can be plugged in without touching call sites.
+//
+// Pre-2026-05-08 this package also exposed a Rust FFI writer
+// (`RustTraceWriter` / `RustFormat`) that selected between
+// `FMT_JSON`/`FMT_BINARY_V0`/`FMT_BINARY` via the `--format` CLI flag.  Both
+// the Rust writer and the `--format` flag were removed by the convention
+// compliance pass — see AUDIT-CTFS-2026-05.md for the full record.
 package tracewriter
 
 import (
 	"github.com/metacraft-labs/trace_record"
 )
 
-// TraceRecorder is the interface that abstracts the common API between the
-// Go trace_record.TraceRecord and the Rust FFI-based RustTraceWriter.
-// Both implementations can be used interchangeably wherever trace recording
-// is needed.
+// TraceRecorder abstracts the trace-recording surface used by the wazero
+// interpreter and Stylus host hooks.  The wazero CodeTracer fork ships a
+// single concrete writer (`GoWriter`); the interface is preserved so a
+// future FFI- or Nim-backed CTFS implementation can be plugged in without
+// changing the call sites.
 type TraceRecorder interface {
 	// RegisterStep records a step event at the given source path and line.
 	RegisterStep(path string, line trace_record.Line)

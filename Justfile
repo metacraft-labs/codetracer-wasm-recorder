@@ -12,13 +12,27 @@ build:
 test:
     make test
 
-# Run tracewriter package tests only (pure Go, no FFI)
+# Run tracewriter package tests (CTFS-only — the Rust FFI writer was
+# removed in the 2026-05-08 convention compliance pass; see
+# AUDIT-CTFS-2026-05.md).  This recipe is preserved as the canonical
+# pure-Go writer test entry point and is kept stable so external CI does
+# not break.
 test-tracewriter-go:
     CGO_ENABLED=0 go test ./tracewriter/ -v -run 'TestGoWriter'
 
-# Run all tracewriter tests including Rust FFI (requires cgo + FFI library)
-test-tracewriter:
-    CGO_ENABLED=1 go test ./tracewriter/ -v
+# Convention compliance follow-up — 2026-05-08: the Rust FFI writer was
+# removed alongside the `--format` flag.  This alias is retained so older
+# wrappers / docs that invoke `just test-tracewriter` keep working — it
+# now runs the same single CTFS-only writer test set as
+# `test-tracewriter-go`.
+test-tracewriter: test-tracewriter-go
+
+# Verify the CLI matches the conventions in
+# `codetracer-specs/Recorder-CLI-Conventions.md` (no `--format`, env-var
+# fallback, `ct print` mention, etc.).  See
+# `tests/verify-cli-convention-no-silent-skip.sh` for the assertion list.
+verify-cli-convention:
+    bash tests/verify-cli-convention-no-silent-skip.sh
 
 # Lint Go code
 lint-go:
@@ -42,8 +56,8 @@ format-nix:
 # Format all code
 format: format-go format-nix
 
-# Run all local checks (lint + tracewriter tests with FFI)
-check-all: lint test-tracewriter
+# Run all local checks (lint + tracewriter tests + CLI convention).
+check-all: lint test-tracewriter verify-cli-convention
 
 # Verify the Nix flake builds successfully
 nix-build:

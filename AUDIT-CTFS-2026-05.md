@@ -271,3 +271,122 @@ is:
 Audit performed by Claude Opus 4.7 (1M context) on 2026-05-02 as part
 of iteration 1.60 of the IsoNim migration campaign. See
 `/tmp/isonim-migration.txt` for the full campaign log.
+
+---
+
+## Convention compliance follow-up — 2026-05-08
+
+Iteration 1.60 left the `-format` CLI flag in place to allow a graceful
+opt-in to `binary` / `json` / `go` writers while the FFI exposed neither
+`FMT_CTFS` nor a Nim-backed CTFS variant.  The cross-cutting recorder
+convention pass (Python, Ruby, JavaScript, Cairo, Cardano, Circom, Flow,
+Fuel, Leo, Miden, Move, PolkaVM, Solana, TON, Bash, Zsh, EVM, Native) has
+since standardised the recorder CLI surface on **CTFS-only output with
+no `--format` flag** (`Recorder-CLI-Conventions.md` §4) and on
+per-recorder env-var fallbacks (§5).  This follow-up brings the wasm
+recorder onto that contract.
+
+### Binary-name exception (preserved)
+
+`Recorder-CLI-Conventions.md` §1 documents the wasm recorder as the
+**one exception** to the `codetracer-<lang>-recorder` binary-name rule:
+the recorder is a fork of Tetrate's [wazero](https://github.com/tetratelabs/wazero)
+runtime with tracing layered in, not a CodeTracer-named tool.  The binary
+keeps the upstream `wazero` name; the convention's other contracts
+(`--out-dir`, env vars, no `--format`, `ct print` mention) apply
+unchanged.  See `Recorder-CLI-Conventions.md` Implementation Status table
+for the canonical phrasing ("✓ Compliant (CTFS-only, binary name
+exception)").
+
+### Changes landed this follow-up
+
+1. **`-format` flag removed** (`cmd/wazero/wazero.go`).  The
+   `resolveTraceFormat` helper, the `formatKind` enum, and the
+   `-use-rust-writer` boolean all went with it.  Today the recorder
+   resolves `--out-dir` plus the new env-var fallback into a single
+   pinned `tracewriter.GoWriter` instance.  When the FFI/Nim CTFS writer
+   lands the dispatch switches to it without changing the CLI surface.
+
+2. **`CODETRACER_WASM_RECORDER_OUT_DIR`** is now read as a fallback for
+   `--out-dir` (`cmd/wazero/wazero.go`, `doRun`).  Mirrors §5 across the
+   recorder fleet.
+
+3. **`CODETRACER_WASM_RECORDER_DISABLED`** short-circuits recording
+   entirely.  When set, the recorder runs the target through wazero
+   without instantiating a `TraceRecorder`; no trace artefacts are
+   written.  Mirrors §5 across the recorder fleet.
+
+4. **Rust FFI writer removed** (`tracewriter/rust_writer.go`,
+   `rust_writer_stub.go`, `rust_writer_test.go`,
+   `tracewriter/codetracer_trace_writer.h`).  The FFI writer was the
+   only consumer of the `--format` flag and produced legacy
+   non-CTFS shapes.  It can be re-added if and when the FFI exposes
+   `FMT_CTFS` (open follow-up A above), without touching call sites.
+
+5. **Help-text updates** — `wazero -h` and `wazero run -h` now mention
+   the env vars and `ct print` from `codetracer-trace-format-nim` as the
+   canonical conversion tool.  The legacy `--format` flag is no longer
+   advertised; the `flag` package rejects it with the standard
+   "flag provided but not defined" error.
+
+6. **Tests** (`cmd/wazero/wazero_test.go`):
+   * `TestNoFormatFlagInHelp` — sweeps top-level / `run` / `compile`
+     `-h` to ensure no `--format` / `CODETRACER_FORMAT` advertisement.
+   * `TestHelpMentionsCtPrint` — both top-level and `run -h` must
+     mention `ct print`.
+   * `TestFormatFlagRejected` — `wazero run --format json fixture.wasm`
+     must exit non-zero (re-execs the test binary as a subprocess
+     because `flag.ExitOnError` calls `os.Exit(2)` on the unknown flag).
+   * `TestEnvOutDirUsedWhenFlagOmitted` — exercises the
+     `CODETRACER_WASM_RECORDER_OUT_DIR` fallback, asserting the
+     three-file JSON layout lands in the env-supplied dir.
+   * `TestEnvDisabledSkipsRecording` — exercises the
+     `CODETRACER_WASM_RECORDER_DISABLED=1` short-circuit, asserting no
+     trace artefacts are written.
+   * `TestRecordedTraceViaCtPrintJson` — records a tiny WASI fixture
+     and pipes the resulting bundle through `ct-print --json`,
+     asserting on **structural anchors** (`metadata` / `paths` /
+     `functions` / `steps` / `calls` / `ioEvents` section names) rather
+     than on integer values that don't round-trip today.  Skips
+     gracefully when ct-print is not present (i.e. when this repo is
+     built outside the metacraft workspace).  Mirrors the pattern landed
+     for cardano / circom / flow / fuel / leo / miden / move /
+     polkavm / python / ruby / solana / ton.
+
+7. **`tests/verify-cli-convention-no-silent-skip.sh`** — shell guard
+   that asserts:
+   * `--format` / `CODETRACER_FORMAT` absent from `wazero -h`,
+     `wazero run -h`, `wazero compile -h`.
+   * `--out-dir`, `ct print`, both env-var names present in
+     `wazero run -h`.
+   * `CODETRACER_WASM_RECORDER_OUT_DIR` /
+     `CODETRACER_WASM_RECORDER_DISABLED` referenced in `cmd/`.
+   * `tracewriter/rust_writer.go` no longer exists (catches a partial
+     revert).
+   Wired into the `Justfile` (`just verify-cli-convention`,
+   `just check-all`).
+
+8. **`README.md`** — updated to advertise the env-var fallback, the
+   binary-name exception, and the `ct print` conversion workflow; the
+   "Building with the Rust FFI writer" section was replaced with a brief
+   workspace-layout note.
+
+9. **`Recorder-CLI-Conventions.md`** Implementation Status row flipped
+   from `⚠ Partial` to
+   `✓ Compliant (CTFS-only, binary name exception)`.
+
+### Verification
+
+```
+direnv exec . go build ./cmd/wazero/       # clean
+direnv exec . go test -count=1 ./cmd/wazero/   # all CLI tests, including the
+                                                # new no-silent-skip set
+direnv exec . go test -count=1 ./tracewriter/  # CTFS writer test set
+direnv exec . bash tests/verify-cli-convention-no-silent-skip.sh  # all assertions hold
+```
+
+Open follow-up A (FFI extension exposing `FMT_CTFS` /
+`register_call_arg` / `register_thread_*`) remains the path to a real
+multi-stream `.ct` container; today the recorder's pinned Go writer
+emits the legacy three-file JSON layout that ct-print also accepts.  The
+open follow-ups B–F from the 2026-05-02 audit are unchanged.

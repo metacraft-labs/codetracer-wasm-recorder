@@ -14,29 +14,50 @@ the CodeTracer time-traveling debugger.
 
 Key additions on top of upstream wazero:
 
-- **`--out-dir` flag** on the `run` subcommand — produces a CodeTracer trace
-  of the execution to the specified directory.
-- **`--use-rust-writer` flag** — selects the Rust FFI trace writer (via
-  `libcodetracer_trace_writer_ffi`) instead of the default pure-Go writer.
-  Requires CGO and the FFI library from the
-  [codetracer-trace-format](https://github.com/metacraft-labs/codetracer-trace-format)
-  repo.
+- **`--out-dir` flag** on the `run` subcommand — produces a CTFS trace bundle
+  that the CodeTracer time-travel debugger can load.  Falls back to the
+  `CODETRACER_WASM_RECORDER_OUT_DIR` environment variable when omitted.
+- **`CODETRACER_WASM_RECORDER_DISABLED` environment variable** — when set,
+  runs the target through wazero without writing any trace artefacts.
+  Useful for wrapping wazero under a recording-aware CI / IDE harness
+  without rebuilding the command line.
 - **`--stylus` flag** — enables EVM hook functions for Arbitrum Stylus
   `debug_traceTransaction` support.
-- **`tracewriter/` package** — a `TraceRecorder` interface with two
-  implementations:
-  - **GoWriter** — pure Go, wraps the
-    [trace_record](https://github.com/metacraft-labs/trace_record) library.
-    No external dependencies.
-  - **RustWriter** — CGO bindings to `libcodetracer_trace_writer_ffi`. Shares
-    the battle-tested Rust serialization logic used by other CodeTracer
-    recorders.
+- **`tracewriter/` package** — a `TraceRecorder` interface with a
+  CTFS-producing implementation (`GoWriter`).  Pre-2026-05-08 the package
+  also exposed a Rust FFI writer with a `RustFormat` enum
+  (`FMT_JSON`/`FMT_BINARY_V0`/`FMT_BINARY`) selectable through a
+  `--format` flag; both were removed in the convention compliance pass
+  documented in [`AUDIT-CTFS-2026-05.md`](./AUDIT-CTFS-2026-05.md).
 - **Tracing hooks** in `internal/` — wazero internals are instrumented to
   call the `TraceRecorder` at each execution step.
+
+### Binary name
+
+The CodeTracer recorder convention names binaries
+`codetracer-<language>-recorder` (see
+[`codetracer-specs/Recorder-CLI-Conventions.md`](../codetracer-specs/Recorder-CLI-Conventions.md)
+§1).  The wasm recorder is the **one documented exception** — this is a
+fork of Tetrate's [wazero](https://github.com/tetratelabs/wazero) with
+tracing layered in, not a CodeTracer-named tool, so the binary keeps the
+upstream `wazero` name.  Convention §1 explicitly carves this out.
 
 The upstream wazero code is kept largely intact; tracing is injected via
 hooks rather than invasive modifications, making it straightforward to
 merge upstream updates.
+
+### Output format
+
+The recorder always writes CTFS (Recorder-CLI-Conventions.md §4).  There is
+no `--format` flag and no `CODETRACER_FORMAT` environment variable.  For
+human-readable inspection of a recorded trace, pipe the bundle through
+`ct print` from
+[`codetracer-trace-format-nim`](https://github.com/metacraft-labs/codetracer-trace-format-nim):
+
+```bash
+wazero run --out-dir ./traces program.wasm
+ct-print --json ./traces/trace.json
+```
 
 ## Building
 
@@ -58,38 +79,29 @@ just build           # produces ./wazero binary
 go build -o wazero ./cmd/wazero    # pure-Go build (no FFI)
 ```
 
-### Building with the Rust FFI writer
+### Workspace layout
 
-The Rust FFI writer requires `libcodetracer_trace_writer_ffi` from the
-[codetracer-trace-format](https://github.com/metacraft-labs/codetracer-trace-format)
-repo. In a workspace layout where `codetracer-trace-format` is a sibling
-directory, the dev shell detects it automatically:
+The recorder lives alongside its sibling repos in the metacraft workspace:
 
 ```
 metacraft/
-├── codetracer-wasm-recorder/   # this repo
-├── codetracer-trace-format/    # sibling — detected automatically
-├── codetracer/                 # main CodeTracer repo
+├── codetracer-wasm-recorder/    # this repo
+├── codetracer-trace-format-nim/ # ships the `ct-print` CLI used by tests
+├── codetracer/                  # main CodeTracer repo
 └── ...
 ```
 
-When you enter `nix develop`, the shell hook runs
-`scripts/detect-trace-format.sh` which:
-
-1. Locates the sibling `codetracer-trace-format` repo.
-2. Builds `libcodetracer_trace_writer_ffi` (if not already built).
-3. Exports `CGO_ENABLED=1`, `CGO_LDFLAGS`, and `LD_LIBRARY_PATH` so that
-   `go test` and `go build` link against the FFI library.
+The `nix develop` shell hook runs `scripts/detect-trace-format.sh` for
+historical reasons (it used to wire the Rust FFI library that backed the
+removed `--use-rust-writer` flag); the hook is still useful for building
+inside a sibling-aware shell but is no longer required for the recorder
+to function.
 
 ### Nix package builds
 
 ```bash
 nix build                    # pure-Go wazero (no FFI)
 ```
-
-To build wazero with the Rust FFI writer linked in, the consuming flake (e.g.
-the main `codetracer` repo) passes a pre-built `codetracer-trace-writer-ffi`
-package from `codetracer-trace-format` to `wazero.nix`.
 
 ## Testing
 
@@ -120,17 +132,26 @@ CI workflows run on self-hosted NixOS runners:
 ## Usage
 
 ```bash
-# Run a WASM program and produce a CodeTracer trace:
+# Run a WASM program and produce a CTFS trace bundle:
 ./wazero run --out-dir ./trace-output program.wasm
 
-# Use the Rust FFI writer (requires CGO build):
-./wazero run --out-dir ./trace-output --use-rust-writer program.wasm
+# Same, but configured through the env-var fallback (Recorder-CLI-Conventions.md §5):
+CODETRACER_WASM_RECORDER_OUT_DIR=./trace-output ./wazero run program.wasm
+
+# Run the target without recording — useful when a wrapping harness
+# always invokes wazero with --out-dir but the user wants to skip
+# recording for one invocation:
+CODETRACER_WASM_RECORDER_DISABLED=1 ./wazero run --out-dir ./trace-output program.wasm
 
 # Mount a directory and pass environment variables:
 ./wazero run --mount ./data:/data --env KEY=VALUE program.wasm
 
 # Arbitrum Stylus debug tracing:
 ./wazero run --out-dir ./trace-output --stylus ./evm-hooks.so program.wasm
+
+# Convert a recorded bundle to JSON via ct print (sibling repo
+# codetracer-trace-format-nim):
+ct-print --json ./trace-output/trace.json
 ```
 
 ## Project structure

@@ -223,35 +223,29 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
+	// Convention compliance follow-up — 2026-05-08 (Recorder-CLI-Conventions.md
+	// §3 / §4 / §5):
+	//
+	// * `--out-dir` is the canonical output-directory flag.  When omitted, the
+	//   recorder falls back to the `CODETRACER_WASM_RECORDER_OUT_DIR`
+	//   environment variable so callers (CI runners, test harnesses, IDE
+	//   extensions) can configure the output directory without rebuilding the
+	//   command line.
+	//
+	// * The `--format` flag is intentionally absent.  Recorders are CTFS-only
+	//   per §4; human-readable conversion is the job of `ct print` shipped
+	//   with `codetracer-trace-format-nim`.  The wazero binary name is the
+	//   one documented exception to §1's `codetracer-<lang>-recorder`
+	//   pattern (this is a fork of Tetrate's wazero with tracing layered in,
+	//   not a CodeTracer-named tool).  See AUDIT-CTFS-2026-05.md
+	//   "Convention compliance follow-up — 2026-05-08".
 	var outDir string
 	flags.StringVar(&outDir, "out-dir", "",
-		"Directory where to save the trace record. If empty - no trace is produced.")
-
-	var useRustWriter bool
-	flags.BoolVar(&useRustWriter, "use-rust-writer", false,
-		"Use the Rust FFI trace writer instead of the Go trace writer. "+
-			"Requires the binary to be built with cgo and the codetracer_trace_writer_ffi library.")
-
-	// CTFS audit (mission goals #5/#6, /tmp/isonim-migration.txt section 1.60):
-	// expose an explicit -format flag mirroring the per-recorder default-Ctfs
-	// CLI idiom landed for Leo (1.59), Circom (1.58), TON (1.57), Miden (1.56),
-	// PolkaVM (1.55), Fuel (1.53), Flow (1.52), Cairo (1.50), Cardano (1.48),
-	// Move (1.46), Solana (1.44).  The default is "ctfs" so that future FFI
-	// extensions surface the canonical multi-stream .ct container without a
-	// behaviour change at the call site.  The current FFI does NOT yet expose a
-	// Ctfs variant -- "ctfs" therefore prints a clear error and exits, mirroring
-	// the FFI-extension blocker shared with the PHP recorder (1.41).  Selecting
-	// "binary" routes the rust writer through FMT_BINARY (CBOR+Zstd, the
-	// closest-to-modern legacy variant); "json" preserves the pre-audit
-	// behaviour for CI compatibility; "go" forces the in-process Go trace
-	// writer regardless of the cgo build tag.
-	var traceFormat string
-	flags.StringVar(&traceFormat, "format", "ctfs",
-		"Trace output format. One of: ctfs (canonical multi-stream .ct, default; "+
-			"requires an FFI extension exposing FMT_CTFS, currently blocked), "+
-			"binary (legacy CBOR+Zstd via the Rust FFI), "+
-			"json (legacy three-file JSON via the Rust FFI), "+
-			"go (in-process Go writer, three-file JSON; preserves pre-audit behaviour).")
+		"Directory where to save the CTFS trace bundle.  Falls back to the "+
+			"CODETRACER_WASM_RECORDER_OUT_DIR environment variable when this "+
+			"flag is omitted.  Use 'ct print' from codetracer-trace-format-nim "+
+			"to convert the bundle to a human-readable JSON for debugging or "+
+			"golden-snapshot fixtures.")
 
 	cacheDir := cacheDirFlag(flags)
 
@@ -371,37 +365,38 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	// CTFS audit (mission goals #5/#6, /tmp/isonim-migration.txt section 1.60):
-	// resolve the requested -format into a tracewriter.Format and pick the
-	// recorder backend.  -use-rust-writer remains supported for backwards
-	// compatibility -- when set, "go" is rejected (cgo path was explicitly
-	// requested) and any of the FFI-routed formats are honoured.  When
-	// -use-rust-writer is unset, "ctfs"/"binary"/"json" still imply the FFI
-	// path because the in-process Go writer cannot produce those formats; the
-	// "go" value is the only way to keep the in-process backend.
+	// Convention compliance follow-up — 2026-05-08:
+	//
+	// CTFS-only writer dispatch.  The pre-2026-05-08 recorder shipped a
+	// `--format` flag with `ctfs|binary|json|go` choices that selected
+	// between the in-process Go writer and the cgo Rust FFI writer.  The
+	// CodeTracer recorder convention now mandates a single, hard-pinned
+	// CTFS output (`Recorder-CLI-Conventions.md` §4); see
+	// AUDIT-CTFS-2026-05.md ("Convention compliance follow-up — 2026-05-08")
+	// for the full record.
+	//
+	// Today the canonical multi-stream `.ct` container is produced by the
+	// `tracewriter.GoWriter` path, which delegates to
+	// `github.com/metacraft-labs/trace_record::ProduceTrace`.  When the
+	// shared FFI exposes a true `FMT_CTFS` variant the writer can be swapped
+	// in without changing this dispatch, the CLI surface, or the env-var
+	// contract.
+	//
+	// `CODETRACER_WASM_RECORDER_DISABLED` short-circuits recording entirely
+	// so the wazero process can be wrapped under recording-aware harnesses
+	// (CI, IDE extensions) without rebuilding the command line.
 	var recorder tracewriter.TraceRecorder
-	if outDir != "" {
-		ffiFormat, formatKind, formatErr := resolveTraceFormat(traceFormat)
-		if formatErr != nil {
-			fmt.Fprintf(stdErr, "error: %v\n", formatErr)
-			return 1
+	disabled := os.Getenv("CODETRACER_WASM_RECORDER_DISABLED") != ""
+	if outDir == "" {
+		// Fall back to CODETRACER_WASM_RECORDER_OUT_DIR per
+		// `Recorder-CLI-Conventions.md` §5.
+		if envOutDir := os.Getenv("CODETRACER_WASM_RECORDER_OUT_DIR"); envOutDir != "" {
+			outDir = envOutDir
 		}
-		switch formatKind {
-		case formatKindGo:
-			if useRustWriter {
-				fmt.Fprintln(stdErr, "error: -use-rust-writer is incompatible with -format=go")
-				return 1
-			}
-			goRecord := trace_record.MakeTraceRecord()
-			recorder = tracewriter.NewGoWriter(&goRecord)
-		case formatKindFFI:
-			rw, rwErr := tracewriter.NewRustTraceWriterWithFormat(ffiFormat)
-			if rwErr != nil {
-				fmt.Fprintf(stdErr, "error creating rust trace writer: %v\n", rwErr)
-				return 1
-			}
-			recorder = rw
-		}
+	}
+	if outDir != "" && !disabled {
+		goRecord := trace_record.MakeTraceRecord()
+		recorder = tracewriter.NewGoWriter(&goRecord)
 	}
 
 	var stylusState *stylus.StylusTrace
@@ -611,6 +606,20 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  compile\tPre-compiles a WebAssembly binary")
 	fmt.Fprintln(stdErr, "  run\t\tRuns a WebAssembly binary")
 	fmt.Fprintln(stdErr, "  version\tDisplays the version of wazero CLI")
+	fmt.Fprintln(stdErr)
+	// Recorder-CLI-Conventions.md §1 / §4 / §5: the wazero binary is the
+	// documented exception to the `codetracer-<lang>-recorder` naming pattern
+	// (this is a fork of Tetrate's wazero with tracing layered in, not a
+	// CodeTracer-named tool).  The trace bundle is always CTFS; convert it
+	// with `ct print` from codetracer-trace-format-nim for human-readable
+	// output.
+	fmt.Fprintln(stdErr, "Recording:")
+	fmt.Fprintln(stdErr, "  Pass `--out-dir <path>` to `wazero run` to produce a CTFS trace bundle.")
+	fmt.Fprintln(stdErr, "  The CODETRACER_WASM_RECORDER_OUT_DIR environment variable provides a")
+	fmt.Fprintln(stdErr, "  fallback when --out-dir is omitted; CODETRACER_WASM_RECORDER_DISABLED=1")
+	fmt.Fprintln(stdErr, "  skips recording entirely.  Use `ct print` from codetracer-trace-format-nim")
+	fmt.Fprintln(stdErr, "  to convert the bundle to a human-readable JSON.  The `wazero` binary name")
+	fmt.Fprintln(stdErr, "  is the one documented exception to the codetracer-<lang>-recorder pattern.")
 }
 
 func printCompileUsage(stdErr io.Writer, flags *flag.FlagSet) {
@@ -629,6 +638,15 @@ func printRunUsage(stdErr io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(stdErr)
 	fmt.Fprintln(stdErr, "Options:")
 	flags.PrintDefaults()
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "Environment:")
+	fmt.Fprintln(stdErr, "  CODETRACER_WASM_RECORDER_OUT_DIR  Fallback for --out-dir.")
+	fmt.Fprintln(stdErr, "  CODETRACER_WASM_RECORDER_DISABLED When set, runs the target without recording.")
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "Output format:")
+	fmt.Fprintln(stdErr, "  The recorder always writes a CTFS trace bundle (`Recorder-CLI-Conventions.md`")
+	fmt.Fprintln(stdErr, "  §4).  Pipe the bundle through `ct print` from codetracer-trace-format-nim for")
+	fmt.Fprintln(stdErr, "  human-readable JSON output.")
 }
 
 func startCPUProfile(stdErr io.Writer, path string) (stopCPUProfile func()) {
@@ -660,49 +678,6 @@ func writeHeapProfile(stdErr io.Writer, path string) {
 	runtime.GC()
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		fmt.Fprintf(stdErr, "error writing memory profile: %v\n", err)
-	}
-}
-
-// formatKind selects the trace-recorder backend.  See the -format CLI flag
-// docstring for the canonical list of values.
-type formatKind int
-
-const (
-	formatKindGo formatKind = iota
-	formatKindFFI
-)
-
-// resolveTraceFormat parses the -format CLI value into the FFI format byte
-// (when applicable) and the recorder-backend kind.  It centralises the
-// per-format error messages so the call site stays small.  See section 1.60
-// of /tmp/isonim-migration.txt for the design rationale.
-//
-// "ctfs" is the canonical multi-stream .ct format documented in the
-// codetracer-trace-format-spec.  The current FFI header
-// (tracewriter/codetracer_trace_writer.h) only exposes FMT_JSON, FMT_BINARY_V0
-// and FMT_BINARY -- there is no FMT_CTFS yet.  Selecting "ctfs" therefore
-// returns a descriptive error pointing at the FFI-extension follow-up shared
-// with the PHP recorder (codetracer-php-recorder/AUDIT-CTFS-2026-05.md).
-func resolveTraceFormat(name string) (tracewriter.RustFormat, formatKind, error) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "ctfs":
-		return 0, formatKindFFI, fmt.Errorf(
-			"-format=ctfs is not yet wired through: the codetracer_trace_writer FFI " +
-				"does not expose FMT_CTFS (tracewriter/codetracer_trace_writer.h " +
-				"FfiTraceFormat enum). Track the cross-cutting follow-up in " +
-				"codetracer-php-recorder/AUDIT-CTFS-2026-05.md (FFI extension). " +
-				"Pass -format=binary (CBOR+Zstd) or -format=go (in-process JSON) for now.")
-	case "binary":
-		return tracewriter.RustFormatBinary, formatKindFFI, nil
-	case "binary_v0", "binaryv0":
-		return tracewriter.RustFormatBinaryV0, formatKindFFI, nil
-	case "json":
-		return tracewriter.RustFormatJSON, formatKindFFI, nil
-	case "go":
-		return 0, formatKindGo, nil
-	default:
-		return 0, formatKindGo, fmt.Errorf(
-			"unknown -format %q (valid values: ctfs, binary, binary_v0, json, go)", name)
 	}
 }
 

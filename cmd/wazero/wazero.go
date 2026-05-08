@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -365,22 +364,14 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
-	// Convention compliance follow-up — 2026-05-08:
-	//
-	// CTFS-only writer dispatch.  The pre-2026-05-08 recorder shipped a
-	// `--format` flag with `ctfs|binary|json|go` choices that selected
-	// between the in-process Go writer and the cgo Rust FFI writer.  The
-	// CodeTracer recorder convention now mandates a single, hard-pinned
-	// CTFS output (`Recorder-CLI-Conventions.md` §4); see
+	// CTFS-only writer dispatch (Recorder-CLI-Conventions.md §4).  Every
+	// run produces a single multi-stream `.ct` container via the cgo binding
+	// in `tracewriter/ctfs_writer.go`, which calls into the C FFI exposed by
+	// `codetracer-trace-format-nim`.  The legacy three-file JSON writer
+	// (`trace.json` + `trace_metadata.json` + `trace_paths.json`) was
+	// removed alongside the `tracewriter.GoWriter` deletion — see
 	// AUDIT-CTFS-2026-05.md ("Convention compliance follow-up — 2026-05-08")
 	// for the full record.
-	//
-	// Today the canonical multi-stream `.ct` container is produced by the
-	// `tracewriter.GoWriter` path, which delegates to
-	// `github.com/metacraft-labs/trace_record::ProduceTrace`.  When the
-	// shared FFI exposes a true `FMT_CTFS` variant the writer can be swapped
-	// in without changing this dispatch, the CLI surface, or the env-var
-	// contract.
 	//
 	// `CODETRACER_WASM_RECORDER_DISABLED` short-circuits recording entirely
 	// so the wazero process can be wrapped under recording-aware harnesses
@@ -395,8 +386,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		}
 	}
 	if outDir != "" && !disabled {
-		goRecord := trace_record.MakeTraceRecord()
-		recorder = tracewriter.NewGoWriter(&goRecord)
+		recorder = tracewriter.NewCtfsTraceWriter()
 	}
 
 	var stylusState *stylus.StylusTrace

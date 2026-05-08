@@ -1,17 +1,18 @@
-// Package tracewriter provides an abstraction layer for trace recording in
-// the wazero CodeTracer fork.
+// Package tracewriter provides the trace-recording surface used by the
+// wazero CodeTracer fork.
 //
-// The recorder is CTFS-only per `Recorder-CLI-Conventions.md` §4: today the
-// canonical multi-stream `.ct` bundle is produced through the in-process
-// `GoWriter` which delegates to `github.com/metacraft-labs/trace_record`.
-// The interface stays writer-agnostic so a future FFI- or Nim-backed CTFS
-// implementation can be plugged in without touching call sites.
+// The recorder is CTFS-only per `Recorder-CLI-Conventions.md` §4: every run
+// produces a single multi-stream `.ct` container via the C FFI exposed by
+// `codetracer-trace-format-nim`'s `codetracer_trace_writer_ffi.nim`.  See
+// `ctfs_writer.go` for the cgo binding and `AUDIT-CTFS-2026-05.md`
+// (Follow-up A) for the migration record.
 //
 // Pre-2026-05-08 this package also exposed a Rust FFI writer
-// (`RustTraceWriter` / `RustFormat`) that selected between
-// `FMT_JSON`/`FMT_BINARY_V0`/`FMT_BINARY` via the `--format` CLI flag.  Both
-// the Rust writer and the `--format` flag were removed by the convention
-// compliance pass — see AUDIT-CTFS-2026-05.md for the full record.
+// (`RustTraceWriter` / `RustFormat`) and an in-process pure-Go writer
+// (`GoWriter`) that wrote the legacy three-file JSON layout
+// (`trace.json` + `trace_metadata.json` + `trace_paths.json`).  Both were
+// removed by the convention compliance pass — see AUDIT-CTFS-2026-05.md
+// for the full record.
 package tracewriter
 
 import (
@@ -20,9 +21,9 @@ import (
 
 // TraceRecorder abstracts the trace-recording surface used by the wazero
 // interpreter and Stylus host hooks.  The wazero CodeTracer fork ships a
-// single concrete writer (`GoWriter`); the interface is preserved so a
-// future FFI- or Nim-backed CTFS implementation can be plugged in without
-// changing the call sites.
+// single concrete writer (`CtfsTraceWriter`); the interface is preserved so
+// alternative back-ends (e.g. an in-memory mock for unit tests) can be
+// plugged in without changing the call sites.
 type TraceRecorder interface {
 	// RegisterStep records a step event at the given source path and line.
 	RegisterStep(path string, line trace_record.Line)
@@ -73,7 +74,8 @@ type TraceRecorder interface {
 	// RegisterFullValue records a full variable value event.
 	RegisterFullValue(variableId trace_record.VariableId, value trace_record.ValueRecord)
 
-	// ProduceTrace writes the collected trace data to the given directory.
+	// ProduceTrace writes the collected trace data to the given directory
+	// as a `<program-basename>.ct` (CTFS) container.
 	ProduceTrace(traceDir string, programName string, workdir string) error
 
 	// CurrentCallsCount returns the current depth of the call stack.

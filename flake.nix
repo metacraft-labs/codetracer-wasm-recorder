@@ -54,10 +54,12 @@
               ;
           };
 
-          # Default package: wazero without FFI (zero dependencies, pure Go).
-          # To build with the Rust FFI trace writer, the consuming flake (e.g.
-          # codetracer) should pass a pre-built codetracer-trace-writer-ffi
-          # package from codetracer-trace-format to wazero.nix.
+          # Default package: wazero without the Nim FFI (the CTFS writer
+          # falls back to the non-functional stub from
+          # `tracewriter/ctfs_writer_stub.go`).  To produce a recording-
+          # capable binary, the consuming flake (e.g. codetracer) should
+          # pass a pre-built `codetracer-trace-format-nim` package to
+          # wazero.nix.
           packages.default = import ./wazero.nix { inherit pkgs; };
         };
     };

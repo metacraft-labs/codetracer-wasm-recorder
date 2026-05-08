@@ -824,14 +824,13 @@ func TestEnvOutDirUsedWhenFlagOmitted(t *testing.T) {
 		"recorder should succeed when CODETRACER_WASM_RECORDER_OUT_DIR is set; stderr:\n%s",
 		stderr)
 
-	// trace_record's ProduceTrace writes trace.json + trace_metadata.json
-	// + trace_paths.json into the env-supplied output dir.  Any of those
-	// is sufficient evidence the env var was honoured.
-	for _, name := range []string{"trace.json", "trace_metadata.json", "trace_paths.json"} {
-		_, statErr := os.Stat(filepath.Join(envOutDir, name))
-		require.NoError(t, statErr,
-			"env-supplied out dir %s should contain %s", envOutDir, name)
-	}
+	// The CTFS writer produces a single `<program-basename>.ct` container
+	// in the env-supplied output dir.  Its presence is sufficient evidence
+	// that the env var was honoured.
+	matches, _ := filepath.Glob(filepath.Join(envOutDir, "*.ct"))
+	require.True(t, len(matches) > 0,
+		"env-supplied out dir %s should contain a .ct container; got: %v",
+		envOutDir, matches)
 }
 
 // TestEnvDisabledSkipsRecording asserts that
@@ -923,29 +922,15 @@ func TestEnvDisabledSkipsRecording(t *testing.T) {
 //   - Step / call counts.
 //   - Call sequence: main → add_3_and_4 (one nested call, return 7).
 //
-// `t.Skipf` (loud, on stderr) is reserved for two audit-documented
-// situations:
-//
-//  1. `ct-print` binary not present (the workspace sibling is missing
-//     — usually because the repo is built outside metacraft).  This is
-//     the only Skipf the convention compliance work approved.
-//  2. The wasm recorder is presently pinned to `tracewriter.GoWriter`
-//     which writes the legacy three-file JSON layout
-//     (`trace.json` + `trace_metadata.json` + `trace_paths.json`).
-//     `ct-print` is primarily a `.ct`-container reader; on the legacy
-//     layout it falls into a "no parser available" path and emits a
-//     deterministic empty document with `counts.steps == -1`.  This
-//     is a **format** issue (ct-print cannot ingest the layout at
-//     all) — explicitly named "Follow-up A" / "FFI ctfs blocker" in
-//     `AUDIT-CTFS-2026-05.md`.  When detected we Skipf with the
-//     blocker name; once `FMT_CTFS` lands in the shared FFI and the
-//     wasm recorder swaps in the new writer (per the audit's
-//     reclassification commit `e206fdf6`) the path will populate
-//     `*.ct` files and the assertions below run.
-//
-// `t.Skip()` is **not** used for missing-value / content-empty
-// reasons — those would mask a recorder regression and are
-// load-bearing per the convention compliance audit.
+// `t.Skipf` (loud, on stderr) is reserved for the single audit-approved
+// situation: `ct-print` binary not present (the workspace sibling is
+// missing — usually because the repo is built outside metacraft).  Every
+// other failure path fails the test loudly.  In particular, the legacy
+// "Follow-up A" Skipf — which gated on `tracewriter.GoWriter` writing the
+// three-file JSON layout (`trace.json` + `trace_metadata.json` +
+// `trace_paths.json`) instead of a `.ct` container — was retired when the
+// CTFS writer was wired up via cgo in `tracewriter/ctfs_writer.go` (see
+// AUDIT-CTFS-2026-05.md "Convention compliance follow-up — 2026-05-08").
 func TestRecordedTraceViaCtPrintJson(t *testing.T) {
 	ctPrint := ctPrintPath(t)
 	if _, err := os.Stat(ctPrint); err != nil {
@@ -970,19 +955,12 @@ func TestRecordedTraceViaCtPrintJson(t *testing.T) {
 	require.Equal(t, 0, exitCode,
 		"recorder should succeed; stderr:\n%s", stderr)
 
-	// The Go writer produces the legacy three-file JSON layout under outDir.
-	// Once the FFI ctfs writer lands (Follow-up A in AUDIT-CTFS-2026-05.md)
-	// the `.ct` glob below will populate first; until then the legacy
-	// path is fed and we will hit the audit-documented Skipf.
+	// The CTFS writer produces a single `<program-basename>.ct` container
+	// under outDir.  No legacy three-file fallback is accepted — the wasm
+	// recorder is CTFS-only per Recorder-CLI-Conventions.md §4.
 	candidates, _ := filepath.Glob(filepath.Join(outDir, "*.ct"))
-	if len(candidates) == 0 {
-		legacy := filepath.Join(outDir, "trace.json")
-		if _, statErr := os.Stat(legacy); statErr == nil {
-			candidates = []string{legacy}
-		}
-	}
 	require.True(t, len(candidates) > 0,
-		"expected at least one trace artefact under %s", outDir)
+		"expected at least one .ct artefact under %s", outDir)
 
 	// Invoke `ct-print --full --strip-paths`.  The convention-compliance
 	// substring-anchor layer (`--json` mode) is gone — `--full` is now
@@ -1017,29 +995,17 @@ func TestRecordedTraceViaCtPrintJson(t *testing.T) {
 		"ct-print --full should emit valid JSON; got:\n%s", string(out))
 
 	// ----------------------------------------------------------------
-	// Detect the audit-documented Follow-up A blocker.  When ct-print
-	// cannot parse the input file (the legacy three-file JSON layout
-	// is not a CTFS container), it falls through to a sentinel empty
-	// document with counts of -1 for the per-stream sections.  Skipf
-	// loudly with the named blocker so CI surfaces it instead of a
-	// silent pass.  Identical pattern to the previous "ct-print could
-	// not read the legacy layout" Skipf — preserved across the upgrade
-	// per the convention compliance audit.
+	// Sanity: ct-print must have parsed the .ct container into a
+	// non-empty document.  Sentinel `counts.steps == -1` or empty
+	// events/functions arrays would indicate the FFI emitted a layout
+	// ct-print cannot read — fail loudly so the regression surfaces.
 	// ----------------------------------------------------------------
-	if doc.Counts["steps"] == -1 || (len(doc.Events) == 0 && len(doc.Functions) == 0) {
-		t.Skipf("SKIP: ct-print --full produced an empty document for %s "+
-			"(counts=%v).  This is the audit-documented Follow-up A blocker: "+
-			"the wasm recorder is currently pinned to tracewriter.GoWriter, "+
-			"which writes the legacy three-file JSON layout (trace.json + "+
-			"trace_metadata.json + trace_paths.json); ct-print is primarily "+
-			"a .ct-container reader and cannot ingest that layout.  See "+
-			"AUDIT-CTFS-2026-05.md (\"Convention compliance follow-up — "+
-			"2026-05-08\") and commit e206fdf6 (\"docs(ctfs-audit): reclassify "+
-			"wasm readback blocker\") for the full record.  This Skipf will "+
-			"go away once FMT_CTFS lands in the shared FFI and the writer "+
-			"is swapped in cmd/wazero/wazero.go.",
-			candidates[0], doc.Counts)
-	}
+	require.False(t, doc.Counts["steps"] == -1,
+		"ct-print returned sentinel counts (-1) for %s — the .ct container "+
+			"could not be parsed; counts=%v", candidates[0], doc.Counts)
+	require.True(t, len(doc.Events) > 0 || len(doc.Functions) > 0,
+		"ct-print --full produced an empty document for %s (counts=%v)",
+		candidates[0], doc.Counts)
 
 	// ================================================================
 	// Layer 2: exact decoded values via ct-print --full

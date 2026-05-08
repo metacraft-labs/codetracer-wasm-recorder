@@ -390,3 +390,42 @@ Open follow-up A (FFI extension exposing `FMT_CTFS` /
 multi-stream `.ct` container; today the recorder's pinned Go writer
 emits the legacy three-file JSON layout that ct-print also accepts.  The
 open follow-ups B–F from the 2026-05-02 audit are unchanged.
+
+## Follow-up A landed — 2026-05-08 (CTFS FFI migration)
+
+The deferred follow-up A from above closed in the same iteration as the
+convention compliance pass:
+
+- `tracewriter.GoWriter` (legacy three-file JSON) was replaced with
+  `tracewriter.CtfsTraceWriter`, a cgo binding to
+  `codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim`.
+  The Nim FFI maps `FFI_TRACE_FORMAT_BINARY` (= 2) onto its
+  multi-stream `MultiStreamTraceWriter`, producing a single
+  `<program-basename>.ct` (CTFS) container under `--out-dir` — no
+  legacy fallback files are emitted.
+- Header `tracewriter/codetracer_trace_writer.h` is the verbatim copy
+  of `codetracer-trace-format-nim/include/codetracer_trace_writer.h`;
+  the cgo binding links statically against
+  `libcodetracer_trace_writer.a` plus `-lzstd -lm -lpthread`.
+- Typed value variants surface correctly: `IntValueRecord` →
+  `kind: "Int"` (via `trace_writer_register_variable_int` /
+  `trace_writer_register_return_int`), `StringValueRecord` →
+  `kind: "String"` (via the streaming CBOR encoder
+  `ct_value_write_string` + `trace_writer_register_variable_cbor`),
+  `StructValueRecord` → `kind: "Struct"` (via
+  `ct_value_begin_struct` + `ct_value_end_compound`).  The deferred
+  Skipf in `TestRecordedTraceViaCtPrintJson` was retired and the strict
+  exact-value assertions now run unconditionally.
+- The `nix develop` shell hook `scripts/detect-trace-format.sh` was
+  rewritten to find the `codetracer-trace-format-nim` sibling, build
+  `libcodetracer_trace_writer.a` via `nimble buildLib` if missing, and
+  export `CGO_CFLAGS` / `CGO_LDFLAGS` plus `LD_LIBRARY_PATH` for both
+  the Nim FFI and `libzstd`.  `wazero.nix` accepts a
+  `codetracer-trace-format-nim` derivation (replacing the previous
+  `codetracer-trace-writer-ffi` input) for production builds.
+
+Open follow-ups B–F from the 2026-05-02 audit are unchanged.  The
+`register_call_arg` / `register_thread_*` half of follow-up A is now
+exposed by the Nim FFI but the wazero recorder does not yet emit
+arguments live (they still surface as scoped variables) — that's a
+recorder-side improvement tracked alongside follow-up B.

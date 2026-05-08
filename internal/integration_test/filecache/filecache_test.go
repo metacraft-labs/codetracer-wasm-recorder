@@ -66,7 +66,8 @@ func testSpecTestCompilerCache(t *testing.T, config wazero.RuntimeConfig) {
 			cmd := exec.Command(testExecutable)
 			cmd.Args = append(cmd.Args, fmt.Sprintf("-test.run=%s", t.Name()))
 			// Inherit the parent environment so that LD_LIBRARY_PATH and other
-			// necessary variables (e.g. for finding libcodetracer_trace_writer_ffi.so)
+			// necessary variables (e.g. for finding libcodetracer_trace_writer.so
+			// and libzstd.so from the codetracer-trace-format-nim FFI link)
 			// are available in the subprocess.
 			cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", cachePathKey, cacheDir))
 			cmd.Stdout = buf

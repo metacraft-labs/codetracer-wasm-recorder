@@ -1,18 +1,48 @@
-package trace_record
+// Package tracetypes provides the value/type/event vocabulary the wazero
+// CodeTracer fork uses to describe trace events.  These types travel from
+// the WASM interpreter and Stylus host stubs through the [TraceRecorder]
+// interface in package tracewriter to the cgo bridge that calls into
+// codetracer-trace-format-nim's CTFS writer.
+//
+// History: this vocabulary used to live in github.com/metacraft-labs/
+// trace_record (a separate Go module shared with other recorders).  Since
+// the wazero fork is the only consumer of these types and writes traces
+// directly through the Nim FFI (not through trace_record's JSON writer),
+// the types are inlined here so the wasm-recorder can drop the cross-repo
+// Go-module dependency.  See AUDIT-CTFS-2026-05.md for the broader CTFS-
+// only convention compliance pass.
+package tracetypes
 
 import (
 	"encoding/json"
 	"strconv"
 )
 
+// ----- ID newtypes -----
+
+type FunctionId uint64
+type CallId uint64
+type VariableId uint64
+type StepId uint64
+type PathId uint64
+type Line int64
 type TypeId uint64
+
+// ----- Type kinds -----
 
 type TypeKind uint8
 
-// TODO
-// type TypeKind enum {
-// None
-// }
+const (
+	INT_TYPE_KIND     = TypeKind(7)
+	FLOAT_TYPE_KIND   = TypeKind(8)
+	POINTER_TYPE_KIND = TypeKind(23)
+	TUPLE_TYPE_KIND   = TypeKind(27)
+	ARRAY_TYPE_KIND   = TypeKind(4)
+	SLICE_TYPE_KIND   = TypeKind(33)
+	BOOL_TYPE_KIND    = TypeKind(12)
+	STRING_TYPE_KIND  = TypeKind(9)
+	STRUCT_TYPE_KIND  = TypeKind(6)
+)
 
 type TypeSpecificInfo interface {
 	IsTypeSpecificInfo()
@@ -27,16 +57,6 @@ func (i NoneTypeSpecificInfo) IsTypeSpecificInfo() {}
 func NewNonTypeSpecificInfo() NoneTypeSpecificInfo {
 	return NoneTypeSpecificInfo{"None"}
 }
-
-const INT_TYPE_KIND = TypeKind(7)
-const FLOAT_TYPE_KIND = TypeKind(8)
-const POINTER_TYPE_KIND = TypeKind(23)
-const TUPLE_TYPE_KIND = TypeKind(27)
-const ARRAY_TYPE_KIND = TypeKind(4)
-const SLICE_TYPE_KIND = TypeKind(33)
-const BOOL_TYPE_KIND = TypeKind(12)
-const STRING_TYPE_KIND = TypeKind(9)
-const STRUCT_TYPE_KIND = TypeKind(6)
 
 type TypeRecord struct {
 	Kind         TypeKind         `json:"kind"`
@@ -83,9 +103,10 @@ func NewPointerTypeInfo(typeId TypeId) PointerTypeInfo {
 	return PointerTypeInfo{"Pointer", typeId}
 }
 
+// ----- Value records -----
+
 type ValueRecord interface {
 	IsValueRecord()
-	// MarshalJson() ([]byte, error)
 }
 
 type NilValueRecord struct {
@@ -148,7 +169,6 @@ func (r *FloatValueRecord) UnmarshalJSON(data []byte) error {
 	}
 	r.Kind = a.Kind
 	r.TypeId = a.TypeId
-	// Try string first (canonical format), then bare number (legacy)
 	var s string
 	if err := json.Unmarshal(a.F, &s); err == nil {
 		f, err := strconv.ParseFloat(s, 64)
@@ -257,3 +277,34 @@ func (s BigIntValueRecord) IsValueRecord() {}
 func BigIntValue(bytes []byte, negative bool, typeId TypeId) BigIntValueRecord {
 	return BigIntValueRecord{"BigInt", bytes, negative, typeId}
 }
+
+// FullValueRecord pairs a variable id with its value — emitted on each
+// step to record local-variable state and on each call to record argument
+// bindings.
+type FullValueRecord struct {
+	VariableId VariableId  `json:"variable_id"`
+	Value      ValueRecord `json:"value"`
+}
+
+// ----- Special-event kinds (I/O, errors, EVM) -----
+
+type RecordEventKind int
+
+const (
+	EventKindWrite RecordEventKind = iota
+	EventKindWriteFile
+	EventKindWriteOther
+	EventKindRead
+	EventKindReadFile
+	EventKindReadOther
+	EventKindReadDir
+	EventKindOpenDir
+	EventKindCloseDir
+	EventKindSocket
+	EventKindOpen
+	// errors / exceptions / signals
+	EventKindError
+	// trace events
+	EventKindTraceLogEvent
+	EventKindEvmEvent
+)

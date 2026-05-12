@@ -34,7 +34,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/metacraft-labs/trace_record"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 )
 
 // initOnce guards the one-shot Nim runtime initialisation
@@ -69,37 +69,37 @@ type ctfsBufferedEvent struct {
 	kind ctfsEventKind
 
 	// Step fields
-	pathId trace_record.PathId
-	line   trace_record.Line
+	pathId tracetypes.PathId
+	line   tracetypes.Line
 
 	// Call fields
-	functionId trace_record.FunctionId
-	args       []trace_record.FullValueRecord
+	functionId tracetypes.FunctionId
+	args       []tracetypes.FullValueRecord
 
 	// Return fields
-	returnValue trace_record.ValueRecord
+	returnValue tracetypes.ValueRecord
 
 	// Variable fields
-	variableId trace_record.VariableId
-	value      trace_record.ValueRecord
+	variableId tracetypes.VariableId
+	value      tracetypes.ValueRecord
 	varName    string
 
 	// RecordEvent fields
-	recordEventKind trace_record.RecordEventKind
+	recordEventKind tracetypes.RecordEventKind
 	metadata        string
 	content         string
 
 	// Function fields
 	funcName string
-	funcPath trace_record.PathId
-	funcLine trace_record.Line
+	funcPath tracetypes.PathId
+	funcLine tracetypes.Line
 
 	// Path fields
 	path string
 
 	// Type fields
 	typeName   string
-	typeRecord trace_record.TypeRecord
+	typeRecord tracetypes.TypeRecord
 }
 
 // CtfsTraceWriter implements TraceRecorder by buffering events during
@@ -107,12 +107,12 @@ type ctfsBufferedEvent struct {
 // on ProduceTrace, which writes a `.ct` (CTFS) container.
 type CtfsTraceWriter struct {
 	events            []ctfsBufferedEvent
-	functions         map[string]trace_record.FunctionId
-	paths             map[string]trace_record.PathId
+	functions         map[string]tracetypes.FunctionId
+	paths             map[string]tracetypes.PathId
 	pathsByIndex      []string // ordered list of paths for serialization
-	variables         map[string]trace_record.VariableId
-	variableNames     map[trace_record.VariableId]string // reverse lookup
-	types             map[string]trace_record.TypeId
+	variables         map[string]tracetypes.VariableId
+	variableNames     map[tracetypes.VariableId]string // reverse lookup
+	types             map[string]tracetypes.TypeId
 	currentCallsCount int
 }
 
@@ -123,23 +123,23 @@ func NewCtfsTraceWriter() *CtfsTraceWriter {
 	initFFI()
 	return &CtfsTraceWriter{
 		events:        make([]ctfsBufferedEvent, 0),
-		functions:     make(map[string]trace_record.FunctionId),
-		paths:         make(map[string]trace_record.PathId),
+		functions:     make(map[string]tracetypes.FunctionId),
+		paths:         make(map[string]tracetypes.PathId),
 		pathsByIndex:  make([]string, 0),
-		variables:     make(map[string]trace_record.VariableId),
-		variableNames: make(map[trace_record.VariableId]string),
-		types:         make(map[string]trace_record.TypeId),
+		variables:     make(map[string]tracetypes.VariableId),
+		variableNames: make(map[tracetypes.VariableId]string),
+		types:         make(map[string]tracetypes.TypeId),
 	}
 }
 
 // --- TraceRecorder interface ---
 
-func (w *CtfsTraceWriter) RegisterStep(path string, line trace_record.Line) {
+func (w *CtfsTraceWriter) RegisterStep(path string, line tracetypes.Line) {
 	pathId := w.EnsurePathId(path)
 	w.RegisterStepWithPathId(pathId, line)
 }
 
-func (w *CtfsTraceWriter) RegisterStepWithPathId(pathId trace_record.PathId, line trace_record.Line) {
+func (w *CtfsTraceWriter) RegisterStepWithPathId(pathId tracetypes.PathId, line tracetypes.Line) {
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:   ctfsEventStep,
 		pathId: pathId,
@@ -147,12 +147,12 @@ func (w *CtfsTraceWriter) RegisterStepWithPathId(pathId trace_record.PathId, lin
 	})
 }
 
-func (w *CtfsTraceWriter) RegisterCall(name string, definitionPath string, definitionLine trace_record.Line, args []trace_record.FullValueRecord) {
+func (w *CtfsTraceWriter) RegisterCall(name string, definitionPath string, definitionLine tracetypes.Line, args []tracetypes.FullValueRecord) {
 	definitionPathId := w.EnsurePathId(definitionPath)
 	w.RegisterCallWithPathId(name, definitionPathId, definitionLine, args)
 }
 
-func (w *CtfsTraceWriter) RegisterCallWithPathId(name string, pathId trace_record.PathId, line trace_record.Line, args []trace_record.FullValueRecord) {
+func (w *CtfsTraceWriter) RegisterCallWithPathId(name string, pathId tracetypes.PathId, line tracetypes.Line, args []tracetypes.FullValueRecord) {
 	functionId := w.EnsureFunctionId(name, pathId, line)
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:       ctfsEventCall,
@@ -162,19 +162,19 @@ func (w *CtfsTraceWriter) RegisterCallWithPathId(name string, pathId trace_recor
 	w.currentCallsCount++
 }
 
-func (w *CtfsTraceWriter) RegisterReturn(value trace_record.ValueRecord) {
+func (w *CtfsTraceWriter) RegisterReturn(value tracetypes.ValueRecord) {
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:        ctfsEventReturn,
 		returnValue: value,
 	})
 }
 
-func (w *CtfsTraceWriter) RegisterVariable(name string, value trace_record.ValueRecord) {
+func (w *CtfsTraceWriter) RegisterVariable(name string, value tracetypes.ValueRecord) {
 	variableId := w.EnsureVariableId(name)
 	w.RegisterFullValue(variableId, value)
 }
 
-func (w *CtfsTraceWriter) RegisterRecordEvent(kind trace_record.RecordEventKind, metadata string, content string) {
+func (w *CtfsTraceWriter) RegisterRecordEvent(kind tracetypes.RecordEventKind, metadata string, content string) {
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:            ctfsEventRecordEvent,
 		recordEventKind: kind,
@@ -183,15 +183,15 @@ func (w *CtfsTraceWriter) RegisterRecordEvent(kind trace_record.RecordEventKind,
 	})
 }
 
-func (w *CtfsTraceWriter) EnsureFunctionId(name string, pathId trace_record.PathId, line trace_record.Line) trace_record.FunctionId {
+func (w *CtfsTraceWriter) EnsureFunctionId(name string, pathId tracetypes.PathId, line tracetypes.Line) tracetypes.FunctionId {
 	if id, ok := w.functions[name]; ok {
 		return id
 	}
 	return w.RegisterFunctionWithNewId(name, pathId, line)
 }
 
-func (w *CtfsTraceWriter) RegisterFunctionWithNewId(name string, pathId trace_record.PathId, line trace_record.Line) trace_record.FunctionId {
-	id := trace_record.FunctionId(len(w.functions))
+func (w *CtfsTraceWriter) RegisterFunctionWithNewId(name string, pathId tracetypes.PathId, line tracetypes.Line) tracetypes.FunctionId {
+	id := tracetypes.FunctionId(len(w.functions))
 	w.functions[name] = id
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:     ctfsEventFunction,
@@ -202,15 +202,15 @@ func (w *CtfsTraceWriter) RegisterFunctionWithNewId(name string, pathId trace_re
 	return id
 }
 
-func (w *CtfsTraceWriter) EnsureVariableId(name string) trace_record.VariableId {
+func (w *CtfsTraceWriter) EnsureVariableId(name string) tracetypes.VariableId {
 	if id, ok := w.variables[name]; ok {
 		return id
 	}
 	return w.RegisterVariableNameWithNewId(name)
 }
 
-func (w *CtfsTraceWriter) RegisterVariableNameWithNewId(name string) trace_record.VariableId {
-	id := trace_record.VariableId(len(w.variables))
+func (w *CtfsTraceWriter) RegisterVariableNameWithNewId(name string) tracetypes.VariableId {
+	id := tracetypes.VariableId(len(w.variables))
 	w.variables[name] = id
 	w.variableNames[id] = name
 	w.events = append(w.events, ctfsBufferedEvent{
@@ -220,15 +220,15 @@ func (w *CtfsTraceWriter) RegisterVariableNameWithNewId(name string) trace_recor
 	return id
 }
 
-func (w *CtfsTraceWriter) EnsurePathId(path string) trace_record.PathId {
+func (w *CtfsTraceWriter) EnsurePathId(path string) tracetypes.PathId {
 	if id, ok := w.paths[path]; ok {
 		return id
 	}
 	return w.RegisterPathWithNewId(path)
 }
 
-func (w *CtfsTraceWriter) RegisterPathWithNewId(path string) trace_record.PathId {
-	id := trace_record.PathId(len(w.paths))
+func (w *CtfsTraceWriter) RegisterPathWithNewId(path string) tracetypes.PathId {
+	id := tracetypes.PathId(len(w.paths))
 	w.paths[path] = id
 	w.pathsByIndex = append(w.pathsByIndex, path)
 	w.events = append(w.events, ctfsBufferedEvent{
@@ -238,15 +238,15 @@ func (w *CtfsTraceWriter) RegisterPathWithNewId(path string) trace_record.PathId
 	return id
 }
 
-func (w *CtfsTraceWriter) EnsureTypeId(name string, typeRecord trace_record.TypeRecord) trace_record.TypeId {
+func (w *CtfsTraceWriter) EnsureTypeId(name string, typeRecord tracetypes.TypeRecord) tracetypes.TypeId {
 	if id, ok := w.types[name]; ok {
 		return id
 	}
 	return w.RegisterTypeWithNewId(name, typeRecord)
 }
 
-func (w *CtfsTraceWriter) RegisterTypeWithNewId(name string, typeRecord trace_record.TypeRecord) trace_record.TypeId {
-	id := trace_record.TypeId(len(w.types))
+func (w *CtfsTraceWriter) RegisterTypeWithNewId(name string, typeRecord tracetypes.TypeRecord) tracetypes.TypeId {
+	id := tracetypes.TypeId(len(w.types))
 	w.types[name] = id
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:       ctfsEventType,
@@ -256,7 +256,7 @@ func (w *CtfsTraceWriter) RegisterTypeWithNewId(name string, typeRecord trace_re
 	return id
 }
 
-func (w *CtfsTraceWriter) RegisterFullValue(variableId trace_record.VariableId, value trace_record.ValueRecord) {
+func (w *CtfsTraceWriter) RegisterFullValue(variableId tracetypes.VariableId, value tracetypes.ValueRecord) {
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:       ctfsEventFullValue,
 		variableId: variableId,
@@ -268,9 +268,9 @@ func (w *CtfsTraceWriter) CurrentCallsCount() int {
 	return w.currentCallsCount
 }
 
-func (w *CtfsTraceWriter) Arg(name string, value trace_record.ValueRecord) trace_record.FullValueRecord {
+func (w *CtfsTraceWriter) Arg(name string, value tracetypes.ValueRecord) tracetypes.FullValueRecord {
 	variableId := w.EnsureVariableId(name)
-	return trace_record.FullValueRecord{VariableId: variableId, Value: value}
+	return tracetypes.FullValueRecord{VariableId: variableId, Value: value}
 }
 
 // ProduceTrace replays the buffered events through the Nim FFI.  Output is a
@@ -381,7 +381,7 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 
 // findFirstStep returns the path and line of the first buffered step event,
 // used to seed the writer's "start" record (the entry point line).
-func (w *CtfsTraceWriter) findFirstStep() (string, trace_record.Line) {
+func (w *CtfsTraceWriter) findFirstStep() (string, tracetypes.Line) {
 	for _, event := range w.events {
 		if event.kind == ctfsEventStep {
 			if int(event.pathId) < len(w.pathsByIndex) {
@@ -461,7 +461,7 @@ func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBuffere
 }
 
 // replayVariableValue replays a FullValueRecord (variable name + value).
-func (w *CtfsTraceWriter) replayVariableValue(handle C.trace_writer_t, fvr trace_record.FullValueRecord) {
+func (w *CtfsTraceWriter) replayVariableValue(handle C.trace_writer_t, fvr tracetypes.FullValueRecord) {
 	name := w.variableNameById(fvr.VariableId)
 	w.replayValueRecord(handle, name, fvr.Value)
 }
@@ -476,7 +476,7 @@ func (w *CtfsTraceWriter) replayVariableValue(handle C.trace_writer_t, fvr trace
 // compound shapes survive the round-trip.  The current implementation
 // matches what `ct-print --full` is willing to surface for the wasm
 // recorder's existing event stream.
-func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string, value trace_record.ValueRecord) {
+func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string, value tracetypes.ValueRecord) {
 	if value == nil {
 		return
 	}
@@ -484,14 +484,14 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 	defer C.free(unsafe.Pointer(cName))
 
 	switch v := value.(type) {
-	case trace_record.IntValueRecord:
+	case tracetypes.IntValueRecord:
 		cTypeName := C.CString("i64")
 		C.trace_writer_register_variable_int(handle,
 			cName, C.int64_t(v.I),
 			C.int(C.FFI_TYPE_INT), cTypeName)
 		C.free(unsafe.Pointer(cTypeName))
 
-	case trace_record.FloatValueRecord:
+	case tracetypes.FloatValueRecord:
 		cTypeName := C.CString("f64")
 		cRepr := C.CString(fmt.Sprintf("%g", v.F))
 		C.trace_writer_register_variable_raw(handle,
@@ -500,7 +500,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.BoolValueRecord:
+	case tracetypes.BoolValueRecord:
 		cTypeName := C.CString("bool")
 		repr := "false"
 		if v.B {
@@ -513,7 +513,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.StringValueRecord:
+	case tracetypes.StringValueRecord:
 		// Encode through the CBOR streaming encoder so the recorded value
 		// surfaces as `kind: "String"` (vrkString) in `ct-print --full`,
 		// not as `kind: "Raw"` (vrkRaw).  The Nim FFI's
@@ -523,7 +523,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		// trace_writer_register_variable_cbor.
 		w.registerVariableString(handle, cName, v.Text, uint64(v.TypeId))
 
-	case trace_record.NilValueRecord:
+	case tracetypes.NilValueRecord:
 		cTypeName := C.CString("None")
 		cRepr := C.CString("None")
 		C.trace_writer_register_variable_raw(handle,
@@ -532,7 +532,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.StructValueRecord:
+	case tracetypes.StructValueRecord:
 		// Encode through the CBOR streaming encoder so the recorded value
 		// surfaces as `kind: "Struct"` (vrkStruct) in `ct-print --full`.
 		// See registerVariableString for the rationale (the FFI lacks a
@@ -540,7 +540,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		// CBOR blob via ct_value_begin_struct / ct_value_end_compound).
 		w.registerVariableStruct(handle, cName, v.Fields, uint64(v.TypeId))
 
-	case trace_record.SequenceValueRecord:
+	case tracetypes.SequenceValueRecord:
 		cTypeName := C.CString("[]")
 		cRepr := C.CString(fmt.Sprintf("[...%d elements]", len(v.Elements)))
 		C.trace_writer_register_variable_raw(handle,
@@ -549,7 +549,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.ReferenceValueRecord:
+	case tracetypes.ReferenceValueRecord:
 		cTypeName := C.CString("*")
 		cRepr := C.CString(fmt.Sprintf("&0x%x", v.Address))
 		C.trace_writer_register_variable_raw(handle,
@@ -558,7 +558,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.TupleValueRecord:
+	case tracetypes.TupleValueRecord:
 		cTypeName := C.CString("()")
 		cRepr := C.CString(fmt.Sprintf("(...%d elements)", len(v.Elements)))
 		C.trace_writer_register_variable_raw(handle,
@@ -567,7 +567,7 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.BigIntValueRecord:
+	case tracetypes.BigIntValueRecord:
 		cTypeName := C.CString("BigInt")
 		repr := fmt.Sprintf("0x%x", v.Bytes)
 		if v.Negative {
@@ -595,24 +595,24 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 // Nim FFI carries the typed Int variant explicitly so `ct-print --full`
 // surfaces `kind: Int, i: ...` for the canonical add-3-and-4 fixture; other
 // kinds fall back to the string-repr `_raw` path.
-func (w *CtfsTraceWriter) replayReturnValue(handle C.trace_writer_t, value trace_record.ValueRecord) {
+func (w *CtfsTraceWriter) replayReturnValue(handle C.trace_writer_t, value tracetypes.ValueRecord) {
 	if value == nil {
 		C.trace_writer_register_return(handle)
 		return
 	}
 
 	switch v := value.(type) {
-	case trace_record.IntValueRecord:
+	case tracetypes.IntValueRecord:
 		cTypeName := C.CString("i64")
 		C.trace_writer_register_return_int(handle,
 			C.int64_t(v.I),
 			C.int(C.FFI_TYPE_INT), cTypeName)
 		C.free(unsafe.Pointer(cTypeName))
 
-	case trace_record.NilValueRecord:
+	case tracetypes.NilValueRecord:
 		C.trace_writer_register_return(handle)
 
-	case trace_record.FloatValueRecord:
+	case tracetypes.FloatValueRecord:
 		cTypeName := C.CString("f64")
 		cRepr := C.CString(fmt.Sprintf("%g", v.F))
 		C.trace_writer_register_return_raw(handle,
@@ -620,7 +620,7 @@ func (w *CtfsTraceWriter) replayReturnValue(handle C.trace_writer_t, value trace
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.BoolValueRecord:
+	case tracetypes.BoolValueRecord:
 		cTypeName := C.CString("bool")
 		repr := "false"
 		if v.B {
@@ -632,7 +632,7 @@ func (w *CtfsTraceWriter) replayReturnValue(handle C.trace_writer_t, value trace
 		C.free(unsafe.Pointer(cTypeName))
 		C.free(unsafe.Pointer(cRepr))
 
-	case trace_record.StringValueRecord:
+	case tracetypes.StringValueRecord:
 		cTypeName := C.CString("string")
 		cRepr := C.CString(v.Text)
 		C.trace_writer_register_return_raw(handle,
@@ -713,7 +713,7 @@ func (w *CtfsTraceWriter) registerVariableString(handle C.trace_writer_t, cName 
 // nested values into the same encoder buffer.  Field-level metadata is not
 // available from the upstream wazero recorder, so we emit an empty struct
 // (field_count=0) — the kind itself is what the strict test asserts on.
-func (w *CtfsTraceWriter) registerVariableStruct(handle C.trace_writer_t, cName *C.char, fields []trace_record.ValueRecord, typeId uint64) {
+func (w *CtfsTraceWriter) registerVariableStruct(handle C.trace_writer_t, cName *C.char, fields []tracetypes.ValueRecord, typeId uint64) {
 	enc := C.ct_value_encoder_new()
 	if enc == nil {
 		return
@@ -749,7 +749,7 @@ func (w *CtfsTraceWriter) registerVariableStruct(handle C.trace_writer_t, cName 
 // variableNameById looks up the variable name for the given ID.  Falls back
 // to a synthetic "var_<id>" form if the ID was never registered (defensive —
 // shouldn't happen in practice).
-func (w *CtfsTraceWriter) variableNameById(id trace_record.VariableId) string {
+func (w *CtfsTraceWriter) variableNameById(id tracetypes.VariableId) string {
 	if name, ok := w.variableNames[id]; ok {
 		return name
 	}

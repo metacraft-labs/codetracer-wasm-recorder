@@ -15,13 +15,13 @@ import (
 
 	// Dwarf
 
-	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/expctxkeys"
 	"github.com/tetratelabs/wazero/internal/filecache"
 	"github.com/tetratelabs/wazero/internal/internalapi"
 	"github.com/tetratelabs/wazero/internal/moremath"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
@@ -589,7 +589,7 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 
 		if v := recover(); v != nil {
 			if m.Record != nil {
-				m.Record.RegisterRecordEvent(trace_record.EventKindError, "runtime error", "runtime error")
+				m.Record.RegisterRecordEvent(tracetypes.EventKindError, "runtime error", "runtime error")
 			}
 			err = ce.recoverOnCall(ctx, m, v)
 		}
@@ -805,7 +805,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			for stack.Len() > 0 {
 
 				if ie, ok := stack.Peek(); ok && ie.HighPC <= offset {
-					m.Record.RegisterReturn(trace_record.NilValue())
+					m.Record.RegisterReturn(tracetypes.NilValue())
 					stack.Pop()
 				} else {
 					break
@@ -851,7 +851,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							}
 
 							currLine = lineRecord
-							m.Record.RegisterStep(currLine.FileName, trace_record.Line(currLine.Line))
+							m.Record.RegisterStep(currLine.FileName, tracetypes.Line(currLine.Line))
 
 							// Offset does not matter, function parameters come without information about their lexical scope
 
@@ -4532,17 +4532,17 @@ func traceReturnType(functionRecord wasmdebug.FunctionRecord,
 		_, seen := m.TypesIndex[typeName]
 
 		if !seen {
-			m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
-			typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+			m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
+			typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 			m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 		}
 
-		m.Record.RegisterReturn(trace_record.NilValue())
+		m.Record.RegisterReturn(tracetypes.NilValue())
 	} else {
 		rawValue := ce.stack[len(ce.stack)-1]
 		rvSize := (*functionRecord.ReturnType).Size()
 
-		var value trace_record.ValueRecord
+		var value tracetypes.ValueRecord
 		if rvSize <= 8 {
 
 			rawBytes := make([]byte, 8)
@@ -4596,7 +4596,7 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 
 	*loggedCall = true
 
-	args := make([]trace_record.FullValueRecord, 0)
+	args := make([]tracetypes.FullValueRecord, 0)
 
 	for _, argRec := range functionRecord.Params {
 		val, err := readVariable(m, argRec, functionRecord, locals)
@@ -4608,9 +4608,9 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 	}
 
 	if m.Record.CurrentCallsCount() > 0 {
-		m.Record.RegisterStep(functionRecord.FileName, trace_record.Line(functionRecord.Line))
+		m.Record.RegisterStep(functionRecord.FileName, tracetypes.Line(functionRecord.Line))
 	}
-	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, trace_record.Line(functionRecord.Line), args)
+	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, tracetypes.Line(functionRecord.Line), args)
 }
 
 func inlineKey(rec wasmdebug.InlineRecord) string {
@@ -4637,7 +4637,7 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 }
 
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {
-	args := make([]trace_record.FullValueRecord, 0)
+	args := make([]tracetypes.FullValueRecord, 0)
 	for _, argRec := range rec.Params {
 		val, err := readVariable(m, argRec, functionRecord, locals)
 		if err != nil {
@@ -4647,7 +4647,7 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 		}
 	}
 
-	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.CallLine))
+	m.Record.RegisterStep(rec.FileName, tracetypes.Line(rec.CallLine))
 	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
 
 	// assuming that this can't be the first recorded function, as there are steps up as well
@@ -4655,8 +4655,8 @@ func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functi
 	// otherwise this will produce a wrong recording for now, as we currently assume
 	// we produce a call event before the first step I think (alexander)
 	// TODO: maybe an assert that `m.Record.CurrentCallsCount() > 0` ?
-	m.Record.RegisterStep(rec.FileName, trace_record.Line(rec.Line))
-	m.Record.RegisterCall(rec.Name, rec.FileName, trace_record.Line(rec.Line), args)
+	m.Record.RegisterStep(rec.FileName, tracetypes.Line(rec.Line))
+	m.Record.RegisterCall(rec.Name, rec.FileName, tracetypes.Line(rec.Line), args)
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

@@ -16,7 +16,7 @@ package tracewriter
 import (
 	"fmt"
 
-	"github.com/metacraft-labs/trace_record"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 )
 
 // CtfsTraceWriter is a non-functional placeholder when the binary is built
@@ -28,37 +28,37 @@ func NewCtfsTraceWriter() *CtfsTraceWriter {
 	return &CtfsTraceWriter{}
 }
 
-func (w *CtfsTraceWriter) RegisterStep(string, trace_record.Line) {}
-func (w *CtfsTraceWriter) RegisterStepWithPathId(trace_record.PathId, trace_record.Line) {
+func (w *CtfsTraceWriter) RegisterStep(string, tracetypes.Line) {}
+func (w *CtfsTraceWriter) RegisterStepWithPathId(tracetypes.PathId, tracetypes.Line) {
 }
-func (w *CtfsTraceWriter) RegisterCall(string, string, trace_record.Line, []trace_record.FullValueRecord) {
+func (w *CtfsTraceWriter) RegisterCall(string, string, tracetypes.Line, []tracetypes.FullValueRecord) {
 }
-func (w *CtfsTraceWriter) RegisterCallWithPathId(string, trace_record.PathId, trace_record.Line, []trace_record.FullValueRecord) {
+func (w *CtfsTraceWriter) RegisterCallWithPathId(string, tracetypes.PathId, tracetypes.Line, []tracetypes.FullValueRecord) {
 }
-func (w *CtfsTraceWriter) RegisterReturn(trace_record.ValueRecord)                                {}
-func (w *CtfsTraceWriter) RegisterVariable(string, trace_record.ValueRecord)                      {}
-func (w *CtfsTraceWriter) RegisterRecordEvent(trace_record.RecordEventKind, string, string)       {}
-func (w *CtfsTraceWriter) RegisterFullValue(trace_record.VariableId, trace_record.ValueRecord)    {}
+func (w *CtfsTraceWriter) RegisterReturn(tracetypes.ValueRecord)                           {}
+func (w *CtfsTraceWriter) RegisterVariable(string, tracetypes.ValueRecord)                 {}
+func (w *CtfsTraceWriter) RegisterRecordEvent(tracetypes.RecordEventKind, string, string)  {}
+func (w *CtfsTraceWriter) RegisterFullValue(tracetypes.VariableId, tracetypes.ValueRecord) {}
 
-func (w *CtfsTraceWriter) EnsureFunctionId(string, trace_record.PathId, trace_record.Line) trace_record.FunctionId {
+func (w *CtfsTraceWriter) EnsureFunctionId(string, tracetypes.PathId, tracetypes.Line) tracetypes.FunctionId {
 	return 0
 }
-func (w *CtfsTraceWriter) RegisterFunctionWithNewId(string, trace_record.PathId, trace_record.Line) trace_record.FunctionId {
+func (w *CtfsTraceWriter) RegisterFunctionWithNewId(string, tracetypes.PathId, tracetypes.Line) tracetypes.FunctionId {
 	return 0
 }
-func (w *CtfsTraceWriter) EnsureVariableId(string) trace_record.VariableId        { return 0 }
-func (w *CtfsTraceWriter) RegisterVariableNameWithNewId(string) trace_record.VariableId { return 0 }
-func (w *CtfsTraceWriter) EnsurePathId(string) trace_record.PathId                { return 0 }
-func (w *CtfsTraceWriter) RegisterPathWithNewId(string) trace_record.PathId       { return 0 }
-func (w *CtfsTraceWriter) EnsureTypeId(string, trace_record.TypeRecord) trace_record.TypeId {
+func (w *CtfsTraceWriter) EnsureVariableId(string) tracetypes.VariableId              { return 0 }
+func (w *CtfsTraceWriter) RegisterVariableNameWithNewId(string) tracetypes.VariableId { return 0 }
+func (w *CtfsTraceWriter) EnsurePathId(string) tracetypes.PathId                      { return 0 }
+func (w *CtfsTraceWriter) RegisterPathWithNewId(string) tracetypes.PathId             { return 0 }
+func (w *CtfsTraceWriter) EnsureTypeId(string, tracetypes.TypeRecord) tracetypes.TypeId {
 	return 0
 }
-func (w *CtfsTraceWriter) RegisterTypeWithNewId(string, trace_record.TypeRecord) trace_record.TypeId {
+func (w *CtfsTraceWriter) RegisterTypeWithNewId(string, tracetypes.TypeRecord) tracetypes.TypeId {
 	return 0
 }
 func (w *CtfsTraceWriter) CurrentCallsCount() int { return 0 }
-func (w *CtfsTraceWriter) Arg(name string, value trace_record.ValueRecord) trace_record.FullValueRecord {
-	return trace_record.FullValueRecord{}
+func (w *CtfsTraceWriter) Arg(name string, value tracetypes.ValueRecord) tracetypes.FullValueRecord {
+	return tracetypes.FullValueRecord{}
 }
 
 func (w *CtfsTraceWriter) ProduceTrace(string, string, string) error {

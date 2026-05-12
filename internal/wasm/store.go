@@ -8,13 +8,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/expctxkeys"
 	"github.com/tetratelabs/wazero/internal/internalapi"
 	"github.com/tetratelabs/wazero/internal/leb128"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/sys"
 	"github.com/tetratelabs/wazero/tracewriter"
 )
@@ -132,7 +132,7 @@ type (
 
 		Record tracewriter.TraceRecorder
 
-		TypesIndex map[string]trace_record.TypeId
+		TypesIndex map[string]tracetypes.TypeId
 
 		TypeIdIndex uint64
 	}

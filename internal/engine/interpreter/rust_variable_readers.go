@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/metacraft-labs/trace_record"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/internal/wasm"
 )
 
-func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 
 	typeName := typ.String()
 
@@ -18,13 +18,13 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 
 	data, _, _ := bytesToStruct(rawBytes, typ, m)
 
-	val, ok := data.(trace_record.StructValueRecord)
+	val, ok := data.(tracetypes.StructValueRecord)
 
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a string slice")
 	}
 
-	data_ptr_field, err := val.Fields[0].(trace_record.ReferenceValueRecord)
+	data_ptr_field, err := val.Fields[0].(tracetypes.ReferenceValueRecord)
 
 	if !err {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a string slice")
@@ -32,7 +32,7 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 
 	addr := data_ptr_field.Address
 
-	len_field, ok := val.Fields[1].(trace_record.IntValueRecord)
+	len_field, ok := val.Fields[1].(tracetypes.IntValueRecord)
 
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a string slice")
@@ -51,21 +51,21 @@ func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIns
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRING_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.STRING_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StringValue(str, typeId), typeId, nil
+	return tracetypes.StringValue(str, typeId), typeId, nil
 }
 
-func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	typeName := typ.String()
 
-	elems := make([]trace_record.ValueRecord, 0)
+	elems := make([]tracetypes.ValueRecord, 0)
 
 	for _, field := range typ.Field {
 		startByte := field.ByteOffset
@@ -80,18 +80,18 @@ func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.TupleValue(elems, typeId), typeId, nil
+	return tracetypes.TupleValue(elems, typeId), typeId, nil
 }
 
-func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 
 	typeName := typ.String()
 
@@ -102,21 +102,21 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 		return nil, INVALID_TYPE_ID, err
 	}
 
-	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	fields := rawStruct.(tracetypes.StructValueRecord).Fields
 
 	if len(fields) != 2 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a slice")
 	}
 
 	var addr uint32
-	if addrRecord, ok := fields[0].(trace_record.ReferenceValueRecord); ok {
+	if addrRecord, ok := fields[0].(tracetypes.ReferenceValueRecord); ok {
 		addr = uint32(addrRecord.Address)
 	} else {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a slice")
 	}
 
 	var length uint32
-	if lenRecord, ok := fields[1].(trace_record.IntValueRecord); ok {
+	if lenRecord, ok := fields[1].(tracetypes.IntValueRecord); ok {
 		length = uint32(lenRecord.I)
 	} else {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a slice")
@@ -135,35 +135,35 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	elems := make([]trace_record.ValueRecord, 0)
+	elems := make([]tracetypes.ValueRecord, 0)
 	for i := uint32(0); i < length; i++ {
 		elemBytes, ok := mem.Read(uint32(addr)+i*elemSize, elemSize)
 		if !ok {
-			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
+			return tracetypes.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
 		}
 
 		// TODO: Construct array Type info, DO NOT ignore it
 		elem, _, err := bytesToValueRecord(elemBytes, elemType, m)
 		if err != nil {
-			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, err
+			return tracetypes.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, err
 		}
 
 		elems = append(elems, elem)
 	}
 
-	return trace_record.SequenceValue(elems, true, typeId), typeId, nil
+	return tracetypes.SequenceValue(elems, true, typeId), typeId, nil
 
 }
 
-func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	// Vec<T> in Rust stdlib is essentially { buf: RawVec<T>, len: usize }.
 	// The element type is stored in the TypeParamMap of the PCRecord.
 
@@ -188,14 +188,14 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 		return nil, INVALID_TYPE_ID, err
 	}
 
-	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	fields := rawStruct.(tracetypes.StructValueRecord).Fields
 	if len(fields) != 2 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
 
 	// First field is RawVec<T> which holds the pointer in its first subfield
 	// (Unique<T>).
-	rawVecField, ok := fields[0].(trace_record.StructValueRecord)
+	rawVecField, ok := fields[0].(tracetypes.StructValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
@@ -205,7 +205,7 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
 
-	rawVecInnerField, ok := rawVecFields[0].(trace_record.StructValueRecord)
+	rawVecInnerField, ok := rawVecFields[0].(tracetypes.StructValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
@@ -214,17 +214,17 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
 
-	ptrUniqField, ok := rawVecInnerField.Fields[0].(trace_record.StructValueRecord)
+	ptrUniqField, ok := rawVecInnerField.Fields[0].(tracetypes.StructValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
 
-	ptrNonNullField, ok := ptrUniqField.Fields[0].(trace_record.StructValueRecord)
+	ptrNonNullField, ok := ptrUniqField.Fields[0].(tracetypes.StructValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
 
-	ptrField, ok := ptrNonNullField.Fields[0].(trace_record.ReferenceValueRecord)
+	ptrField, ok := ptrNonNullField.Fields[0].(tracetypes.ReferenceValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
@@ -232,7 +232,7 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 	addr := ptrField.Address
 
 	// Second field of Vec is the current length.
-	lenRecord, ok := fields[1].(trace_record.IntValueRecord)
+	lenRecord, ok := fields[1].(tracetypes.IntValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a vec")
 	}
@@ -243,52 +243,52 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 	// Register Vec type in trace record if needed.
 	typeId, seen := m.TypesIndex[typeName]
 	if !seen {
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	elems := make([]trace_record.ValueRecord, 0)
+	elems := make([]tracetypes.ValueRecord, 0)
 	for i := uint32(0); i < length; i++ {
 		elemBytes, ok := mem.Read(uint32(addr)+i*elemSize, elemSize)
 		if !ok {
-			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
+			return tracetypes.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, fmt.Errorf("invalid memory access")
 		}
 
 		elem, _, err := bytesToValueRecord(elemBytes, elemType, m)
 		if err != nil {
-			return trace_record.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, err
+			return tracetypes.SequenceValue(elems, true, typeId), INVALID_TYPE_ID, err
 		}
 
 		elems = append(elems, elem)
 	}
 
-	return trace_record.SequenceValue(elems, true, typeId), typeId, nil
+	return tracetypes.SequenceValue(elems, true, typeId), typeId, nil
 
 }
 
 // TODO: maybe this is not Rust specific?
-func bytesToVoidptr(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToVoidptr(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	typeName := typ.String()
 
 	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.NilValue(), typeId, nil
+	return tracetypes.NilValue(), typeId, nil
 }
 
 // Stylus contracts use https://crates.io/crates/ruint to store variables. So we should handle them.
-func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	typeName := typ.String()
 
 	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
@@ -296,20 +296,20 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 		return nil, INVALID_TYPE_ID, err
 	}
 
-	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	fields := rawStruct.(tracetypes.StructValueRecord).Fields
 
 	if len(fields) != 1 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
 	}
 
-	limbs, ok := fields[0].(trace_record.SequenceValueRecord)
+	limbs, ok := fields[0].(tracetypes.SequenceValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
 	}
 
 	bytes := make([]byte, 0)
 	for _, n := range limbs.Elements {
-		limb, ok := n.(trace_record.IntValueRecord)
+		limb, ok := n.(tracetypes.IntValueRecord)
 		if !ok {
 			return nil, INVALID_TYPE_ID, fmt.Errorf("not a Uint")
 		}
@@ -325,19 +325,19 @@ func bytesToRuintRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	typeId, seen := m.TypesIndex[typeName]
 
 	if !seen {
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.SLICE_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.BigIntValue(bytes, false, typeId), typeId, nil
+	return tracetypes.BigIntValue(bytes, false, typeId), typeId, nil
 }
 
 // Stylus contracts use https://crates.io/crates/alloy-primitives to store addresses. So we should handle them.
-func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	typeName := typ.String()
 
 	rawStruct, _, err := bytesToStruct(rawBytes, typ, m)
@@ -345,30 +345,30 @@ func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIn
 		return nil, INVALID_TYPE_ID, err
 	}
 
-	fields := rawStruct.(trace_record.StructValueRecord).Fields
+	fields := rawStruct.(tracetypes.StructValueRecord).Fields
 	if len(fields) != 1 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 	}
 
 	// Handle second nesting
-	rawStruct, ok := fields[0].(trace_record.StructValueRecord)
+	rawStruct, ok := fields[0].(tracetypes.StructValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 	}
 
-	fields = rawStruct.(trace_record.StructValueRecord).Fields
+	fields = rawStruct.(tracetypes.StructValueRecord).Fields
 	if len(fields) != 1 {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 	}
 
-	seq, ok := fields[0].(trace_record.SequenceValueRecord)
+	seq, ok := fields[0].(tracetypes.SequenceValueRecord)
 	if !ok {
 		return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 	}
 
 	bytes := make([]byte, 0, len(seq.Elements))
 	for _, e := range seq.Elements {
-		iv, ok := e.(trace_record.IntValueRecord)
+		iv, ok := e.(tracetypes.IntValueRecord)
 		if !ok {
 			return nil, INVALID_TYPE_ID, fmt.Errorf("not an address")
 		}
@@ -379,11 +379,11 @@ func bytesToAddressRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleIn
 
 	typeId, seen := m.TypesIndex[typeName]
 	if !seen {
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.STRING_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.STRING_TYPE_KIND, typeName)
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StringValue(hexStr, typeId), typeId, nil
+	return tracetypes.StringValue(hexStr, typeId), typeId, nil
 }

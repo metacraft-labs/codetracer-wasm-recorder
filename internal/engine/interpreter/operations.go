@@ -851,12 +851,12 @@ const (
 // only relevant when in context of its kind.
 type unionOperation struct {
 	// Kind determines how to interpret the other fields in this struct.
-	Kind   operationKind
-	B1, B2 byte
-	B3     bool
-	U1, U2 uint64
-	U3     uint64
-	Us     []uint64
+	Kind                operationKind
+	B1, B2              byte
+	B3                  bool
+	U1, U2              uint64
+	U3                  uint64
+	Us                  []uint64
 	offsetInCodeSection uint64
 }
 

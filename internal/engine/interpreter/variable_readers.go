@@ -7,12 +7,12 @@ import (
 	"math"
 	"strings"
 
-	"github.com/metacraft-labs/trace_record"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 )
 
-func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) (trace_record.ValueRecord, error) {
+func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64) (tracetypes.ValueRecord, error) {
 	fb := functionRecord.FrameBase
 
 	var memAddr uint32
@@ -45,7 +45,7 @@ func readVariable(m *wasm.ModuleInstance, v wasmdebug.VariableRecord, functionRe
 	return valueRecord, err
 }
 
-func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val trace_record.ValueRecord, typeId trace_record.TypeId, err error) {
+func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance) (val tracetypes.ValueRecord, typeId tracetypes.TypeId, err error) {
 	switch t := typ.(type) {
 	case *dwarf.IntType:
 		val, typeId, err = bytesToInt(rawBytes, t, m)
@@ -93,15 +93,15 @@ func bytesToValueRecord(rawBytes []byte, typ dwarf.Type, m *wasm.ModuleInstance)
 	default:
 		fmt.Printf("WE HAVE SOMETHING ELSE: %T %#v\n", t, t)
 		// TODO
-		val = trace_record.NilValue()
+		val = tracetypes.NilValue()
 	}
 
 	return
 }
 
-const INVALID_TYPE_ID = trace_record.TypeId(0xffffffffffffffff)
+const INVALID_TYPE_ID = tracetypes.TypeId(0xffffffffffffffff)
 
-func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	size := typ.ByteSize
 	var intVal int64
 
@@ -123,7 +123,7 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 	}
 
 	// TODO: what should the string parameter be?
-	// intTypeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, "Int")
+	// intTypeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.INT_TYPE_KIND, "Int")
 	// typeId := record.RegisterTypeWithNewId(typ.Name, intTypeRecord)
 
 	typeName := typ.String()
@@ -132,18 +132,18 @@ func bytesToInt(rawBytes []byte, typ *dwarf.IntType, m *wasm.ModuleInstance) (tr
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.INT_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.IntValue(intVal, typeId), typeId, nil
+	return tracetypes.IntValue(intVal, typeId), typeId, nil
 }
 
-func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	size := typ.ByteSize
 	var intVal uint64
 
@@ -170,19 +170,19 @@ func bytesToUint(rawBytes []byte, typ *dwarf.UintType, m *wasm.ModuleInstance) (
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.INT_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.INT_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
 	// TODO: discuss int64 uint64 stuff?
-	return trace_record.IntValue(int64(intVal), typeId), typeId, nil
+	return tracetypes.IntValue(int64(intVal), typeId), typeId, nil
 }
 
-func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	size := typ.ByteSize
 	var boolVal bool
 
@@ -200,18 +200,18 @@ func bytesToBool(rawBytes []byte, typ *dwarf.BoolType, m *wasm.ModuleInstance) (
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.BOOL_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.BOOL_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.BoolValue(boolVal, typeId), typeId, nil
+	return tracetypes.BoolValue(boolVal, typeId), typeId, nil
 }
 
-func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 	size := typ.ByteSize
 	var floatVal float64
 
@@ -232,22 +232,22 @@ func bytesToFloat(rawBytes []byte, typ *dwarf.FloatType, m *wasm.ModuleInstance)
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.FLOAT_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.FLOAT_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.FloatValue(floatVal, typeId), typeId, nil
+	return tracetypes.FloatValue(floatVal, typeId), typeId, nil
 }
 
 // TODO: Finish
-func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
-	values := make([]trace_record.ValueRecord, 0)
+func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
+	values := make([]tracetypes.ValueRecord, 0)
 
-	types := make([]trace_record.FieldTypeRecord, 0)
+	types := make([]tracetypes.FieldTypeRecord, 0)
 
 	for _, field := range typ.Field {
 		offset := field.ByteOffset
@@ -256,7 +256,7 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 		res, fieldTypeId, err := bytesToValueRecord(rawBytes[offset:offset+size], field.Type, m)
 
-		fieldTypeRecord := trace_record.NewFieldTypeRecord(fieldName, fieldTypeId)
+		fieldTypeRecord := tracetypes.NewFieldTypeRecord(fieldName, fieldTypeId)
 		types = append(types, fieldTypeRecord)
 
 		if err != nil {
@@ -273,20 +273,20 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeSpecificInfo := trace_record.NewStructTypeInfo(types)
+		typeSpecificInfo := tracetypes.NewStructTypeInfo(types)
 
-		typeRecord := trace_record.NewTypeRecord(trace_record.STRUCT_TYPE_KIND, typeName, typeSpecificInfo)
+		typeRecord := tracetypes.NewTypeRecord(tracetypes.STRUCT_TYPE_KIND, typeName, typeSpecificInfo)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.StructValue(values, typeId), typeId, nil
+	return tracetypes.StructValue(values, typeId), typeId, nil
 }
 
-func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 
 	dereferencedType := typ.Type
 
@@ -307,7 +307,7 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	dereferencedValueRecord, dereferencedTypeId, _ := bytesToValueRecord(dereferencedRawBytes, dereferencedType, m)
 
 	if dereferencedValueRecord == nil || dereferencedType.Size() == 0 {
-		dereferencedValueRecord = trace_record.NilValue()
+		dereferencedValueRecord = tracetypes.NilValue()
 	}
 
 	typeName := typ.String()
@@ -316,29 +316,29 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeSpecificInfo := trace_record.NewPointerTypeInfo(dereferencedTypeId)
+		typeSpecificInfo := tracetypes.NewPointerTypeInfo(dereferencedTypeId)
 
-		typeRecord := trace_record.NewTypeRecord(trace_record.POINTER_TYPE_KIND, typeName, typeSpecificInfo)
+		typeRecord := tracetypes.NewTypeRecord(tracetypes.POINTER_TYPE_KIND, typeName, typeSpecificInfo)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
 	// TODO: Record pointer Type info
 
-	return trace_record.ReferenceValue(dereferencedValueRecord, uint64(addr), false, typeId), typeId, nil
+	return tracetypes.ReferenceValue(dereferencedValueRecord, uint64(addr), false, typeId), typeId, nil
 
 }
 
-func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (trace_record.ValueRecord, trace_record.TypeId, error) {
+func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
 
 	elemSize := typ.Type.Size()
 
 	arrayLen := typ.Count
 
-	elems := make([]trace_record.ValueRecord, 0)
+	elems := make([]tracetypes.ValueRecord, 0)
 
 	for i := 0; i < int(arrayLen); i++ {
 
@@ -355,14 +355,14 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 
 	if !seen {
 
-		m.TypesIndex[typeName] = trace_record.TypeId(len(m.TypesIndex))
+		m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
 		typeId = m.TypesIndex[typeName]
 
-		typeRecord := trace_record.NewSimpleTypeRecord(trace_record.ARRAY_TYPE_KIND, typeName)
+		typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.ARRAY_TYPE_KIND, typeName)
 
 		m.Record.RegisterTypeWithNewId(typeName, typeRecord)
 	}
 
-	return trace_record.SequenceValue(elems, false, typeId), typeId, nil
+	return tracetypes.SequenceValue(elems, false, typeId), typeId, nil
 
 }

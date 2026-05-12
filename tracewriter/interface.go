@@ -16,7 +16,7 @@
 package tracewriter
 
 import (
-	"github.com/metacraft-labs/trace_record"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 )
 
 // TraceRecorder abstracts the trace-recording surface used by the wazero
@@ -26,53 +26,53 @@ import (
 // plugged in without changing the call sites.
 type TraceRecorder interface {
 	// RegisterStep records a step event at the given source path and line.
-	RegisterStep(path string, line trace_record.Line)
+	RegisterStep(path string, line tracetypes.Line)
 
 	// RegisterStepWithPathId records a step event using a pre-resolved path ID.
-	RegisterStepWithPathId(pathId trace_record.PathId, line trace_record.Line)
+	RegisterStepWithPathId(pathId tracetypes.PathId, line tracetypes.Line)
 
 	// RegisterCall records a function call event.
-	RegisterCall(name string, definitionPath string, definitionLine trace_record.Line, args []trace_record.FullValueRecord)
+	RegisterCall(name string, definitionPath string, definitionLine tracetypes.Line, args []tracetypes.FullValueRecord)
 
 	// RegisterCallWithPathId records a function call using a pre-resolved path ID.
-	RegisterCallWithPathId(name string, pathId trace_record.PathId, line trace_record.Line, args []trace_record.FullValueRecord)
+	RegisterCallWithPathId(name string, pathId tracetypes.PathId, line tracetypes.Line, args []tracetypes.FullValueRecord)
 
 	// RegisterReturn records a function return event.
-	RegisterReturn(value trace_record.ValueRecord)
+	RegisterReturn(value tracetypes.ValueRecord)
 
 	// RegisterVariable records a variable assignment event.
-	RegisterVariable(name string, value trace_record.ValueRecord)
+	RegisterVariable(name string, value tracetypes.ValueRecord)
 
 	// RegisterRecordEvent records a special event (I/O, EVM, error, etc.).
-	RegisterRecordEvent(kind trace_record.RecordEventKind, metadata string, content string)
+	RegisterRecordEvent(kind tracetypes.RecordEventKind, metadata string, content string)
 
 	// EnsureFunctionId returns the ID for a function, registering it if new.
-	EnsureFunctionId(name string, pathId trace_record.PathId, line trace_record.Line) trace_record.FunctionId
+	EnsureFunctionId(name string, pathId tracetypes.PathId, line tracetypes.Line) tracetypes.FunctionId
 
 	// RegisterFunctionWithNewId registers a new function and returns its ID
 	// without checking if it already exists.
-	RegisterFunctionWithNewId(name string, pathId trace_record.PathId, line trace_record.Line) trace_record.FunctionId
+	RegisterFunctionWithNewId(name string, pathId tracetypes.PathId, line tracetypes.Line) tracetypes.FunctionId
 
 	// EnsureVariableId returns the ID for a variable name, registering it if new.
-	EnsureVariableId(name string) trace_record.VariableId
+	EnsureVariableId(name string) tracetypes.VariableId
 
 	// RegisterVariableNameWithNewId registers a new variable name and returns its ID.
-	RegisterVariableNameWithNewId(name string) trace_record.VariableId
+	RegisterVariableNameWithNewId(name string) tracetypes.VariableId
 
 	// EnsurePathId returns the ID for a source file path, registering it if new.
-	EnsurePathId(path string) trace_record.PathId
+	EnsurePathId(path string) tracetypes.PathId
 
 	// RegisterPathWithNewId registers a new path and returns its ID.
-	RegisterPathWithNewId(path string) trace_record.PathId
+	RegisterPathWithNewId(path string) tracetypes.PathId
 
 	// EnsureTypeId returns the ID for a type, registering it if new.
-	EnsureTypeId(name string, typeRecord trace_record.TypeRecord) trace_record.TypeId
+	EnsureTypeId(name string, typeRecord tracetypes.TypeRecord) tracetypes.TypeId
 
 	// RegisterTypeWithNewId registers a new type and returns its ID.
-	RegisterTypeWithNewId(name string, typeRecord trace_record.TypeRecord) trace_record.TypeId
+	RegisterTypeWithNewId(name string, typeRecord tracetypes.TypeRecord) tracetypes.TypeId
 
 	// RegisterFullValue records a full variable value event.
-	RegisterFullValue(variableId trace_record.VariableId, value trace_record.ValueRecord)
+	RegisterFullValue(variableId tracetypes.VariableId, value tracetypes.ValueRecord)
 
 	// ProduceTrace writes the collected trace data to the given directory
 	// as a `<program-basename>.ct` (CTFS) container.
@@ -82,5 +82,5 @@ type TraceRecorder interface {
 	CurrentCallsCount() int
 
 	// Arg creates a FullValueRecord for a function argument.
-	Arg(name string, value trace_record.ValueRecord) trace_record.FullValueRecord
+	Arg(name string, value tracetypes.ValueRecord) tracetypes.FullValueRecord
 }

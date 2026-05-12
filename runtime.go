@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/metacraft-labs/trace_record"
 	"github.com/tetratelabs/wazero/api"
 	experimentalapi "github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/engine/interpreter"
@@ -14,6 +13,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/platform"
 	internalsock "github.com/tetratelabs/wazero/internal/sock"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	binaryformat "github.com/tetratelabs/wazero/internal/wasm/binary"
 	"github.com/tetratelabs/wazero/sys"
@@ -357,7 +357,7 @@ func (r *runtime) InstantiateModuleWithRecord(
 	}
 
 	moduleInstance.Record = traceRecord
-	moduleInstance.TypesIndex = make(map[string]trace_record.TypeId)
+	moduleInstance.TypesIndex = make(map[string]tracetypes.TypeId)
 	mod = moduleInstance
 
 	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {

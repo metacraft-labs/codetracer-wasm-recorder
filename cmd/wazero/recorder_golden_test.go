@@ -510,7 +510,7 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// ----- exact counts ---------------------------------------------------
 	require.Equal(t, 76, doc.Counts["steps"], "counts.steps")
 	require.Equal(t, 3, doc.Counts["calls"], "counts.calls")
-	require.Equal(t, 1, doc.Counts["io_events"], "counts.io_events")
+	require.Equal(t, 0, doc.Counts["io_events"], "counts.io_events")
 	require.Equal(t, 76, doc.Counts["values"], "counts.values")
 	require.Equal(t, 4, doc.Counts["functions"], "counts.functions")
 	require.Equal(t, 1, doc.Counts["paths"], "counts.paths")
@@ -524,9 +524,9 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 76, "call_entry": 3, "call_exit": 3, "io": 1,
+		"step": 76, "call_entry": 3, "call_exit": 3,
 	}, kinds, "event-kind histogram")
-	require.Equal(t, 83, len(events), "events length")
+	require.Equal(t, 82, len(events), "events length")
 
 	// ----- call entry sequence -------------------------------------------
 	require.Equal(t, []string{"classify", "sum_iter", "nested_loop"},
@@ -548,27 +548,22 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	require.Equal(t, "Int", exits[2].Return.Kind)
 	require.Equal(t, int64(10), *exits[2].Return.I, "nested_loop(4) → 10")
 
-	// ----- io event: present, ioError, anchored at last step -------------
-	// RECORDER BUG: the wasm recorder emits a synthetic
-	// EventKindError("runtime error") for every WASI proc_exit, even
-	// for exit code 0 (interpreter.go:592 catches the panic raised by
-	// proc_exit indiscriminately).  This test pins the present-day
-	// behaviour as a golden snapshot — when the recorder learns to
-	// distinguish exit-0 from a real trap, this assertion needs
-	// loosening (or the bug must be filed and fixed).
+	// ----- io events: none for a clean exit ------------------------------
+	// A normal-exit program writes no io_event.  The earlier behaviour
+	// of synthesizing a spurious EventKindError("runtime error") for
+	// every WASI proc_exit was a recorder bug; interpreter.go now
+	// only records EventKindError when the panic value is a real trap
+	// (wasmruntime.Error, runtime.Error, host panic) or a non-zero
+	// *sys.ExitError.  See TestRecorderGoldenPanicPath for the
+	// inverse test that exercises a panicking program.
 	var ioEvents []goldenEvent
 	for _, ev := range events {
 		if ev.Kind == "io" {
 			ioEvents = append(ioEvents, ev)
 		}
 	}
-	require.Equal(t, 1, len(ioEvents), "io event count")
-	require.Equal(t, "ioError", ioEvents[0].IoKind, "io_kind")
-	require.Equal(t, "runtime error", ioEvents[0].Text,
-		"io.text — RECORDER BUG: emitted for every WASI proc_exit, "+
-			"including normal-exit programs (interpreter.go:592)")
-	require.Equal(t, int64(74), ioEvents[0].StepID,
-		"io.step_id should anchor at the last user step before exit")
+	require.Equal(t, 0, len(ioEvents),
+		"clean-exit program should produce no io_events; got %v", ioEvents)
 
 	// ----- exact decoded variables, in source-line order -----------------
 	//
@@ -884,7 +879,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	require.Equal(t, 8, doc.Counts["calls"], "1 chain + 1 + 5 recursive = 7? "+
 		"In practice the recorder also opens a call frame for `main`'s inline "+
 		"frame switches, so 8 is the literal observed count")
-	require.Equal(t, 1, doc.Counts["io_events"])
+	require.Equal(t, 0, doc.Counts["io_events"], "clean exit produces no io_events")
 	require.Equal(t, 5, doc.Counts["functions"])
 	require.Equal(t, 6, doc.Counts["varnames"])
 
@@ -896,7 +891,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 40, "call_entry": 8, "call_exit": 8, "io": 1,
+		"step": 40, "call_entry": 8, "call_exit": 8,
 	}, kinds, "event-kind histogram")
 
 	// Call-entry sequence: level1 → level2 → level3 first (outermost
@@ -1014,7 +1009,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 
 	require.Equal(t, 30, doc.Counts["steps"])
 	require.Equal(t, 2, doc.Counts["calls"])
-	require.Equal(t, 1, doc.Counts["io_events"])
+	require.Equal(t, 0, doc.Counts["io_events"], "clean exit produces no io_events")
 	require.Equal(t, 3, doc.Counts["functions"])
 	require.Equal(t, 12, doc.Counts["varnames"])
 
@@ -1026,7 +1021,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 30, "call_entry": 2, "call_exit": 2, "io": 1,
+		"step": 30, "call_entry": 2, "call_exit": 2,
 	}, kinds, "event-kind histogram")
 
 	require.Equal(t, []string{"make_vec", "sum_vec"}, callSequence(events),
@@ -1144,26 +1139,21 @@ func TestRecorderGoldenCollections(t *testing.T) {
 }
 
 // TestRecorderGoldenPanicPath records panic_path.wasm and asserts
-// that the recorder produces a `RecordEvent::Error` (or equivalent
-// io_event of error kind) when the Rust program panics.
+// that the recorder produces an `ioError` io_event (the wazero
+// recorder's `RecordEvent::Error` mapping) when the Rust program
+// panics.
 //
-// RECORDER BUG (filed by this test):
+// Two paired fixes (cmd/wazero/wazero.go + interpreter.go) make
+// this test pass:
 //
-//	`cmd/wazero/wazero.go:419-430` only calls `produceTrace` when the
-//	WASM error is a `*sys.ExitError`.  A Rust `panic!()` raises a
-//	wasm `unreachable` trap which surfaces as a generic runtime
-//	error, not an ExitError, so the recorder DROPS the entire trace
-//	on the floor — no `.ct` file is written.  The recorder never
-//	emits the `RecordEvent::Error` the spec demands, because the
-//	error bytes are discarded along with every other recorded event.
-//
-// The test is skipped (with a clear `SKIP: RECORDER BUG ...` line
-// per `verify-cli-convention-no-silent-skip.sh`) until the wazero
-// CLI is fixed to call `produceTrace` for non-ExitError termination.
-// Assertion strength is preserved: the body asserts on the
-// spec-compliant shape (one io event of error kind referencing the
-// panic site), so the moment the bug is fixed the test will start
-// passing without further edits.
+//	1. wazero.go's error-path handler now calls produceTrace on
+//	   every termination (not just *sys.ExitError) so the .ct file
+//	   actually lands on disk for panicking programs.
+//	2. interpreter.go's recover() now records the actual panic
+//	   value (e.g. "unreachable" for Rust panic→trap) as the
+//	   ioError text and SKIPS the event for clean *sys.ExitError
+//	   exits with code 0 (so normal-exit programs no longer carry
+//	   a spurious "runtime error" io_event).
 func TestRecorderGoldenPanicPath(t *testing.T) {
 	ctPrint := ctPrintPath(t)
 	if _, err := os.Stat(ctPrint); err != nil {
@@ -1185,28 +1175,19 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 	require.Equal(t, 1, exitCode,
 		"panic_path.wasm should surface a non-zero exit (panic→trap)")
 
-	// RECORDER BUG: cmd/wazero/wazero.go:419-430 only writes the
-	// trace when the failure is a *sys.ExitError.  Rust panics
-	// surface as a generic runtime error and the trace is silently
-	// dropped.  Skip the rest of the assertions until the CLI is
-	// fixed to call produceTrace on every termination path.
+	// The CLI now writes the trace on every termination path
+	// (cmd/wazero/wazero.go), so a missing .ct file here is a
+	// regression — fail hard rather than skipping.
 	candidates, _ := filepath.Glob(filepath.Join(outDir, "*.ct"))
-	if len(candidates) == 0 {
-		t.Skipf("SKIP: RECORDER BUG — wazero CLI drops the trace on a wasm "+
-			"trap (panic_path.wasm).  cmd/wazero/wazero.go:419-430 only "+
-			"calls produceTrace for *sys.ExitError; non-ExitError "+
-			"terminations (Rust panic → unreachable trap) write no "+
-			"`.ct` file.  Restore by emitting the trace on every "+
-			"termination path; this test will then assert on the "+
-			"recorder's panic-path event shape.  outDir=%s", outDir)
-	}
+	require.True(t, len(candidates) > 0,
+		"panicking program produced no .ct file in %s; "+
+			"the wazero CLI must call produceTrace on every "+
+			"termination path (regression of cmd/wazero/wazero.go fix)",
+		outDir)
 
-	// ------------------------------------------------------------------
-	// Below is the spec-compliant assertion shape that lights up the
-	// moment the bug above is fixed.  Per the recorder-test spec §2
-	// ("Exceptions / errors"), the recorder MUST emit a
-	// `RecordEvent::Error` when the program panics.
-	// ------------------------------------------------------------------
+	// Per the recorder-test spec §2 ("Exceptions / errors"), the
+	// recorder MUST emit a `RecordEvent::Error` (mapped to
+	// `ioError` in the wazero recorder) when the program panics.
 	cmd := exec.Command(ctPrint, "--full", "--strip-paths", candidates[0])
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err,

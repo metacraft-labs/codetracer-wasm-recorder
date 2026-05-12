@@ -417,6 +417,14 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	if err != nil {
+		// produceTrace MUST run on every termination path, not just
+		// clean *sys.ExitError exits.  A Rust panic!() raises a wasm
+		// `unreachable` trap which surfaces as a generic error here;
+		// without writing the trace we silently lose every recorded
+		// step/call/event up to the trap (the very debugging signal
+		// the user opened the recorder for).  The interpreter has
+		// already registered an EventKindError io_event capturing the
+		// trap reason — we just have to flush the .ct bundle to disk.
 		if exitErr, ok := err.(*sys.ExitError); ok {
 			exitCode := exitErr.ExitCode()
 			if exitCode == sys.ExitCodeDeadlineExceeded {
@@ -426,6 +434,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
+		produceTrace(outDir, wasmFile, recorder)
 		return 1
 	}
 

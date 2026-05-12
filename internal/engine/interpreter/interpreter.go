@@ -25,6 +25,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
+	"github.com/tetratelabs/wazero/sys"
 )
 
 // callStackCeiling is the maximum WebAssembly call frame stack height. This allows wazero to raise
@@ -588,8 +589,26 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
+			// Don't synthesize an EventKindError for clean WASI exits.
+			// `proc_exit` is implemented by panicking with *sys.ExitError;
+			// every successful program flows through this recover path, so
+			// blindly recording an Error event makes every trace look failed.
+			//
+			// For real traps (wasmruntime.Error like ErrRuntimeUnreachable,
+			// runtime.Error like nil-deref, host panics, etc.) we record
+			// the actual panic value so the trace surfaces the failure
+			// reason — Rust panic!() compiles to `unreachable`, which
+			// shows up as `wasmruntime.ErrRuntimeUnreachable` here.
 			if m.Record != nil {
-				m.Record.RegisterRecordEvent(tracetypes.EventKindError, "runtime error", "runtime error")
+				if exitErr, ok := v.(*sys.ExitError); ok {
+					if exitErr.ExitCode() != 0 {
+						msg := fmt.Sprintf("exit %d", exitErr.ExitCode())
+						m.Record.RegisterRecordEvent(tracetypes.EventKindError, msg, msg)
+					}
+				} else {
+					msg := fmt.Sprintf("%v", v)
+					m.Record.RegisterRecordEvent(tracetypes.EventKindError, msg, msg)
+				}
 			}
 			err = ce.recoverOnCall(ctx, m, v)
 		}

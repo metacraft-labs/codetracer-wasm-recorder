@@ -300,18 +300,8 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 	}
 	defer C.trace_writer_free(handle)
 
-	// Phase 1: Metadata (no-op stubs in the Nim FFI; metadata is written on
-	// close).  Pass a placeholder path — the Nim FFI ignores it.
-	metadataPath := filepath.Join(traceDir, "trace_metadata.json")
-	cMetadataPath := C.CString(metadataPath)
-	if rc := C.trace_writer_begin_metadata(handle, cMetadataPath); rc != 0 {
-		C.free(unsafe.Pointer(cMetadataPath))
-		return fmt.Errorf("trace_writer_begin_metadata failed: %s",
-			C.GoString(C.trace_writer_last_error()))
-	}
-
-	// Set workdir before finish_metadata so the value lands in the CTFS
-	// metadata block written on close.
+	// Set workdir before opening the events stream so the value lands in
+	// the CTFS metadata block written on close.
 	cWorkdir := C.CString(workdir)
 	C.trace_writer_set_workdir(handle, cWorkdir)
 	C.free(unsafe.Pointer(cWorkdir))
@@ -323,18 +313,13 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 		C.free(unsafe.Pointer(cPath))
 	}
 
-	if rc := C.trace_writer_finish_metadata(handle); rc != 0 {
-		C.free(unsafe.Pointer(cMetadataPath))
-		return fmt.Errorf("trace_writer_finish_metadata failed: %s",
-			C.GoString(C.trace_writer_last_error()))
-	}
-	C.free(unsafe.Pointer(cMetadataPath))
-
-	// Phase 2: Events.  In the Nim FFI, begin_events is the point where the
+	// Events.  In the Nim FFI, begin_events is the point where the
 	// .ct file is opened — the path's *directory* is used; the Nim writer
 	// derives the filename from the program basename.  We pass a synthetic
 	// "events.bin" path so the directory routing works without imposing a
-	// trace.json/trace_metadata.json convention on the caller.
+	// trace.json/trace_metadata.json convention on the caller.  The legacy
+	// metadata/paths begin/finish stubs were no-ops on the Nim side and
+	// were retired with the v3 CTFS rollout.
 	eventsPath := filepath.Join(traceDir, "events.bin")
 	cEventsPath := C.CString(eventsPath)
 	if rc := C.trace_writer_begin_events(handle, cEventsPath); rc != 0 {
@@ -355,20 +340,16 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 	}
 	C.free(unsafe.Pointer(cEventsPath))
 
-	// Phase 3: Paths (no-op stubs in the Nim FFI; paths are emitted as
-	// step/function side effects during phase 2).
-	cPathsPath := C.CString(filepath.Join(traceDir, "trace_paths.json"))
-	if rc := C.trace_writer_begin_paths(handle, cPathsPath); rc != 0 {
-		C.free(unsafe.Pointer(cPathsPath))
-		return fmt.Errorf("trace_writer_begin_paths failed: %s",
+	// Write the branded recorder-id field into `meta.dat` (CTFS spec §7)
+	// before closing the writer.
+	recorderId := "codetracer-wasm-recorder"
+	cRecorderId := (*C.uint8_t)(unsafe.Pointer(C.CString(recorderId)))
+	if rc := C.ct_write_meta_dat(handle, cRecorderId, C.size_t(len(recorderId))); rc != 0 {
+		C.free(unsafe.Pointer(cRecorderId))
+		return fmt.Errorf("ct_write_meta_dat failed: %s",
 			C.GoString(C.trace_writer_last_error()))
 	}
-	if rc := C.trace_writer_finish_paths(handle); rc != 0 {
-		C.free(unsafe.Pointer(cPathsPath))
-		return fmt.Errorf("trace_writer_finish_paths failed: %s",
-			C.GoString(C.trace_writer_last_error()))
-	}
-	C.free(unsafe.Pointer(cPathsPath))
+	C.free(unsafe.Pointer(cRecorderId))
 
 	// Close — flushes the CTFS container to disk.
 	if rc := C.trace_writer_close(handle); rc != 0 {

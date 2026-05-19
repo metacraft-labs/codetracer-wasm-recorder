@@ -37,6 +37,7 @@ mkShell {
     binaryen
     llvm
     just
+    prek
 
     figlet
   ]

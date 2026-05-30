@@ -113,6 +113,7 @@ type CtfsTraceWriter struct {
 	variables         map[string]tracetypes.VariableId
 	variableNames     map[tracetypes.VariableId]string // reverse lookup
 	types             map[string]tracetypes.TypeId
+	typeNames         map[tracetypes.TypeId]string // reverse lookup
 	currentCallsCount int
 }
 
@@ -129,6 +130,7 @@ func NewCtfsTraceWriter() *CtfsTraceWriter {
 		variables:     make(map[string]tracetypes.VariableId),
 		variableNames: make(map[tracetypes.VariableId]string),
 		types:         make(map[string]tracetypes.TypeId),
+		typeNames:     make(map[tracetypes.TypeId]string),
 	}
 }
 
@@ -245,9 +247,23 @@ func (w *CtfsTraceWriter) EnsureTypeId(name string, typeRecord tracetypes.TypeRe
 	return w.RegisterTypeWithNewId(name, typeRecord)
 }
 
+// typeNameOrDefault resolves the registered language-level name for the given
+// typeId.  TypeId(0) is reserved as "unspecified" by the value-record
+// constructors (e.g. NilValue() always carries TypeId(0)), so callers should
+// pass an appropriate fallback for that case — typically the wasm-stack
+// synonym such as "i64" / "f64" / "string" that the upstream FFI used as a
+// hard-coded default before the reverse lookup landed.
+func (w *CtfsTraceWriter) typeNameOrDefault(typeId tracetypes.TypeId, fallback string) string {
+	if name, ok := w.typeNames[typeId]; ok && name != "" {
+		return name
+	}
+	return fallback
+}
+
 func (w *CtfsTraceWriter) RegisterTypeWithNewId(name string, typeRecord tracetypes.TypeRecord) tracetypes.TypeId {
 	id := tracetypes.TypeId(len(w.types))
 	w.types[name] = id
+	w.typeNames[id] = name
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:       ctfsEventType,
 		typeName:   name,
@@ -466,14 +482,19 @@ func (w *CtfsTraceWriter) replayValueRecord(handle C.trace_writer_t, name string
 
 	switch v := value.(type) {
 	case tracetypes.IntValueRecord:
-		cTypeName := C.CString("i64")
+		// The DWARF-resolved language type name (e.g. "i32", "u8") was
+		// registered through RegisterTypeWithNewId; resolve it via the
+		// reverse map and only fall back to "i64" when no record carried
+		// a typeId, so the state pane shows the actual Rust type rather
+		// than a wasm-stack-sized synonym.
+		cTypeName := C.CString(w.typeNameOrDefault(v.TypeId, "i64"))
 		C.trace_writer_register_variable_int(handle,
 			cName, C.int64_t(v.I),
 			C.int(C.FFI_TYPE_INT), cTypeName)
 		C.free(unsafe.Pointer(cTypeName))
 
 	case tracetypes.FloatValueRecord:
-		cTypeName := C.CString("f64")
+		cTypeName := C.CString(w.typeNameOrDefault(v.TypeId, "f64"))
 		cRepr := C.CString(fmt.Sprintf("%g", v.F))
 		C.trace_writer_register_variable_raw(handle,
 			cName, cRepr,
@@ -584,7 +605,11 @@ func (w *CtfsTraceWriter) replayReturnValue(handle C.trace_writer_t, value trace
 
 	switch v := value.(type) {
 	case tracetypes.IntValueRecord:
-		cTypeName := C.CString("i64")
+		// See replayValueRecord's IntValueRecord branch for the rationale —
+		// surface the DWARF-resolved language type name so `add() -> i32`
+		// shows as i32 instead of being collapsed to the i64 wasm stack
+		// slot width.
+		cTypeName := C.CString(w.typeNameOrDefault(v.TypeId, "i64"))
 		C.trace_writer_register_return_int(handle,
 			C.int64_t(v.I),
 			C.int(C.FFI_TYPE_INT), cTypeName)

@@ -153,6 +153,17 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			continue
 		}
 
+		// DWARF can emit degenerate function ranges where HighPC <= LowPC for
+		// functions that collapsed away (LLVM intrinsics, empty inline bodies,
+		// merged or eliminated instructions). The interval search tree refuses
+		// inverted ranges (its Insert returns "interval search tree invalid
+		// range: start value X cannot be less than end value X-1"). These
+		// records carry no executable PCs anyway, so skip them instead of
+		// triggering a spurious error.
+		if record.HighPC <= record.LowPC {
+			continue
+		}
+
 		ret.Function.Insert(record.LowPC, record.HighPC-1, *record)
 	}
 
@@ -614,6 +625,16 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 	}
 
 	if !isTombstoneAddr(lowPC) && !isTombstoneAddr(highPC) && rec.Name != "" {
+		// DWARF emits degenerate ranges (HighPC == LowPC, or HighPC == 0 with
+		// LowPC == 0 after a DW_FORM_data*-encoded length of 1) for inline
+		// subroutines that the compiler ultimately collapsed. The interval
+		// search tree rejects HighPC-1 < LowPC ("interval search tree invalid
+		// range") and these records carry no executable PCs to look up, so
+		// skip them instead of logging a spurious error per Wasm build.
+		if highPC <= lowPC {
+			return exitOffset, nil
+		}
+
 		entry, found := ret.InlinedRoutines.Find(lowPC, highPC-1)
 
 		var err error
@@ -669,7 +690,13 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 		}
 
 		if prevLe != nil {
-			if prevLe.IsStmt {
+			// Guard against degenerate line ranges. DWARF .debug_line can emit
+			// consecutive rows at the same address (column-only refinements or
+			// is_stmt toggles), and `le.Address - 1 < prevLe.Address` would
+			// trip the interval tree's invalid-range error. Skip the row in
+			// that case — it represents a zero-length region that cannot be
+			// hit by any PC.
+			if prevLe.IsStmt && le.Address > prevLe.Address {
 				tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
 					FileName: prevLe.File.Name,
 					Line:     int64(prevLe.Line),

@@ -723,6 +723,43 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+// isUserRustSourcePath reports whether `fileName` looks like a Rust source
+// file authored by the user (i.e. neither stdlib nor a third-party dependency
+// pulled in transparently by Cargo).  We only want to emit Step/Call/Function
+// trace events for these files so the debugger UI surfaces the user's code
+// instead of stepping into std::rt or hashbrown internals.
+//
+// Recognised non-user prefixes / substrings:
+//   - `/rustc/...`                       — rustup toolchain after `rustc-dev`
+//   - `.rustup/...`                      — rustup toolchain locally
+//   - `.cargo/registry/...`              — Cargo dependency cache
+//   - `/rust/deps`                       — rustup build output
+//   - `/lib/rustlib/src/rust/library/`   — Nix `rust-mixed` stdlib layout
+//     (e.g. /nix/store/<hash>-rust-mixed/lib/rustlib/src/rust/library/std/src/rt.rs).
+//     Without this match the first emitted Step for a WASI binary lands in
+//     std::rt instead of the user's main.rs entry point.
+func isUserRustSourcePath(fileName string) bool {
+	if !strings.HasSuffix(fileName, ".rs") {
+		return false
+	}
+	if strings.HasPrefix(fileName, "/rustc") {
+		return false
+	}
+	if strings.Contains(fileName, ".rustup") {
+		return false
+	}
+	if strings.Contains(fileName, ".cargo") {
+		return false
+	}
+	if strings.Contains(fileName, "/rust/deps") {
+		return false
+	}
+	if strings.Contains(fileName, "/lib/rustlib/src/rust/library/") {
+		return false
+	}
+	return true
+}
+
 func ensureSize[T any](s []T, index int) []T {
 
 	if index < len(s) {
@@ -769,11 +806,22 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		hasSource = true
 	}
 
-	tracking_call := hasSource && m.Record != nil && (strings.HasSuffix(functionRecord.FileName, ".rs") &&
-		!strings.HasPrefix(functionRecord.FileName, "/rustc") &&
-		!strings.Contains(functionRecord.FileName, ".rustup") &&
-		!strings.Contains(functionRecord.FileName, ".cargo") &&
-		!strings.Contains(functionRecord.FileName, "/rust/deps"))
+	// We only emit Step/Call/Function trace events for user-authored Rust
+	// source files. Anything that compiled in from the Rust standard library
+	// or third-party crates is stepped through silently so the debugger UI
+	// lands on the user's main.rs entry point instead of std internals such
+	// as rt.rs.
+	//
+	// Path layouts handled here:
+	//   * /rustc/...                       — rustup toolchain after `rustc-dev`
+	//   * .rustup/...                      — rustup toolchain locally
+	//   * .cargo/registry/...              — Cargo dependency cache
+	//   * /rust/deps                       — rustup build output
+	//   * /lib/rustlib/src/rust/library/   — Nix `rust-mixed` stdlib layout
+	//     (e.g. /nix/store/<hash>-rust-mixed/lib/rustlib/src/rust/library/
+	//     std/src/rt.rs).  Without this filter the first emitted Step lands
+	//     in std::rt and the status bar shows rt.rs instead of main.rs.
+	tracking_call := hasSource && m.Record != nil && isUserRustSourcePath(functionRecord.FileName)
 
 	// tracking_call = true
 
@@ -836,7 +884,10 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 				lineRecord := lineRecords[0]
 
-				if strings.HasSuffix(lineRecord.FileName, ".rs") && !strings.HasPrefix(lineRecord.FileName, "/rustc") && !strings.Contains(lineRecord.FileName, ".rustup") && !strings.Contains(lineRecord.FileName, ".cargo") {
+				// Apply the same user-Rust filter as the tracking_call guard
+				// above; see comments there for the rationale and the path
+				// layouts considered "stdlib / dependency".
+				if isUserRustSourcePath(lineRecord.FileName) {
 					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
 
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {

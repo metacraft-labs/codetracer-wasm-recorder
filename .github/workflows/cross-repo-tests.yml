@@ -62,10 +62,18 @@ jobs:
   cross-repo-tests:
     runs-on: [self-hosted, nixos]
     # Cross-repo tests need access to private repos, which requires the
-    # GH_READ_METACRAFT_PRIVATE_REPOS secret. Skip gracefully on forks.
+    # CI_TOKEN_PROVIDER_APP_ID secret. Skip gracefully on forks.
     if: ${{ github.event_name == 'repository_dispatch' || github.repository == 'metacraft-labs/codetracer-wasm-recorder' }}
 
     steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       # ------------------------------------------------------------------
       # 1. Checkout this repository (codetracer-wasm-recorder)
       # ------------------------------------------------------------------
@@ -74,9 +82,9 @@ jobs:
 
       - name: Check required secrets
         run: |
-          TOKEN="${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}"
+          TOKEN="${{ steps.app-token.outputs.token }}"
           if [ -z "$TOKEN" ]; then
-            echo "::error::GH_READ_METACRAFT_PRIVATE_REPOS secret is not configured."
+            echo "::error::CI_TOKEN_PROVIDER_APP_ID secret is not configured."
             echo "::error::This secret is required for cross-repo tests (private sibling repos)."
             echo "::error::Add it in Settings > Secrets and variables > Actions."
             exit 1
@@ -88,7 +96,7 @@ jobs:
       - name: Setup Nix and Git authentication
         uses: metacraft-labs/metacraft-github-actions/setup-nix@main
         with:
-          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          gh-token: ${{ steps.app-token.outputs.token }}
           cachix-cache: ${{ vars.CACHIX_CACHE }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           substituters: ${{ vars.SUBSTITUTERS }}
@@ -140,7 +148,7 @@ jobs:
           repo: metacraft-labs/codetracer
           ref: ${{ steps.resolve-ref.outputs.codetracer_ref }}
           path: ${{ github.workspace }}/../codetracer
-          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          gh-token: ${{ steps.app-token.outputs.token }}
           submodules: 'true'
 
       - name: Clone codetracer-trace-format
@@ -149,7 +157,7 @@ jobs:
           repo: metacraft-labs/codetracer-trace-format
           ref: ${{ steps.resolve-ref.outputs.trace_format_ref }}
           path: ${{ github.workspace }}/../codetracer-trace-format
-          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          gh-token: ${{ steps.app-token.outputs.token }}
 
       # ------------------------------------------------------------------
       # 5. Build wazero binary

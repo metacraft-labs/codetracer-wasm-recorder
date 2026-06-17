@@ -127,6 +127,14 @@ type callEngine struct {
 
 	// stackiterator for Listeners to walk frames and stack.
 	stackIterator stackIterator
+
+	// registeredPaths caches the set of source paths that have already
+	// been forwarded to the recorder through `RegisterPathWithLineLengths`
+	// so we don't re-read every source file on every step.  See
+	// `registerSourcePathIfNew` for the call site.  The recorder
+	// performs its own dedup-by-name as a defence in depth, but the
+	// engine-local cache also avoids the os.ReadFile syscall cost.
+	registeredPaths map[string]struct{}
 }
 
 func (e *moduleEngine) newCallEngine(compiled *function) *callEngine {
@@ -738,6 +746,59 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 //     (e.g. /nix/store/<hash>-rust-mixed/lib/rustlib/src/rust/library/std/src/rt.rs).
 //     Without this match the first emitted Step for a WASI binary lands in
 //     std::rt instead of the user's main.rs entry point.
+//
+// readSourceLineLengths returns the per-line byte counts of `fileName`,
+// indexed by 0-based line number.  Used to feed the column-aware reader's
+// global position table so it can decode `DeltaColumn` events back into
+// (line, column) pairs.  Files that cannot be read degrade to an empty
+// slice — the trace then advertises `FLAG_HAS_COLUMN_AWARE_STEPS` but the
+// reader surfaces `None` for the column when no per-line data is on file.
+//
+// The "line length" is the count of UTF-8 bytes on the line *excluding*
+// the trailing newline, matching the convention the codetracer trace
+// writer expects (see `register_path_with_line_lengths` in
+// `codetracer_trace_writer_ffi.nim`).  Implementation matches the
+// Solana recorder's `read_line_lengths_for_path` helper.
+func readSourceLineLengths(fileName string) []uint32 {
+	data, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil
+	}
+	// Split on \n; each chunk's length (after stripping a trailing \r
+	// from CRLF endings) is the count of in-line bytes.  Files without
+	// a trailing newline still report a final entry — the trace writer
+	// tolerates either layout.
+	lines := strings.Split(string(data), "\n")
+	out := make([]uint32, 0, len(lines))
+	for _, ln := range lines {
+		if strings.HasSuffix(ln, "\r") {
+			ln = ln[:len(ln)-1]
+		}
+		out = append(out, uint32(len(ln)))
+	}
+	return out
+}
+
+// registerSourcePathIfNew calls `RegisterPathWithLineLengths` on the
+// recorder the first time `fileName` is observed during this engine's
+// recording session.  Duplicate calls are deduplicated through the
+// recorder's own `pathsWithLineLengths` set, but checking the engine-local
+// cache up front avoids the os.ReadFile cost on every step.  See
+// FU-Column-Aware-Nav-Wasm for the wire-level contract.
+func (ce *callEngine) registerSourcePathIfNew(m *wasm.ModuleInstance, fileName string) {
+	if m.Record == nil || fileName == "" {
+		return
+	}
+	if ce.registeredPaths == nil {
+		ce.registeredPaths = make(map[string]struct{})
+	}
+	if _, seen := ce.registeredPaths[fileName]; seen {
+		return
+	}
+	ce.registeredPaths[fileName] = struct{}{}
+	m.Record.RegisterPathWithLineLengths(fileName, readSourceLineLengths(fileName))
+}
+
 func isUserRustSourcePath(fileName string) bool {
 	if !strings.HasSuffix(fileName, ".rs") {
 		return false
@@ -888,7 +949,14 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				// above; see comments there for the rationale and the path
 				// layouts considered "stdlib / dependency".
 				if isUserRustSourcePath(lineRecord.FileName) {
-					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName {
+					// Step boundary detection: any change in (FileName,
+					// Line, Column) triggers a new step.  The Column
+					// component lets multi-statement lines surface
+					// distinct column-aware steps — without it the
+					// recorder would collapse `let a = 1; let b = 2; let
+					// c = 3;` onto a single step at the line's first
+					// statement (FU-Column-Aware-Nav-Wasm).
+					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName || currLine.Column != lineRecord.Column {
 
 						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
 							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
@@ -921,7 +989,24 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							}
 
 							currLine = lineRecord
-							m.Record.RegisterStep(currLine.FileName, tracetypes.Line(currLine.Line))
+
+							// Register the path with its per-line byte
+							// counts on first encounter so the column-
+							// aware reader can decode `DeltaColumn`
+							// events back into (line, column) pairs.
+							ce.registerSourcePathIfNew(m, currLine.FileName)
+
+							// Emit the step with column data when DWARF
+							// surfaced a non-zero column (DWARF column 0
+							// means "no column").  Falling back to a
+							// column-less step on missing data preserves
+							// back-compat with line-only navigation.
+							if currLine.Column > 0 {
+								col := tracetypes.Line(currLine.Column)
+								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), &col)
+							} else {
+								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), nil)
+							}
 
 							// Offset does not matter, function parameters come without information about their lexical scope
 

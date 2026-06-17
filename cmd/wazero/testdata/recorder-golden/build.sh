@@ -28,7 +28,7 @@ cd "$(dirname "$0")"
 
 RUSTC="${RUSTC:-rustc}"
 
-for src in control_flow.rs nested_calls.rs collections.rs panic_path.rs; do
+for src in control_flow.rs nested_calls.rs collections.rs panic_path.rs column_aware.rs; do
     out="${src%.rs}.wasm"
     echo "building $src -> $out"
     "$RUSTC" \

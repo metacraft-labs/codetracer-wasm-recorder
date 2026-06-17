@@ -70,6 +70,14 @@ type goldenDoc struct {
 		Program string   `json:"program"`
 		Args    []string `json:"args"`
 		Workdir string   `json:"workdir"`
+		// Flags surfaces the meta.dat flag bits the Nim reader exposes
+		// under `metadata.flags`.  `has_column_aware_steps` is bit 4 and
+		// gates column-aware navigation; the wasm recorder sets it on
+		// every trace per FU-Column-Aware-Nav-Wasm.
+		Flags struct {
+			HasColumnAwareSteps     bool `json:"has_column_aware_steps"`
+			HasAlternateSourceViews bool `json:"has_alternate_source_views"`
+		} `json:"flags"`
 	} `json:"metadata"`
 	Paths     []string          `json:"paths"`
 	Functions []string          `json:"functions"`
@@ -85,12 +93,17 @@ type goldenEvent struct {
 	Kind      string `json:"kind"`
 	StepIndex int64  `json:"step_index"`
 	Line      int64  `json:"line"`
-	Path      string `json:"path"`
-	PathID    int64  `json:"path_id"`
-	Function  string `json:"function"`
-	Depth     int64  `json:"depth"`
-	StepKind  string `json:"step_kind"`
-	Vars      []struct {
+	// Column is the 1-based source column the step landed on.  Surfaced
+	// by the column-aware reader on traces with bit 4 of `meta.dat`
+	// set; legacy line-only traces leave it zero.  See
+	// FU-Column-Aware-Nav-Wasm.
+	Column   int64  `json:"column"`
+	Path     string `json:"path"`
+	PathID   int64  `json:"path_id"`
+	Function string `json:"function"`
+	Depth    int64  `json:"depth"`
+	StepKind string `json:"step_kind"`
+	Vars     []struct {
 		Varname string          `json:"varname"`
 		TypeID  int64           `json:"type_id"`
 		Value   json.RawMessage `json:"value"`
@@ -1208,14 +1221,14 @@ func TestRecorderGoldenCollections(t *testing.T) {
 // Two paired fixes (cmd/wazero/wazero.go + interpreter.go) make
 // this test pass:
 //
-//	1. wazero.go's error-path handler now calls produceTrace on
-//	   every termination (not just *sys.ExitError) so the .ct file
-//	   actually lands on disk for panicking programs.
-//	2. interpreter.go's recover() now records the actual panic
-//	   value (e.g. "unreachable" for Rust panic→trap) as the
-//	   ioError text and SKIPS the event for clean *sys.ExitError
-//	   exits with code 0 (so normal-exit programs no longer carry
-//	   a spurious "runtime error" io_event).
+//  1. wazero.go's error-path handler now calls produceTrace on
+//     every termination (not just *sys.ExitError) so the .ct file
+//     actually lands on disk for panicking programs.
+//  2. interpreter.go's recover() now records the actual panic
+//     value (e.g. "unreachable" for Rust panic→trap) as the
+//     ioError text and SKIPS the event for clean *sys.ExitError
+//     exits with code 0 (so normal-exit programs no longer carry
+//     a spurious "runtime error" io_event).
 func TestRecorderGoldenPanicPath(t *testing.T) {
 	ctPrint := ctPrintPath(t)
 	if _, err := os.Stat(ctPrint); err != nil {
@@ -1309,6 +1322,85 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 	require.True(t, lastStep.Line >= 17,
 		"last step before panic should be on or after line 17 (the if-test); "+
 			"got line %d", lastStep.Line)
+}
+
+// ===========================================================================
+// Column-aware step emission (FU-Column-Aware-Nav-Wasm)
+// ===========================================================================
+
+// TestRecorderColumnAwareSteps verifies the wasm recorder cooperates
+// with the column-aware step stream introduced in the trace format's
+// P6.3 / P6.4 milestones.  The acceptance criterion has two parts:
+//
+//  1. `meta.dat` bit 4 (`FLAG_HAS_COLUMN_AWARE_STEPS`) MUST be set on
+//     every produced `.ct` container so downstream readers know to
+//     surface columns to the user.  Verified through `ct-print --full`'s
+//     `metadata.flags.has_column_aware_steps`.
+//
+//  2. At least one step event in the trace must carry a non-default
+//     column (i.e. a column ≥ 2).  This proves the recorder is actually
+//     writing `DeltaColumn` events derived from DWARF column data — not
+//     just flipping the metadata flag while emitting line-only steps.
+//     DWARF emits a non-zero column for every Rust source line (the
+//     column where the leading token starts, typically after
+//     indentation), so the existing recorder-golden Rust fixtures
+//     already surface multiple columns >= 2 once the recorder threads
+//     the DWARF column through.
+//
+// Mirrors the JS recorder's `tests/integration/column-aware.test.ts`,
+// the EVM recorder's `tests/test_column_aware.rs`, the Solana recorder's
+// `tests/test_column_aware_steps.rs`, and the Cairo recorder's
+// `tests/test_column_aware.rs` "multiple statements on one line each
+// record distinct columns" fixtures.
+//
+// The "distinct columns on one source line" assertion that the sibling
+// recorders make on hand-crafted multi-statement fixtures is tracked as
+// FU-Mwasm-tests: it depends on a `wasm32-wasip1`-capable build of a
+// fixture like `column_aware.rs` (checked in alongside the existing
+// `control_flow.wasm` / `nested_calls.wasm` blobs) which this dev shell
+// cannot reproduce without internet (`rustup target add wasm32-wasip1`).
+func TestRecorderColumnAwareSteps(t *testing.T) {
+	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenNestedCalls, "nested_calls")
+
+	// ----- meta.dat bit 4: FLAG_HAS_COLUMN_AWARE_STEPS ------------------
+	require.True(t, doc.Metadata.Flags.HasColumnAwareSteps,
+		"trace metadata must advertise has_column_aware_steps=true; got %+v",
+		doc.Metadata.Flags)
+
+	// ----- at least one sekDeltaColumn step actually surfaces ----------
+	//
+	// The wire-level `step_kind` of a column-aware event surfaces as
+	// `sekDeltaColumn` when the recorder advanced *only* the column
+	// (same line, new statement) and as `sekAbsoluteStep` /
+	// `sekDeltaStep` when the line moved.  Observing at least one
+	// `sekDeltaColumn` event proves the interpreter's
+	// RegisterStepWithColumn call site (interpreter.go ~line 924) is
+	// actually feeding the DWARF column through to the writer — without
+	// the column threading the writer would never produce a column-only
+	// step transition because every step would also be a line transition.
+	//
+	// Note: the JSON-decoded `column` field that the EVM / Solana /
+	// Cairo sibling tests assert on requires the source file to be on
+	// disk at the DWARF-embedded path so the reader can compute per-line
+	// byte counts; the wasm fixture is pre-built and embeds its build-
+	// time path, so the column value itself is not always resolvable in
+	// the test sandbox.  The step-kind assertion is the back-compat
+	// equivalent — it's resolved purely from the on-wire encoding.
+	events := decodeEvents(t, doc)
+	var deltaColumnCount int
+	for _, ev := range events {
+		if ev.Kind == "step" && ev.StepKind == "sekDeltaColumn" {
+			deltaColumnCount++
+		}
+	}
+	require.True(t, deltaColumnCount > 0,
+		"expected at least one step with step_kind=sekDeltaColumn "+
+			"(column-only transition) — the recorder is failing to "+
+			"layer DeltaColumn events onto its step stream.  Check the "+
+			"interpreter's RegisterStepWithColumn call site (interpreter.go "+
+			"~line 924) and the writer's ctfsEventStep replay path "+
+			"(ctfs_writer.go).  Observed step-kind histogram across "+
+			"%d events.", len(events))
 }
 
 // ===========================================================================

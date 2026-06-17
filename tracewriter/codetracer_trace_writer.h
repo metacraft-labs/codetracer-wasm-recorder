@@ -172,6 +172,14 @@ void trace_writer_register_thread_start(trace_writer_t handle, uint64_t thread_i
 void trace_writer_register_thread_exit(trace_writer_t handle, uint64_t thread_id);
 void trace_writer_register_thread_switch(trace_writer_t handle, uint64_t thread_id);
 
+/* Column-aware step prototypes (P6.3 / P6.4) live in the sibling
+ * `codetracer_trace_writer_columns.h` rather than being merged into the
+ * declarations above.  Keeping the new surface in a separate header lets
+ * a future re-pull of `codetracer-trace-format-nim/include/...` overwrite
+ * this file byte-for-byte without losing the wasm-recorder-side
+ * additions.  Callers `#include "codetracer_trace_writer_columns.h"`
+ * explicitly — see `ctfs_writer.go`. */
+
 /* --------------------------------------------------------------------------
  * meta.dat — write via trace writer handle
  * -------------------------------------------------------------------------- */

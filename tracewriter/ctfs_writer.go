@@ -22,7 +22,15 @@ package tracewriter
 
 /*
 #cgo LDFLAGS: -lcodetracer_trace_writer -lzstd -lm -lpthread
+// Add the package source directory to the include search path so the
+// wasm-recorder-local `codetracer_trace_writer_columns.h` (which carries
+// the column-aware step prototypes — FU-Column-Aware-Nav-Wasm) resolves
+// without depending on `codetracer-trace-format-nim` having a
+// regenerated upstream header.  See `codetracer_trace_writer_columns.h`
+// for the rationale.
+#cgo CFLAGS: -I${SRCDIR}
 #include "codetracer_trace_writer.h"
+#include "codetracer_trace_writer_columns.h"
 #include <stdlib.h>
 */
 import "C"
@@ -63,6 +71,16 @@ const (
 	ctfsEventPath
 	ctfsEventVariableName
 	ctfsEventType
+	// ctfsEventEnableColumnAwareSteps switches the writer into
+	// column-aware mode at replay time.  Recorded once, ahead of any
+	// column-bearing step events, by `EnableColumnAwareSteps`.
+	ctfsEventEnableColumnAwareSteps
+	// ctfsEventPathWithLineLengths registers a source path together with
+	// its per-line byte counts so the column-aware reader can decode
+	// `DeltaColumn` events back into (line, column) pairs.  See
+	// `trace_writer_register_path_with_line_lengths` in
+	// `codetracer_trace_writer.h` for the wire contract.
+	ctfsEventPathWithLineLengths
 )
 
 type ctfsBufferedEvent struct {
@@ -71,6 +89,11 @@ type ctfsBufferedEvent struct {
 	// Step fields
 	pathId tracetypes.PathId
 	line   tracetypes.Line
+	// column is the 1-based source column for column-aware steps.  A
+	// negative value (`-1`) marks "no column"; the replay code skips the
+	// follow-up DeltaColumn nudge in that case.  Mirrors the
+	// `Option<Line>` argument of NimTraceWriter::register_step_with_column.
+	column tracetypes.Line
 
 	// Call fields
 	functionId tracetypes.FunctionId
@@ -97,6 +120,12 @@ type ctfsBufferedEvent struct {
 	// Path fields
 	path string
 
+	// lineLengths carries the per-line byte counts attached to a
+	// ctfsEventPathWithLineLengths registration.  Indexed by 0-based
+	// line number; an empty slice degrades to "no per-line data"
+	// (column resolution falls back to surfacing `None` at read time).
+	lineLengths []uint32
+
 	// Type fields
 	typeName   string
 	typeRecord tracetypes.TypeRecord
@@ -115,6 +144,19 @@ type CtfsTraceWriter struct {
 	types             map[string]tracetypes.TypeId
 	typeNames         map[tracetypes.TypeId]string // reverse lookup
 	currentCallsCount int
+	// columnAware tracks whether `EnableColumnAwareSteps` has been
+	// called.  Mirrors the local flag NimTraceWriter keeps so the
+	// recorder can skip the `register_delta_column` nudge on writers
+	// that are still in legacy line-only mode — the Nim side sets a
+	// thread-local error string when `register_delta_column` is called
+	// on a non-column-aware writer, which would leak into unrelated
+	// `last_error()` queries.
+	columnAware bool
+	// pathsWithLineLengths tracks which paths the recorder has already
+	// registered through `RegisterPathWithLineLengths` so duplicate
+	// calls do not produce duplicate paths.dat entries.  The actual
+	// per-line buffer is held on the buffered event itself.
+	pathsWithLineLengths map[string]struct{}
 }
 
 // NewCtfsTraceWriter creates a fresh CtfsTraceWriter.  The returned writer
@@ -123,14 +165,15 @@ type CtfsTraceWriter struct {
 func NewCtfsTraceWriter() *CtfsTraceWriter {
 	initFFI()
 	return &CtfsTraceWriter{
-		events:        make([]ctfsBufferedEvent, 0),
-		functions:     make(map[string]tracetypes.FunctionId),
-		paths:         make(map[string]tracetypes.PathId),
-		pathsByIndex:  make([]string, 0),
-		variables:     make(map[string]tracetypes.VariableId),
-		variableNames: make(map[tracetypes.VariableId]string),
-		types:         make(map[string]tracetypes.TypeId),
-		typeNames:     make(map[tracetypes.TypeId]string),
+		events:               make([]ctfsBufferedEvent, 0),
+		functions:            make(map[string]tracetypes.FunctionId),
+		paths:                make(map[string]tracetypes.PathId),
+		pathsByIndex:         make([]string, 0),
+		variables:            make(map[string]tracetypes.VariableId),
+		variableNames:        make(map[tracetypes.VariableId]string),
+		types:                make(map[string]tracetypes.TypeId),
+		typeNames:            make(map[tracetypes.TypeId]string),
+		pathsWithLineLengths: make(map[string]struct{}),
 	}
 }
 
@@ -146,6 +189,69 @@ func (w *CtfsTraceWriter) RegisterStepWithPathId(pathId tracetypes.PathId, line 
 		kind:   ctfsEventStep,
 		pathId: pathId,
 		line:   line,
+		// -1 is the in-buffer sentinel for "no column"; matches the
+		// Option<Line>::None branch of NimTraceWriter::register_step_with_column.
+		column: -1,
+	})
+}
+
+// RegisterStepWithColumn records a column-aware step event.  The column
+// is taken as 1-based; pass `nil` for column-less back-compat steps.
+//
+// The actual `DeltaColumn` nudge is layered onto the wire by `replayEvent`
+// at trace-flush time so the buffered event sequence stays serialisable
+// and order-independent of `EnableColumnAwareSteps`.  See
+// `codetracer-trace-format-spec/trace-events.md` §"Column Encoding" for
+// the wire contract.
+func (w *CtfsTraceWriter) RegisterStepWithColumn(path string, line tracetypes.Line, column *tracetypes.Line) {
+	pathId := w.EnsurePathId(path)
+	colVal := tracetypes.Line(-1)
+	if column != nil {
+		colVal = *column
+	}
+	w.events = append(w.events, ctfsBufferedEvent{
+		kind:   ctfsEventStep,
+		pathId: pathId,
+		line:   line,
+		column: colVal,
+	})
+}
+
+// EnableColumnAwareSteps records a column-aware-mode opt-in event that
+// the replay path translates into a `trace_writer_enable_column_aware_steps`
+// FFI call before any step is replayed.  Calling it more than once is
+// harmless — only the first event flips the latched flag on the Nim side.
+func (w *CtfsTraceWriter) EnableColumnAwareSteps() {
+	if w.columnAware {
+		return
+	}
+	w.columnAware = true
+	w.events = append(w.events, ctfsBufferedEvent{
+		kind: ctfsEventEnableColumnAwareSteps,
+	})
+}
+
+// RegisterPathWithLineLengths records a paths.dat Layout A registration
+// (path + per-line byte counts) that the replay path forwards through
+// `trace_writer_register_path_with_line_lengths`.  Duplicate calls for the
+// same path are dropped to keep the paths.dat layer single-source-of-truth.
+// Non-column-aware writers silently fall back to the legacy paths.dat
+// record format — the per-line buffer is ignored on the Nim side.
+func (w *CtfsTraceWriter) RegisterPathWithLineLengths(path string, lineLengths []uint32) {
+	if _, seen := w.pathsWithLineLengths[path]; seen {
+		return
+	}
+	w.pathsWithLineLengths[path] = struct{}{}
+	// Also intern the path through the regular pathId machinery so
+	// follow-up step events resolve to the same paths.dat entry.
+	_ = w.EnsurePathId(path)
+	// Take a defensive copy — the caller may reuse the slice.
+	copyLens := make([]uint32, len(lineLengths))
+	copy(copyLens, lineLengths)
+	w.events = append(w.events, ctfsBufferedEvent{
+		kind:        ctfsEventPathWithLineLengths,
+		path:        path,
+		lineLengths: copyLens,
 	})
 }
 
@@ -399,6 +505,34 @@ func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBuffere
 		}
 		cPath := C.CString(pathStr)
 		C.trace_writer_register_step(handle, cPath, C.int64_t(event.line))
+		C.free(unsafe.Pointer(cPath))
+
+		// Column-aware mode layers a `DeltaColumn(col - 1)` on top of
+		// the just-emitted line transition (the Nim writer's column
+		// cursor resets to column 1 on every register_step, so a
+		// 1-based target column of `col` needs a `col - 1` nudge).
+		// Mirrors NimTraceWriter::register_step_with_column in the Rust
+		// shim — we skip the FFI call entirely when the writer is not
+		// in column-aware mode or the recorder did not capture a
+		// column for this step.  Column 1 (delta 0) is also a no-op.
+		if w.columnAware && event.column >= 1 {
+			delta := int64(event.column) - 1
+			if delta != 0 {
+				C.trace_writer_register_delta_column(handle, C.int64_t(delta))
+			}
+		}
+
+	case ctfsEventEnableColumnAwareSteps:
+		C.trace_writer_enable_column_aware_steps(handle)
+
+	case ctfsEventPathWithLineLengths:
+		cPath := C.CString(event.path)
+		var lensPtr *C.uint32_t
+		if len(event.lineLengths) > 0 {
+			lensPtr = (*C.uint32_t)(unsafe.Pointer(&event.lineLengths[0]))
+		}
+		C.trace_writer_register_path_with_line_lengths(handle,
+			cPath, C.int(len(event.lineLengths)), lensPtr)
 		C.free(unsafe.Pointer(cPath))
 
 	case ctfsEventCall:

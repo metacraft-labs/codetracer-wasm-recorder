@@ -360,6 +360,18 @@ func (r *runtime) InstantiateModuleWithRecord(
 	moduleInstance.TypesIndex = make(map[string]tracetypes.TypeId)
 	mod = moduleInstance
 
+	// Switch the writer into column-aware step mode up front so the
+	// resulting `.ct` container advertises `FLAG_HAS_COLUMN_AWARE_STEPS`
+	// (meta.dat bit 4).  Even when DWARF lacks column data for any
+	// particular step, the flag tells downstream readers that the
+	// recorder cooperates with the column-aware step stream — line-only
+	// steps degrade to "no column" at read time.  See FU-Column-Aware-
+	// Nav-Wasm in `codetracer-specs/Planned-Features/
+	// Column-Aware-Navigation-Other-Languages.plan.md`.
+	if traceRecord != nil {
+		traceRecord.EnableColumnAwareSteps()
+	}
+
 	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {
 		mod.(*wasm.ModuleInstance).CloseNotifier = closeNotifier
 	}

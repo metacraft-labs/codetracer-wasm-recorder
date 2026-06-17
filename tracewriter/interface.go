@@ -31,6 +31,36 @@ type TraceRecorder interface {
 	// RegisterStepWithPathId records a step event using a pre-resolved path ID.
 	RegisterStepWithPathId(pathId tracetypes.PathId, line tracetypes.Line)
 
+	// RegisterStepWithColumn records a column-aware step event.  The `column`
+	// argument is a 1-based column number; pass `nil` to record a column-less
+	// step (back-compat with line-only recorders).  The writer must have been
+	// switched into column-aware mode via `EnableColumnAwareSteps` before any
+	// column-bearing step is registered.  See the FU-Column-Aware-Nav-Wasm
+	// plan in `codetracer-specs/Planned-Features/
+	// Column-Aware-Navigation-Other-Languages.plan.md` and the trace-format
+	// spec at `codetracer-trace-format-spec/trace-events.md` §"Column
+	// Encoding — `DeltaColumn` (chosen)" for the wire encoding contract.
+	RegisterStepWithColumn(path string, line tracetypes.Line, column *tracetypes.Line)
+
+	// EnableColumnAwareSteps flips the writer into column-aware mode.  Must
+	// be called before the first column-bearing step is registered.  After
+	// it returns, the `.ct` container will carry `FLAG_HAS_COLUMN_AWARE_STEPS`
+	// in `meta.dat` (bit 4) so downstream readers know to surface columns.
+	// Calling it on a writer that has already emitted line-only steps is a
+	// no-op preserved here for symmetry with the FFI surface — callers
+	// should treat this as "call once at trace start".
+	EnableColumnAwareSteps()
+
+	// RegisterPathWithLineLengths registers a source path together with its
+	// per-line byte counts so the writer's global position table can decode
+	// column-aware steps back into (line, column) pairs at read time.  The
+	// `lineLengths` slice is indexed by 0-based line number; pass an empty
+	// slice when per-line data isn't available (column resolution then falls
+	// back to surfacing `None` at read time).  Outside column-aware mode the
+	// `lineLengths` argument is ignored — see the FFI doc-comment on
+	// `trace_writer_register_path_with_line_lengths`.
+	RegisterPathWithLineLengths(path string, lineLengths []uint32)
+
 	// RegisterCall records a function call event.
 	RegisterCall(name string, definitionPath string, definitionLine tracetypes.Line, args []tracetypes.FullValueRecord)
 

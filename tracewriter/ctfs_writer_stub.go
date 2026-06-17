@@ -31,6 +31,10 @@ func NewCtfsTraceWriter() *CtfsTraceWriter {
 func (w *CtfsTraceWriter) RegisterStep(string, tracetypes.Line) {}
 func (w *CtfsTraceWriter) RegisterStepWithPathId(tracetypes.PathId, tracetypes.Line) {
 }
+func (w *CtfsTraceWriter) RegisterStepWithColumn(string, tracetypes.Line, *tracetypes.Line) {
+}
+func (w *CtfsTraceWriter) EnableColumnAwareSteps()                      {}
+func (w *CtfsTraceWriter) RegisterPathWithLineLengths(string, []uint32) {}
 func (w *CtfsTraceWriter) RegisterCall(string, string, tracetypes.Line, []tracetypes.FullValueRecord) {
 }
 func (w *CtfsTraceWriter) RegisterCallWithPathId(string, tracetypes.PathId, tracetypes.Line, []tracetypes.FullValueRecord) {

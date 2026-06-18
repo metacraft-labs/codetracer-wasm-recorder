@@ -696,7 +696,30 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 			// trip the interval tree's invalid-range error. Skip the row in
 			// that case — it represents a zero-length region that cannot be
 			// hit by any PC.
-			if prevLe.IsStmt && le.Address > prevLe.Address {
+			//
+			// We insert a PC→source interval for the previous row when EITHER:
+			//   (a) prevLe.IsStmt is true — the canonical "this row begins a
+			//       new statement" marker that DWARF producers set on the first
+			//       row of every source statement, OR
+			//   (b) the row is a column-only refinement (prevLe.Column !=
+			//       le.Column) — rustc emits multiple statements packed onto
+			//       one source line as a single is_stmt row followed by
+			//       additional rows whose ONLY change is the column.  Without
+			//       case (b) those column-refinement rows are dropped,
+			//       collapsing N statements on one line into a single step
+			//       and breaking column-aware navigation
+			//       (FU-Column-Aware-Nav-Wasm).
+			//
+			// Both cases additionally require prevLe.Line > 0 — DWARF emits
+			// "line 0" rows to mark instructions that have no source
+			// correspondence (function prologue/epilogue padding, compiler-
+			// generated cleanup, etc.).  Exposing those as user-visible steps
+			// would surface spurious zero-line entries in the trace.
+			//
+			// See https://dwarfstd.org/doc/DWARF5.pdf §6.2 ("Line Number
+			// Information") for the is_stmt + column semantics.
+			columnRefinement := prevLe.Column != le.Column
+			if le.Address > prevLe.Address && prevLe.Line > 0 && (prevLe.IsStmt || columnRefinement) {
 				tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
 					FileName: prevLe.File.Name,
 					Line:     int64(prevLe.Line),

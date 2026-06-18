@@ -57,6 +57,9 @@ var wasmRecorderGoldenCollections []byte
 //go:embed testdata/recorder-golden/panic_path.wasm
 var wasmRecorderGoldenPanicPath []byte
 
+//go:embed testdata/recorder-golden/column_aware.wasm
+var wasmRecorderGoldenColumnAware []byte
+
 // ---------------------------------------------------------------------------
 // Decoded `ct-print --full` schema (subset used by the assertions)
 // ---------------------------------------------------------------------------
@@ -529,7 +532,11 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 		"paths[0] should end with control_flow.rs; got %q", doc.Paths[0])
 
 	// ----- exact counts ---------------------------------------------------
-	require.Equal(t, 76, doc.Counts["steps"], "counts.steps")
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).
+	require.Equal(t, 142, doc.Counts["steps"], "counts.steps")
 	// `main` now surfaces as a 4th completed call.  The Nim trace
 	// writer's `close()` drains any unclosed PendingCalls (LIFO) so
 	// partial-trace recordings still produce balanced
@@ -541,7 +548,7 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim::close.
 	require.Equal(t, 4, doc.Counts["calls"], "counts.calls")
 	require.Equal(t, 0, doc.Counts["io_events"], "counts.io_events")
-	require.Equal(t, 76, doc.Counts["values"], "counts.values")
+	require.Equal(t, 281, doc.Counts["values"], "counts.values")
 	require.Equal(t, 4, doc.Counts["functions"], "counts.functions")
 	require.Equal(t, 1, doc.Counts["paths"], "counts.paths")
 	require.Equal(t, 11, doc.Counts["varnames"], "counts.varnames")
@@ -556,9 +563,9 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// 4 call_entry + 4 call_exit = `main` now appears in both
 	// streams thanks to the writer's close-time PendingCall drain.
 	require.Equal(t, map[string]int{
-		"step": 76, "call_entry": 4, "call_exit": 4,
+		"step": 281, "call_entry": 4, "call_exit": 4,
 	}, kinds, "event-kind histogram")
-	require.Equal(t, 84, len(events), "events length")
+	require.Equal(t, 289, len(events), "events length")
 
 	// ----- call entry sequence -------------------------------------------
 	// `main` is now the first entry — it is opened at module entry
@@ -631,76 +638,118 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 // commit; future recorder changes that drift from it MUST update
 // this table consciously.
 func controlFlowExpectedVars() []expectVarStep {
-	// Build the expected sequence in source-trace order.  The lines
-	// come straight from `cmd/wazero/testdata/recorder-golden/control_flow.rs`.
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).  Most prior
+	// entries split into adjacent column-refined sub-steps; the list grew
+	// from 242 to 489 entries.  Generated literally from the recorder
+	// output — regenerate with the same procedure if the recorder's
+	// per-step variable surfacing changes again.
 	return []expectVarStep{
-		// classify(7) — n=7 across the if-chain
 		{Line: 11, Varname: "n", Kind: "Int", I: 7},
-		{Line: 12, Varname: "n", Kind: "Int", I: 7},
 		{Line: 13, Varname: "n", Kind: "Int", I: 7},
 		{Line: 12, Varname: "n", Kind: "Int", I: 7},
-		{Line: 19, Varname: "n", Kind: "Int", I: 7}, // implicit return
-		// main: sign = classify(7) = 1
-		{Line: 47, Varname: "sign", Kind: "Int", I: 1},
-		// main: xs = [1,2,3,4] — recorder surfaces it as Raw
+		{Line: 19, Varname: "n", Kind: "Int", I: 7},
+		{Line: 47, Varname: "n", Kind: "Int", I: 7},
 		{Line: 48, Varname: "sign", Kind: "Int", I: 1},
-		{Line: 48, Varname: "xs", Kind: "Raw"},
-		// sum_iter — total accumulates, x is Raw
+		{Line: 22, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 22, Varname: "xs", Kind: "Raw"},
-		{Line: 23, Varname: "xs", Kind: "Raw"},
+		{Line: 22, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 0},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "total", Kind: "Int", I: 0},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
+		{Line: 25, Varname: "total", Kind: "Int", I: 0},
+		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 0},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		// loop iter 1 → total=1
+		{Line: 24, Varname: "total", Kind: "Int", I: 0},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "x", Kind: "Raw"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "total", Kind: "Int", I: 1},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 1},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 1},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "xs", Kind: "Raw"},
+		{Line: 25, Varname: "total", Kind: "Int", I: 1},
+		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		// iter 2 → total=3
+		{Line: 24, Varname: "total", Kind: "Int", I: 1},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "x", Kind: "Raw"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "total", Kind: "Int", I: 3},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 3},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 3},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "xs", Kind: "Raw"},
+		{Line: 25, Varname: "total", Kind: "Int", I: 3},
+		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		// iter 3 → total=6
+		{Line: 24, Varname: "total", Kind: "Int", I: 3},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "x", Kind: "Raw"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "total", Kind: "Int", I: 6},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 6},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 6},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "xs", Kind: "Raw"},
+		{Line: 25, Varname: "total", Kind: "Int", I: 6},
+		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		// iter 4 → total=10
+		{Line: 24, Varname: "total", Kind: "Int", I: 6},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
+		{Line: 24, Varname: "x", Kind: "Raw"},
+		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 10},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
-		// implicit return on line 27
 		{Line: 27, Varname: "total", Kind: "Int", I: 10},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "xs", Kind: "Raw"},
+		{Line: 28, Varname: "total", Kind: "Int", I: 10},
 		{Line: 28, Varname: "xs", Kind: "Raw"},
-		// main: sum_val = sum_iter(&xs) = 10
-		{Line: 49, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 49, Varname: "xs", Kind: "Raw"},
-		{Line: 49, Varname: "sum_val", Kind: "Int", I: 10},
-		// nested_loop(4) — n=4 throughout
+		{Line: 31, Varname: "sign", Kind: "Int", I: 1},
+		{Line: 31, Varname: "xs", Kind: "Raw"},
+		{Line: 31, Varname: "sum_val", Kind: "Int", I: 10},
 		{Line: 31, Varname: "n", Kind: "Int", I: 4},
-		{Line: 32, Varname: "n", Kind: "Int", I: 4},
-		{Line: 33, Varname: "total", Kind: "Int", I: 0},
 		{Line: 33, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 0},
-		{Line: 34, Varname: "i", Kind: "Int", I: 0},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 35, Varname: "total", Kind: "Int", I: 0},
 		{Line: 35, Varname: "i", Kind: "Int", I: 0},
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
 		{Line: 36, Varname: "j", Kind: "Int", I: 0},
@@ -709,11 +758,26 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 0},
 		{Line: 37, Varname: "j", Kind: "Int", I: 0},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 37, Varname: "total", Kind: "Int", I: 0},
+		{Line: 37, Varname: "i", Kind: "Int", I: 0},
+		{Line: 37, Varname: "j", Kind: "Int", I: 0},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
 		{Line: 38, Varname: "total", Kind: "Int", I: 0},
 		{Line: 38, Varname: "i", Kind: "Int", I: 0},
 		{Line: 38, Varname: "j", Kind: "Int", I: 0},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
-		// j increments to 1 (j>i), back to outer loop
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
 		{Line: 36, Varname: "j", Kind: "Int", I: 1},
@@ -722,7 +786,10 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "i", Kind: "Int", I: 0},
 		{Line: 40, Varname: "j", Kind: "Int", I: 1},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
-		// i=1
+		{Line: 34, Varname: "total", Kind: "Int", I: 0},
+		{Line: 34, Varname: "i", Kind: "Int", I: 0},
+		{Line: 34, Varname: "j", Kind: "Int", I: 1},
+		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 0},
 		{Line: 34, Varname: "i", Kind: "Int", I: 1},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
@@ -731,8 +798,19 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
 		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 37, Varname: "total", Kind: "Int", I: 0},
+		{Line: 37, Varname: "i", Kind: "Int", I: 1},
+		{Line: 37, Varname: "j", Kind: "Int", I: 0},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
 		{Line: 37, Varname: "total", Kind: "Int", I: 0},
 		{Line: 37, Varname: "i", Kind: "Int", I: 1},
 		{Line: 37, Varname: "j", Kind: "Int", I: 0},
@@ -741,7 +819,18 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "i", Kind: "Int", I: 1},
 		{Line: 38, Varname: "j", Kind: "Int", I: 0},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
-		// j=1, total still 0 then becomes 1
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 0},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
 		{Line: 36, Varname: "j", Kind: "Int", I: 1},
@@ -750,11 +839,26 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 1},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 1},
+		{Line: 37, Varname: "total", Kind: "Int", I: 0},
+		{Line: 37, Varname: "i", Kind: "Int", I: 1},
+		{Line: 37, Varname: "j", Kind: "Int", I: 1},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 0},
 		{Line: 38, Varname: "i", Kind: "Int", I: 1},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
-		// j=2, exits inner
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
 		{Line: 36, Varname: "j", Kind: "Int", I: 2},
@@ -763,7 +867,10 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "i", Kind: "Int", I: 1},
 		{Line: 40, Varname: "j", Kind: "Int", I: 2},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
-		// i=2
+		{Line: 34, Varname: "total", Kind: "Int", I: 1},
+		{Line: 34, Varname: "i", Kind: "Int", I: 1},
+		{Line: 34, Varname: "j", Kind: "Int", I: 2},
+		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 1},
 		{Line: 34, Varname: "i", Kind: "Int", I: 2},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
@@ -772,8 +879,19 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
 		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 37, Varname: "total", Kind: "Int", I: 1},
+		{Line: 37, Varname: "i", Kind: "Int", I: 2},
+		{Line: 37, Varname: "j", Kind: "Int", I: 0},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
 		{Line: 37, Varname: "total", Kind: "Int", I: 1},
 		{Line: 37, Varname: "i", Kind: "Int", I: 2},
 		{Line: 37, Varname: "j", Kind: "Int", I: 0},
@@ -784,16 +902,44 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 1},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
 		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 37, Varname: "total", Kind: "Int", I: 1},
 		{Line: 37, Varname: "i", Kind: "Int", I: 2},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 2},
+		{Line: 37, Varname: "total", Kind: "Int", I: 1},
+		{Line: 37, Varname: "i", Kind: "Int", I: 2},
+		{Line: 37, Varname: "j", Kind: "Int", I: 1},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 1},
 		{Line: 38, Varname: "i", Kind: "Int", I: 2},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 2},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 2},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 2},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 2},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
 		{Line: 36, Varname: "j", Kind: "Int", I: 2},
@@ -802,10 +948,26 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 2},
 		{Line: 37, Varname: "j", Kind: "Int", I: 2},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 4},
+		{Line: 37, Varname: "total", Kind: "Int", I: 2},
+		{Line: 37, Varname: "i", Kind: "Int", I: 2},
+		{Line: 37, Varname: "j", Kind: "Int", I: 2},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 2},
 		{Line: 38, Varname: "i", Kind: "Int", I: 2},
 		{Line: 38, Varname: "j", Kind: "Int", I: 2},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
 		{Line: 36, Varname: "j", Kind: "Int", I: 3},
@@ -814,7 +976,10 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "i", Kind: "Int", I: 2},
 		{Line: 40, Varname: "j", Kind: "Int", I: 3},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
-		// i=3
+		{Line: 34, Varname: "total", Kind: "Int", I: 4},
+		{Line: 34, Varname: "i", Kind: "Int", I: 2},
+		{Line: 34, Varname: "j", Kind: "Int", I: 3},
+		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 4},
 		{Line: 34, Varname: "i", Kind: "Int", I: 3},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
@@ -823,8 +988,19 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
 		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 37, Varname: "total", Kind: "Int", I: 4},
+		{Line: 37, Varname: "i", Kind: "Int", I: 3},
+		{Line: 37, Varname: "j", Kind: "Int", I: 0},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
 		{Line: 37, Varname: "total", Kind: "Int", I: 4},
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 0},
@@ -835,16 +1011,44 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 4},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
 		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 37, Varname: "total", Kind: "Int", I: 4},
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 5},
+		{Line: 37, Varname: "total", Kind: "Int", I: 4},
+		{Line: 37, Varname: "i", Kind: "Int", I: 3},
+		{Line: 37, Varname: "j", Kind: "Int", I: 1},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 4},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 5},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 5},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 5},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 5},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
 		{Line: 36, Varname: "j", Kind: "Int", I: 2},
@@ -853,10 +1057,26 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 2},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 7},
+		{Line: 37, Varname: "total", Kind: "Int", I: 5},
+		{Line: 37, Varname: "i", Kind: "Int", I: 3},
+		{Line: 37, Varname: "j", Kind: "Int", I: 2},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 5},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 2},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 7},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 7},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 7},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 7},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
 		{Line: 36, Varname: "j", Kind: "Int", I: 3},
@@ -865,10 +1085,26 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 3},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 10},
+		{Line: 37, Varname: "total", Kind: "Int", I: 7},
+		{Line: 37, Varname: "i", Kind: "Int", I: 3},
+		{Line: 37, Varname: "j", Kind: "Int", I: 3},
+		{Line: 37, Varname: "n", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 7},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 3},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 10},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 10},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 4},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
+		{Line: 36, Varname: "total", Kind: "Int", I: 10},
+		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 4},
+		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 10},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
 		{Line: 36, Varname: "j", Kind: "Int", I: 4},
@@ -877,19 +1113,24 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "i", Kind: "Int", I: 3},
 		{Line: 40, Varname: "j", Kind: "Int", I: 4},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
-		// i=4 → exit outer
+		{Line: 34, Varname: "total", Kind: "Int", I: 10},
+		{Line: 34, Varname: "i", Kind: "Int", I: 3},
+		{Line: 34, Varname: "j", Kind: "Int", I: 4},
+		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 10},
 		{Line: 34, Varname: "i", Kind: "Int", I: 4},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 42, Varname: "total", Kind: "Int", I: 10},
 		{Line: 42, Varname: "i", Kind: "Int", I: 4},
 		{Line: 42, Varname: "n", Kind: "Int", I: 4},
+		{Line: 43, Varname: "total", Kind: "Int", I: 10},
+		{Line: 43, Varname: "i", Kind: "Int", I: 4},
 		{Line: 43, Varname: "n", Kind: "Int", I: 4},
-		// main: nested_val = nested_loop(4) = 10, final_result = 21
-		{Line: 50, Varname: "sign", Kind: "Int", I: 1},
-		{Line: 50, Varname: "xs", Kind: "Raw"},
-		{Line: 50, Varname: "sum_val", Kind: "Int", I: 10},
-		{Line: 50, Varname: "nested_val", Kind: "Int", I: 10},
+		{Line: 50, Varname: "n", Kind: "Int", I: 4},
+		{Line: 51, Varname: "sign", Kind: "Int", I: 1},
+		{Line: 51, Varname: "xs", Kind: "Raw"},
+		{Line: 51, Varname: "sum_val", Kind: "Int", I: 10},
+		{Line: 51, Varname: "nested_val", Kind: "Int", I: 10},
 		{Line: 51, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 51, Varname: "xs", Kind: "Raw"},
 		{Line: 51, Varname: "sum_val", Kind: "Int", I: 10},
@@ -915,7 +1156,11 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	require.True(t, strings.HasSuffix(doc.Paths[0], "nested_calls.rs"))
 
 	// Counts.
-	require.Equal(t, 40, doc.Counts["steps"])
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).
+	require.Equal(t, 49, doc.Counts["steps"])
 	// 8 = 3 chain (level1/2/3) + 5 recursive factorial frames.  The
 	// 9th is `main` itself — the wasm recorder leaves the outermost
 	// `main` frame open at end-of-execution (no DWARF
@@ -940,7 +1185,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 40, "call_entry": 9, "call_exit": 9,
+		"step": 90, "call_entry": 9, "call_exit": 9,
 	}, kinds, "event-kind histogram")
 
 	// Call-entry sequence: `main` is opened first (at module
@@ -990,52 +1235,64 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 
 	// Step-by-step variable values (every step pinned).
 	got := collectVars(t, events)
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).  The variable
+	// observation list is regenerated literally from the recorder output;
+	// most prior entries split into adjacent column-refined sub-steps and
+	// some leftover-scope variables surface on lines that previously
+	// collapsed onto a single is_stmt row.
 	want2 := []expectVarStep{
 		{Line: 18, Varname: "x", Kind: "Int", I: 5},
-		{Line: 19, Varname: "x", Kind: "Int", I: 5},
 		{Line: 12, Varname: "x", Kind: "Int", I: 5},
-		{Line: 13, Varname: "x", Kind: "Int", I: 5},
+		{Line: 12, Varname: "x", Kind: "Int", I: 5},
 		{Line: 7, Varname: "x", Kind: "Int", I: 5},
-		{Line: 8, Varname: "x", Kind: "Int", I: 5},
+		{Line: 7, Varname: "x", Kind: "Int", I: 5},
 		{Line: 9, Varname: "x", Kind: "Int", I: 5},
-		{Line: 14, Varname: "v", Kind: "Int", I: 6},
 		{Line: 14, Varname: "x", Kind: "Int", I: 5},
+		{Line: 15, Varname: "v", Kind: "Int", I: 6},
 		{Line: 15, Varname: "x", Kind: "Int", I: 5},
-		{Line: 20, Varname: "v", Kind: "Int", I: 12},
 		{Line: 20, Varname: "x", Kind: "Int", I: 5},
+		{Line: 21, Varname: "v", Kind: "Int", I: 12},
 		{Line: 21, Varname: "x", Kind: "Int", I: 5},
-		// main's `chain = level1(5) = 22`
-		{Line: 34, Varname: "chain", Kind: "Int", I: 22},
-		// factorial(5) recursion
+		{Line: 34, Varname: "x", Kind: "Int", I: 5},
+		{Line: 24, Varname: "chain", Kind: "Int", I: 22},
 		{Line: 24, Varname: "n", Kind: "Int", I: 5},
-		{Line: 25, Varname: "n", Kind: "Int", I: 5},
 		{Line: 28, Varname: "n", Kind: "Int", I: 5},
+		{Line: 28, Varname: "n", Kind: "Int", I: 5},
+		{Line: 24, Varname: "n", Kind: "Int", I: 5},
 		{Line: 24, Varname: "n", Kind: "Int", I: 4},
-		{Line: 25, Varname: "n", Kind: "Int", I: 4},
 		{Line: 28, Varname: "n", Kind: "Int", I: 4},
+		{Line: 28, Varname: "n", Kind: "Int", I: 4},
+		{Line: 24, Varname: "n", Kind: "Int", I: 4},
 		{Line: 24, Varname: "n", Kind: "Int", I: 3},
-		{Line: 25, Varname: "n", Kind: "Int", I: 3},
 		{Line: 28, Varname: "n", Kind: "Int", I: 3},
+		{Line: 28, Varname: "n", Kind: "Int", I: 3},
+		{Line: 24, Varname: "n", Kind: "Int", I: 3},
 		{Line: 24, Varname: "n", Kind: "Int", I: 2},
-		{Line: 25, Varname: "n", Kind: "Int", I: 2},
 		{Line: 28, Varname: "n", Kind: "Int", I: 2},
+		{Line: 28, Varname: "n", Kind: "Int", I: 2},
+		{Line: 24, Varname: "n", Kind: "Int", I: 2},
 		{Line: 24, Varname: "n", Kind: "Int", I: 1},
-		{Line: 25, Varname: "n", Kind: "Int", I: 1},
 		{Line: 26, Varname: "n", Kind: "Int", I: 1},
-		// unwinding
 		{Line: 25, Varname: "n", Kind: "Int", I: 1},
 		{Line: 30, Varname: "n", Kind: "Int", I: 1},
+		{Line: 28, Varname: "n", Kind: "Int", I: 1},
 		{Line: 25, Varname: "n", Kind: "Int", I: 2},
 		{Line: 30, Varname: "n", Kind: "Int", I: 2},
+		{Line: 28, Varname: "n", Kind: "Int", I: 2},
 		{Line: 25, Varname: "n", Kind: "Int", I: 3},
 		{Line: 30, Varname: "n", Kind: "Int", I: 3},
+		{Line: 28, Varname: "n", Kind: "Int", I: 3},
 		{Line: 25, Varname: "n", Kind: "Int", I: 4},
 		{Line: 30, Varname: "n", Kind: "Int", I: 4},
+		{Line: 28, Varname: "n", Kind: "Int", I: 4},
 		{Line: 25, Varname: "n", Kind: "Int", I: 5},
 		{Line: 30, Varname: "n", Kind: "Int", I: 5},
-		// main: fact5 = 120, total = 142
-		{Line: 35, Varname: "chain", Kind: "Int", I: 22},
-		{Line: 35, Varname: "fact5", Kind: "Int", I: 120},
+		{Line: 35, Varname: "n", Kind: "Int", I: 5},
+		{Line: 36, Varname: "chain", Kind: "Int", I: 22},
+		{Line: 36, Varname: "fact5", Kind: "Int", I: 120},
 		{Line: 36, Varname: "chain", Kind: "Int", I: 22},
 		{Line: 36, Varname: "fact5", Kind: "Int", I: 120},
 		{Line: 36, Varname: "total", Kind: "Int", I: 142},
@@ -1066,7 +1323,11 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	require.Equal(t, 1, len(doc.Paths))
 	require.True(t, strings.HasSuffix(doc.Paths[0], "collections.rs"))
 
-	require.Equal(t, 30, doc.Counts["steps"])
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).
+	require.Equal(t, 43, doc.Counts["steps"])
 	// The 3rd call is `main` — the wasm recorder leaves the
 	// outermost `main` frame open at end-of-execution and the Nim
 	// trace writer's `close()` now flushes any unclosed
@@ -1086,7 +1347,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 30, "call_entry": 3, "call_exit": 3,
+		"step": 84, "call_entry": 3, "call_exit": 3,
 	}, kinds, "event-kind histogram")
 
 	// `main` is opened first at module entry; the writer flushes
@@ -1119,79 +1380,116 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	// Variable assertions (literal observed shape — RECORDER BUG
 	// notes already attached).  `pair`, `v` (Vec) surface as Raw;
 	// `map` and `pt` surface as Struct with no field payload.
+	//
+	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
+	// now produce step events per column position
+	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
+	// guard to also accept column-only refinement rows).  Multi-statement
+	// lines split into adjacent column-refined sub-steps so the list grew
+	// from 49 to 121 entries.
 	got := collectVars(t, events)
 	want := []expectVarStep{
 		// make_vec body
-		{Line: 18, Varname: "v", Kind: "Raw"},
 		{Line: 19, Varname: "v", Kind: "Raw"},
 		{Line: 20, Varname: "v", Kind: "Raw"},
 		{Line: 21, Varname: "v", Kind: "Raw"},
-		// after make_vec returns, main has v
-		{Line: 35, Varname: "v", Kind: "Raw"},
+		{Line: 22, Varname: "v", Kind: "Raw"},
 		// sum_vec body
 		{Line: 25, Varname: "v", Kind: "Raw"},
-		{Line: 26, Varname: "v", Kind: "Raw"},
+		{Line: 25, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 0},
 		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 0},
+		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 0},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 28, Varname: "s", Kind: "Int", I: 0},
+		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 0},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 0},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "x", Kind: "Raw"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 10},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 10},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 10},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "v", Kind: "Raw"},
+		{Line: 28, Varname: "s", Kind: "Int", I: 10},
+		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 10},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "x", Kind: "Raw"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 30},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 30},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 30},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "v", Kind: "Raw"},
+		{Line: 28, Varname: "s", Kind: "Int", I: 30},
+		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 30},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "x", Kind: "Raw"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 60},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 30, Varname: "s", Kind: "Int", I: 60},
+		{Line: 30, Varname: "iter", Kind: "Struct"},
 		{Line: 30, Varname: "v", Kind: "Raw"},
+		{Line: 31, Varname: "s", Kind: "Int", I: 60},
 		{Line: 31, Varname: "v", Kind: "Raw"},
 		// main after sum_vec
 		{Line: 37, Varname: "v", Kind: "Raw"},
-		{Line: 37, Varname: "total", Kind: "Int", I: 60},
 		// HashMap setup
 		{Line: 38, Varname: "v", Kind: "Raw"},
 		{Line: 38, Varname: "total", Kind: "Int", I: 60},
-		{Line: 38, Varname: "map", Kind: "Struct"},
 		{Line: 39, Varname: "v", Kind: "Raw"},
 		{Line: 39, Varname: "total", Kind: "Int", I: 60},
 		{Line: 39, Varname: "map", Kind: "Struct"},
 		{Line: 40, Varname: "v", Kind: "Raw"},
 		{Line: 40, Varname: "total", Kind: "Int", I: 60},
 		{Line: 40, Varname: "map", Kind: "Struct"},
+		{Line: 40, Varname: "v", Kind: "Raw"},
+		{Line: 40, Varname: "total", Kind: "Int", I: 60},
+		{Line: 40, Varname: "map", Kind: "Struct"},
 		{Line: 42, Varname: "v", Kind: "Raw"},
 		{Line: 42, Varname: "total", Kind: "Int", I: 60},
 		{Line: 42, Varname: "map", Kind: "Struct"},
-		{Line: 42, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 43, Varname: "v", Kind: "Raw"},
 		{Line: 43, Varname: "total", Kind: "Int", I: 60},
 		{Line: 43, Varname: "map", Kind: "Struct"},
 		{Line: 43, Varname: "map_len", Kind: "Int", I: 2},
-		{Line: 43, Varname: "pt", Kind: "Struct"},
 		{Line: 45, Varname: "v", Kind: "Raw"},
 		{Line: 45, Varname: "total", Kind: "Int", I: 60},
 		{Line: 45, Varname: "map", Kind: "Struct"},
 		{Line: 45, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 45, Varname: "pt", Kind: "Struct"},
-		{Line: 45, Varname: "pt_sum", Kind: "Int", I: 7},
 		{Line: 46, Varname: "v", Kind: "Raw"},
 		{Line: 46, Varname: "total", Kind: "Int", I: 60},
 		{Line: 46, Varname: "map", Kind: "Struct"},
 		{Line: 46, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 46, Varname: "pt", Kind: "Struct"},
 		{Line: 46, Varname: "pt_sum", Kind: "Int", I: 7},
-		{Line: 46, Varname: "pair", Kind: "Raw"},
 		{Line: 48, Varname: "v", Kind: "Raw"},
 		{Line: 48, Varname: "total", Kind: "Int", I: 60},
 		{Line: 48, Varname: "map", Kind: "Struct"},
@@ -1199,7 +1497,14 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 48, Varname: "pt", Kind: "Struct"},
 		{Line: 48, Varname: "pt_sum", Kind: "Int", I: 7},
 		{Line: 48, Varname: "pair", Kind: "Raw"},
-		{Line: 48, Varname: "pair_sum", Kind: "Int", I: 300},
+		{Line: 49, Varname: "v", Kind: "Raw"},
+		{Line: 49, Varname: "total", Kind: "Int", I: 60},
+		{Line: 49, Varname: "map", Kind: "Struct"},
+		{Line: 49, Varname: "map_len", Kind: "Int", I: 2},
+		{Line: 49, Varname: "pt", Kind: "Struct"},
+		{Line: 49, Varname: "pt_sum", Kind: "Int", I: 7},
+		{Line: 49, Varname: "pair", Kind: "Raw"},
+		{Line: 49, Varname: "pair_sum", Kind: "Int", I: 300},
 		{Line: 49, Varname: "v", Kind: "Raw"},
 		{Line: 49, Varname: "total", Kind: "Int", I: 60},
 		{Line: 49, Varname: "map", Kind: "Struct"},
@@ -1403,6 +1708,74 @@ func TestRecorderColumnAwareSteps(t *testing.T) {
 			"%d events.", len(events))
 }
 
+// TestRecorderColumnAwareMultipleStatementsPerLine is the FU-Mwasm-tests
+// follow-up to TestRecorderColumnAwareSteps.  It records the
+// `column_aware.wasm` fixture (built from
+// `testdata/recorder-golden/column_aware.rs`, whose line 17 packs
+// `let a: i32 = 1; let b: i32 = 2; let c: i32 = 3;` onto a single
+// source line) and asserts the recorder surfaces a strictly distinct
+// 1-based column for each of the three statements — the acceptance
+// criterion from `codetracer-specs/Planned-Features/
+// Column-Aware-Navigation-Other-Languages.plan.md` and the mirror of
+// the JS, EVM, Solana, and Cairo siblings' "multiple statements on
+// one line each record distinct columns" assertions.
+//
+// Why this is the load-bearing test: TestRecorderColumnAwareSteps
+// exercises the meta.dat flag + a `sekDeltaColumn` event from
+// arbitrary single-statement Rust source.  Such an event surfaces on
+// every Rust function entry (col 0 → col N), so even a recorder that
+// silently drops all DWARF column data EXCEPT the very first row of
+// each function would still pass that test.  The genuine
+// column-aware-navigation behaviour — splitting a multi-statement
+// source line into N distinct steps — is only observable on a fixture
+// authored to put N>1 statements on one line.
+func TestRecorderColumnAwareMultipleStatementsPerLine(t *testing.T) {
+	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
+
+	require.True(t, doc.Metadata.Flags.HasColumnAwareSteps,
+		"trace metadata must advertise has_column_aware_steps=true; got %+v",
+		doc.Metadata.Flags)
+
+	// Line 17 in column_aware.rs is:
+	//     "    let a: i32 = 1; let b: i32 = 2; let c: i32 = 3;"
+	// The three `let` statements start at 1-based columns 5, 21, and 37
+	// in the source.  DWARF (verified with llvm-dwarfdump --debug-line)
+	// emits three line-table rows for line 17 at columns 9, 25, and 41
+	// — the *initializer-expression* columns rather than the `let`
+	// keyword columns, because rustc maps each `let <name> = <expr>;`
+	// statement's first instruction to the expression rather than the
+	// keyword.  Either set is acceptable as "three distinct columns";
+	// the load-bearing assertion is that THREE distinct columns
+	// surface, not which specific column values they have.
+	const multiStmtLine int64 = 17
+	events := decodeEvents(t, doc)
+
+	columnsByLine := map[int64]map[int64]struct{}{}
+	for _, ev := range events {
+		if ev.Kind != "step" {
+			continue
+		}
+		if _, ok := columnsByLine[ev.Line]; !ok {
+			columnsByLine[ev.Line] = map[int64]struct{}{}
+		}
+		columnsByLine[ev.Line][ev.Column] = struct{}{}
+	}
+
+	cols := columnsByLine[multiStmtLine]
+	require.True(t, len(cols) >= 3,
+		"expected >= 3 distinct 1-based columns on line %d "+
+			"(one per `let` statement in `let a = 1; let b = 2; let c = 3;`), "+
+			"got %d distinct column(s): %v.  Either DWARF failed to "+
+			"distinguish the statements (check llvm-dwarfdump --debug-line "+
+			"output for the .wasm fixture) or the recorder is dropping "+
+			"non-is_stmt line-table rows (check the DWARF indexer at "+
+			"internal/wasmdebug/dwarf_indexing.go line 699 — the "+
+			"`prevLe.IsStmt && ...` guard skips column-only refinement "+
+			"rows even though they carry the per-statement columns we "+
+			"need).  Per-line column map across the whole trace: %v",
+		multiStmtLine, len(cols), cols, columnsByLine)
+}
+
 // ===========================================================================
 // Test-runner sanity (parallel of the existing testdata fixtures)
 // ===========================================================================
@@ -1420,6 +1793,7 @@ func TestRecorderGoldenFixturesEmbedded(t *testing.T) {
 		{"nested_calls.wasm", wasmRecorderGoldenNestedCalls},
 		{"collections.wasm", wasmRecorderGoldenCollections},
 		{"panic_path.wasm", wasmRecorderGoldenPanicPath},
+		{"column_aware.wasm", wasmRecorderGoldenColumnAware},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.True(t, len(tc.blob) > 0,

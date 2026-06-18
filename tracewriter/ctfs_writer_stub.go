@@ -34,6 +34,8 @@ func (w *CtfsTraceWriter) RegisterStepWithPathId(tracetypes.PathId, tracetypes.L
 func (w *CtfsTraceWriter) RegisterStepWithColumn(string, tracetypes.Line, *tracetypes.Line) {
 }
 func (w *CtfsTraceWriter) EnableColumnAwareSteps()                      {}
+func (w *CtfsTraceWriter) EnableColumnBreakpointsSupport()               {}
+func (w *CtfsTraceWriter) EnableColumnMotionsSupport()                   {}
 func (w *CtfsTraceWriter) RegisterPathWithLineLengths(string, []uint32) {}
 func (w *CtfsTraceWriter) RegisterCall(string, string, tracetypes.Line, []tracetypes.FullValueRecord) {
 }

@@ -370,6 +370,16 @@ func (r *runtime) InstantiateModuleWithRecord(
 	// Column-Aware-Navigation-Other-Languages.plan.md`.
 	if traceRecord != nil {
 		traceRecord.EnableColumnAwareSteps()
+
+		// M-capability-flags: DWARF source maps map each WASM
+		// instruction to a specific statement-start so per-column
+		// breakpoints and per-column motions are both meaningful.
+		// Advertise both so the GUI exposes its M6 Alt+click
+		// affordance and sub-statement step controls.  Spec:
+		// `codetracer-trace-format-spec/internal-files.md`
+		// §"Column-Aware Capability Flags".
+		traceRecord.EnableColumnBreakpointsSupport()
+		traceRecord.EnableColumnMotionsSupport()
 	}
 
 	if closeNotifier, ok := ctx.Value(expctxkeys.CloseNotifierKey{}).(experimentalapi.CloseNotifier); ok {

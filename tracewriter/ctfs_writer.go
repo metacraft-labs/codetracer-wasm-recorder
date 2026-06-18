@@ -81,6 +81,19 @@ const (
 	// `trace_writer_register_path_with_line_lengths` in
 	// `codetracer_trace_writer.h` for the wire contract.
 	ctfsEventPathWithLineLengths
+	// ctfsEventEnableColumnBreakpointsSupport opts the writer into
+	// advertising support for per-column breakpoints (meta.dat bit 6,
+	// FLAG_SUPPORTS_COLUMN_BREAKPOINTS).  See M-capability-flags in
+	// `codetracer-trace-format-spec/internal-files.md` §"Column-Aware
+	// Capability Flags".  The opt-in implicitly enables column-aware
+	// step encoding because capability bits without wire-format column
+	// data is undefined behaviour per spec.
+	ctfsEventEnableColumnBreakpointsSupport
+	// ctfsEventEnableColumnMotionsSupport opts the writer into
+	// advertising support for per-column step motions (meta.dat bit 7,
+	// FLAG_SUPPORTS_COLUMN_MOTIONS).  Like the breakpoint capability
+	// opt-in, this implicitly enables column-aware step encoding.
+	ctfsEventEnableColumnMotionsSupport
 )
 
 type ctfsBufferedEvent struct {
@@ -228,6 +241,42 @@ func (w *CtfsTraceWriter) EnableColumnAwareSteps() {
 	w.columnAware = true
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind: ctfsEventEnableColumnAwareSteps,
+	})
+}
+
+// EnableColumnBreakpointsSupport records a capability opt-in event
+// (M-capability-flags) that the replay path translates into a
+// `trace_writer_enable_column_breakpoints_support` FFI call.  Flips
+// `meta.dat` bit 6 (`FLAG_SUPPORTS_COLUMN_BREAKPOINTS`) so the GUI
+// knows it may expose its per-column breakpoint affordance for this
+// trace.  The Nim FFI implicitly enables column-aware step encoding,
+// so we also flip our local `columnAware` latch to match.
+//
+// Spec: `codetracer-trace-format-spec/internal-files.md` §"Column-Aware
+// Capability Flags".
+func (w *CtfsTraceWriter) EnableColumnBreakpointsSupport() {
+	// The capability bit presupposes wire-format column data; keep
+	// our local latch consistent with what the Nim writer does
+	// internally so RegisterStepWithColumn's `columnAware` guard
+	// fires correctly even when the recorder forgot to call
+	// EnableColumnAwareSteps explicitly.
+	w.columnAware = true
+	w.events = append(w.events, ctfsBufferedEvent{
+		kind: ctfsEventEnableColumnBreakpointsSupport,
+	})
+}
+
+// EnableColumnMotionsSupport records a capability opt-in event
+// (M-capability-flags) that the replay path translates into a
+// `trace_writer_enable_column_motions_support` FFI call.  Flips
+// `meta.dat` bit 7 (`FLAG_SUPPORTS_COLUMN_MOTIONS`) so the GUI may
+// expose per-column step-over / step-in / step-out.  Implicitly
+// enables column-aware step encoding via the same mechanism as
+// `EnableColumnBreakpointsSupport`.
+func (w *CtfsTraceWriter) EnableColumnMotionsSupport() {
+	w.columnAware = true
+	w.events = append(w.events, ctfsBufferedEvent{
+		kind: ctfsEventEnableColumnMotionsSupport,
 	})
 }
 
@@ -524,6 +573,12 @@ func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBuffere
 
 	case ctfsEventEnableColumnAwareSteps:
 		C.trace_writer_enable_column_aware_steps(handle)
+
+	case ctfsEventEnableColumnBreakpointsSupport:
+		C.trace_writer_enable_column_breakpoints_support(handle)
+
+	case ctfsEventEnableColumnMotionsSupport:
+		C.trace_writer_enable_column_motions_support(handle)
 
 	case ctfsEventPathWithLineLengths:
 		cPath := C.CString(event.path)

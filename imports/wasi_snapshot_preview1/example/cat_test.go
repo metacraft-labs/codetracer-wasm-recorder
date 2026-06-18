@@ -23,6 +23,7 @@ func Test_main(t *testing.T) {
 		t.Run(toolchain, func(t *testing.T) {
 			t.Setenv("TOOLCHAIN", toolchain)
 			stdout, stderr := maintester.TestMain(t, main, "cat", "test.txt")
+			stderr = maintester.StripKnownDWARFWarnings(stderr)
 			require.Equal(t, "", stderr)
 			require.Equal(t, "greet filesystem\n", stdout)
 		})

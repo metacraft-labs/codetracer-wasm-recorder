@@ -2,13 +2,18 @@ package interpreter
 
 import (
 	"context"
+	"debug/dwarf"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
+	"strings"
 	"sync"
 	"unsafe"
+
+	// Dwarf
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
@@ -16,9 +21,11 @@ import (
 	"github.com/tetratelabs/wazero/internal/filecache"
 	"github.com/tetratelabs/wazero/internal/internalapi"
 	"github.com/tetratelabs/wazero/internal/moremath"
+	"github.com/tetratelabs/wazero/internal/tracetypes"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmdebug"
 	"github.com/tetratelabs/wazero/internal/wasmruntime"
+	"github.com/tetratelabs/wazero/sys"
 )
 
 // callStackCeiling is the maximum WebAssembly call frame stack height. This allows wazero to raise
@@ -120,6 +127,14 @@ type callEngine struct {
 
 	// stackiterator for Listeners to walk frames and stack.
 	stackIterator stackIterator
+
+	// registeredPaths caches the set of source paths that have already
+	// been forwarded to the recorder through `RegisterPathWithLineLengths`
+	// so we don't re-read every source file on every step.  See
+	// `registerSourcePathIfNew` for the call site.  The recorder
+	// performs its own dedup-by-name as a defence in depth, but the
+	// engine-local cache also avoids the os.ReadFile syscall cost.
+	registeredPaths map[string]struct{}
 }
 
 func (e *moduleEngine) newCallEngine(compiled *function) *callEngine {
@@ -582,6 +597,27 @@ func (ce *callEngine) call(ctx context.Context, params, results []uint64) (_ []u
 		// TODO: ^^ Will not fail if the function was imported from a closed module.
 
 		if v := recover(); v != nil {
+			// Don't synthesize an EventKindError for clean WASI exits.
+			// `proc_exit` is implemented by panicking with *sys.ExitError;
+			// every successful program flows through this recover path, so
+			// blindly recording an Error event makes every trace look failed.
+			//
+			// For real traps (wasmruntime.Error like ErrRuntimeUnreachable,
+			// runtime.Error like nil-deref, host panics, etc.) we record
+			// the actual panic value so the trace surfaces the failure
+			// reason — Rust panic!() compiles to `unreachable`, which
+			// shows up as `wasmruntime.ErrRuntimeUnreachable` here.
+			if m.Record != nil {
+				if exitErr, ok := v.(*sys.ExitError); ok {
+					if exitErr.ExitCode() != 0 {
+						msg := fmt.Sprintf("exit %d", exitErr.ExitCode())
+						m.Record.RegisterRecordEvent(tracetypes.EventKindError, msg, msg)
+					}
+				} else {
+					msg := fmt.Sprintf("%v", v)
+					m.Record.RegisterRecordEvent(tracetypes.EventKindError, msg, msg)
+				}
+			}
 			err = ce.recoverOnCall(ctx, m, v)
 		}
 	}()
@@ -695,6 +731,112 @@ func (ce *callEngine) callGoFunc(ctx context.Context, m *wasm.ModuleInstance, f 
 	}
 }
 
+// isUserRustSourcePath reports whether `fileName` looks like a Rust source
+// file authored by the user (i.e. neither stdlib nor a third-party dependency
+// pulled in transparently by Cargo).  We only want to emit Step/Call/Function
+// trace events for these files so the debugger UI surfaces the user's code
+// instead of stepping into std::rt or hashbrown internals.
+//
+// Recognised non-user prefixes / substrings:
+//   - `/rustc/...`                       — rustup toolchain after `rustc-dev`
+//   - `.rustup/...`                      — rustup toolchain locally
+//   - `.cargo/registry/...`              — Cargo dependency cache
+//   - `/rust/deps`                       — rustup build output
+//   - `/lib/rustlib/src/rust/library/`   — Nix `rust-mixed` stdlib layout
+//     (e.g. /nix/store/<hash>-rust-mixed/lib/rustlib/src/rust/library/std/src/rt.rs).
+//     Without this match the first emitted Step for a WASI binary lands in
+//     std::rt instead of the user's main.rs entry point.
+//
+// readSourceLineLengths returns the per-line byte counts of `fileName`,
+// indexed by 0-based line number.  Used to feed the column-aware reader's
+// global position table so it can decode `DeltaColumn` events back into
+// (line, column) pairs.  Files that cannot be read degrade to an empty
+// slice — the trace then advertises `FLAG_HAS_COLUMN_AWARE_STEPS` but the
+// reader surfaces `None` for the column when no per-line data is on file.
+//
+// The "line length" is the count of UTF-8 bytes on the line *excluding*
+// the trailing newline, matching the convention the codetracer trace
+// writer expects (see `register_path_with_line_lengths` in
+// `codetracer_trace_writer_ffi.nim`).  Implementation matches the
+// Solana recorder's `read_line_lengths_for_path` helper.
+func readSourceLineLengths(fileName string) []uint32 {
+	data, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil
+	}
+	// Split on \n; each chunk's length (after stripping a trailing \r
+	// from CRLF endings) is the count of in-line bytes.  Files without
+	// a trailing newline still report a final entry — the trace writer
+	// tolerates either layout.
+	lines := strings.Split(string(data), "\n")
+	out := make([]uint32, 0, len(lines))
+	for _, ln := range lines {
+		if strings.HasSuffix(ln, "\r") {
+			ln = ln[:len(ln)-1]
+		}
+		out = append(out, uint32(len(ln)))
+	}
+	return out
+}
+
+// registerSourcePathIfNew calls `RegisterPathWithLineLengths` on the
+// recorder the first time `fileName` is observed during this engine's
+// recording session.  Duplicate calls are deduplicated through the
+// recorder's own `pathsWithLineLengths` set, but checking the engine-local
+// cache up front avoids the os.ReadFile cost on every step.  See
+// FU-Column-Aware-Nav-Wasm for the wire-level contract.
+func (ce *callEngine) registerSourcePathIfNew(m *wasm.ModuleInstance, fileName string) {
+	if m.Record == nil || fileName == "" {
+		return
+	}
+	if ce.registeredPaths == nil {
+		ce.registeredPaths = make(map[string]struct{})
+	}
+	if _, seen := ce.registeredPaths[fileName]; seen {
+		return
+	}
+	ce.registeredPaths[fileName] = struct{}{}
+	m.Record.RegisterPathWithLineLengths(fileName, readSourceLineLengths(fileName))
+}
+
+func isUserRustSourcePath(fileName string) bool {
+	if !strings.HasSuffix(fileName, ".rs") {
+		return false
+	}
+	if strings.HasPrefix(fileName, "/rustc") {
+		return false
+	}
+	if strings.Contains(fileName, ".rustup") {
+		return false
+	}
+	if strings.Contains(fileName, ".cargo") {
+		return false
+	}
+	if strings.Contains(fileName, "/rust/deps") {
+		return false
+	}
+	if strings.Contains(fileName, "/lib/rustlib/src/rust/library/") {
+		return false
+	}
+	return true
+}
+
+func ensureSize[T any](s []T, index int) []T {
+
+	if index < len(s) {
+		return s
+	}
+
+	x := math.Log2(float64(index))
+
+	newSize := math.Pow(2, x+1)
+
+	newSlice := make([]T, int(newSize))
+	copy(newSlice, s)
+
+	return newSlice
+}
+
 func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance, f *function) {
 	frame := &callFrame{f: f, base: len(ce.stack)}
 	moduleInst := f.moduleInstance
@@ -708,8 +850,187 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 	ce.pushFrame(frame)
 	body := frame.f.parent.body
 	bodyLen := uint64(len(body))
+
+	// TODO: Figure out a way to resolve how many local variables we need
+	locals := make([]uint64, 1024)
+
+	var (
+		initialOffset  uint64
+		functionRecord wasmdebug.FunctionRecord
+		hasSource      bool
+	)
+
+	if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) && frame.f.parent.source != nil {
+		initialOffset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+		// NOTE: Function PC intervals are disjoint, hence AnyIntersection() is sufficient
+		functionRecord, _ = frame.f.parent.source.PCRecord.Function.AnyIntersection(initialOffset, initialOffset)
+		hasSource = true
+	}
+
+	// We only emit Step/Call/Function trace events for user-authored Rust
+	// source files. Anything that compiled in from the Rust standard library
+	// or third-party crates is stepped through silently so the debugger UI
+	// lands on the user's main.rs entry point instead of std internals such
+	// as rt.rs.
+	//
+	// Path layouts handled here:
+	//   * /rustc/...                       — rustup toolchain after `rustc-dev`
+	//   * .rustup/...                      — rustup toolchain locally
+	//   * .cargo/registry/...              — Cargo dependency cache
+	//   * /rust/deps                       — rustup build output
+	//   * /lib/rustlib/src/rust/library/   — Nix `rust-mixed` stdlib layout
+	//     (e.g. /nix/store/<hash>-rust-mixed/lib/rustlib/src/rust/library/
+	//     std/src/rt.rs).  Without this filter the first emitted Step lands
+	//     in std::rt and the status bar shows rt.rs instead of main.rs.
+	tracking_call := hasSource && m.Record != nil && isUserRustSourcePath(functionRecord.FileName)
+
+	// tracking_call = true
+
+	var currLine wasmdebug.LineRecord
+
+	// Cache active inline entries to avoid duplicate trace events
+	// while the program counter remains within their range. The
+	// value tracks the end of the inline region, so we can remove
+	// the entry once execution exits it.
+
+	loggedCall := false
+
+	paramCount := 0
+	var functionParams []uint64
+	if frame.f.funcType != nil {
+		paramCount = len(frame.f.funcType.Params)
+	}
+	if paramCount > 0 {
+		functionParams = ce.stack[len(ce.stack)-paramCount:]
+
+		// NOTE: IDK if this is 100$% correct. Seems that the params and the locals share namespace
+		//       and the rust complier tells that the params are stored as local variables.
+		//       So we copy the params on the stack in the locals array in order to fix this. 😵‍💫
+		copy(locals, functionParams)
+	}
+
+	stack := NewStack[wasmdebug.InlineRecord]()
+
 	for frame.pc < bodyLen {
+		var offset uint64
+		if tracking_call {
+			if int(frame.pc) < len(frame.f.parent.offsetsInWasmBinary) {
+				offset = frame.f.parent.offsetsInWasmBinary[frame.pc]
+			} else {
+				tracking_call = false
+			}
+		}
+
+		if m.Record != nil && tracking_call {
+
+			index := frame.f.parent.source.PCRecord
+
+			lineRecords, _ := index.Line.AllIntersections(offset, offset)
+
+			// Look up any inline entries at the current offset.
+			inlinedEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
+
+			for stack.Len() > 0 {
+
+				if ie, ok := stack.Peek(); ok && ie.HighPC <= offset {
+					m.Record.RegisterReturn(tracetypes.NilValue())
+					stack.Pop()
+				} else {
+					break
+				}
+
+			}
+
+			if len(lineRecords) == 1 {
+
+				lineRecord := lineRecords[0]
+
+				// Apply the same user-Rust filter as the tracking_call guard
+				// above; see comments there for the rationale and the path
+				// layouts considered "stdlib / dependency".
+				if isUserRustSourcePath(lineRecord.FileName) {
+					// Step boundary detection: any change in (FileName,
+					// Line, Column) triggers a new step.  The Column
+					// component lets multi-statement lines surface
+					// distinct column-aware steps — without it the
+					// recorder would collapse `let a = 1; let b = 2; let
+					// c = 3;` onto a single step at the line's first
+					// statement (FU-Column-Aware-Nav-Wasm).
+					if currLine.Line != lineRecord.Line || currLine.FileName != lineRecord.FileName || currLine.Column != lineRecord.Column {
+
+						if !loggedCall && (lineRecord.Line != functionRecord.Line || lineRecord.FileName != functionRecord.FileName) {
+							traceFunctionEntry(m, &loggedCall, functionRecord, locals)
+						}
+
+						if loggedCall {
+
+							if len(inlinedEntries) > 0 {
+								for _, entry := range inlinedEntries {
+									for _, v := range entry {
+										if offset == v.LowPC {
+
+											// For some reason inlines can start at the instruction before it's actual invocation, so we trace locals
+											// traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+
+											if stack.Len() == 0 {
+												traceInlineEntry(m, v, functionRecord, locals, offset, &functionRecord.Locals)
+											} else {
+
+												if elem, ok := stack.Peek(); ok {
+													traceInlineEntry(m, v, functionRecord, locals, offset, &elem.Locals)
+												}
+
+											}
+
+											stack.Push(v)
+										}
+									}
+								}
+							}
+
+							currLine = lineRecord
+
+							// Register the path with its per-line byte
+							// counts on first encounter so the column-
+							// aware reader can decode `DeltaColumn`
+							// events back into (line, column) pairs.
+							ce.registerSourcePathIfNew(m, currLine.FileName)
+
+							// Emit the step with column data when DWARF
+							// surfaced a non-zero column (DWARF column 0
+							// means "no column").  Falling back to a
+							// column-less step on missing data preserves
+							// back-compat with line-only navigation.
+							if currLine.Column > 0 {
+								col := tracetypes.Line(currLine.Column)
+								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), &col)
+							} else {
+								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), nil)
+							}
+
+							// Offset does not matter, function parameters come without information about their lexical scope
+
+							if stack.Len() > 0 {
+								//TODO: log inlined function variables
+								inlineRecord, _ := stack.Peek()
+
+								traceCurrentLocals(&inlineRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&inlineRecord.Params, offset, m, &functionRecord, locals)
+
+							} else {
+								traceCurrentLocals(&functionRecord.Locals, offset, m, &functionRecord, locals)
+								traceCurrentLocals(&functionRecord.Params, offset, m, &functionRecord, locals)
+							}
+
+						}
+
+					}
+				}
+			}
+		}
+
 		op := &body[frame.pc]
+
 		// TODO: add description of each operation/case
 		// on, for example, how many args are used,
 		// how the stack is modified, etc.
@@ -810,8 +1131,16 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 				hi, lo := ce.popValue(), ce.popValue()
 				ce.stack[lowIndex], ce.stack[highIndex] = lo, hi
 			} else {
+				// funcIndex := f.parent.index;
 				index := len(ce.stack) - 1 - int(op.U1)
-				ce.stack[index] = ce.popValue()
+				value := ce.popValue()
+				ce.stack[index] = value
+
+				localIndex := int(op.U2)
+
+				locals = ensureSize(locals, localIndex)
+				locals[localIndex] = value
+
 			}
 			frame.pc++
 		case operationKindGlobalGet:
@@ -4341,6 +4670,148 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 		}
 	}
 	ce.popFrame()
+
+	if m.Record != nil && tracking_call {
+		traceFunctionEntry(m, &loggedCall, functionRecord, locals)
+
+		traceReturnType(functionRecord, m, ce, &functionParams)
+	}
+
+}
+
+func traceReturnType(functionRecord wasmdebug.FunctionRecord,
+	m *wasm.ModuleInstance, ce *callEngine, functionParams *[]uint64) {
+
+	if functionRecord.ReturnType == nil {
+		typeName := "void"
+		_, seen := m.TypesIndex[typeName]
+
+		if !seen {
+			m.TypesIndex[typeName] = tracetypes.TypeId(len(m.TypesIndex))
+			typeRecord := tracetypes.NewSimpleTypeRecord(tracetypes.SLICE_TYPE_KIND, typeName)
+			m.Record.RegisterTypeWithNewId(typeName, typeRecord)
+		}
+
+		m.Record.RegisterReturn(tracetypes.NilValue())
+	} else {
+		rawValue := ce.stack[len(ce.stack)-1]
+		rvSize := (*functionRecord.ReturnType).Size()
+
+		var value tracetypes.ValueRecord
+		if rvSize <= 8 {
+
+			rawBytes := make([]byte, 8)
+			binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+			// TODO: handle errors
+			value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+		} else {
+
+			switch rt := (*functionRecord.ReturnType).(type) {
+			case *dwarf.StructType:
+				// TODO: This is broken 🥹. Must fix.
+				// EDIT: It works now 🙂
+
+				// TODO: Singleton structures are on the stack, handle them separately
+				// NOTE: This also affects the println! macro, it probably has some structures that get flattened in it's internals
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.ByteSize))
+				if !ok {
+					panic("Failed to read return value")
+				}
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			case *dwarf.ArrayType:
+
+				rawBytes, ok := m.Memory().Read(uint32((*functionParams)[0]), uint32(rt.Size()))
+				if !ok {
+					panic("Failed to read Array return value")
+				}
+
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+
+			default:
+
+				// 16 147
+				// TODO: Should this be rvSize ?
+				rawBytes := make([]byte, 8)
+				binary.LittleEndian.PutUint64(rawBytes, rawValue)
+
+				// TODO: handle errors
+				value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
+			}
+		}
+
+		m.Record.RegisterReturn(value)
+	}
+}
+
+func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord wasmdebug.FunctionRecord, locals []uint64) {
+	if *loggedCall {
+		return
+	}
+
+	*loggedCall = true
+
+	args := make([]tracetypes.FullValueRecord, 0)
+
+	for _, argRec := range functionRecord.Params {
+		val, err := readVariable(m, argRec, functionRecord, locals)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Can't read function argument %s: %v\n", argRec.Name, err)
+		} else {
+			args = append(args, m.Record.Arg(argRec.Name, val))
+		}
+	}
+
+	if m.Record.CurrentCallsCount() > 0 {
+		m.Record.RegisterStep(functionRecord.FileName, tracetypes.Line(functionRecord.Line))
+	}
+	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, tracetypes.Line(functionRecord.Line), args)
+}
+
+func inlineKey(rec wasmdebug.InlineRecord) string {
+	return fmt.Sprintf("%s|%s|%d|%s|%d|%d",
+		rec.Name, rec.FileName, rec.Line,
+		rec.CallFileName, rec.CallLine, rec.CallColumn)
+}
+
+func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
+	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64) {
+
+	for _, v := range *localRecords {
+		if v.LowPC <= offset && offset <= v.HighPC {
+			val, err := readVariable(m, v, *functionRecord, locals)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Can't read variable %s: %v\n", v.Name, err)
+			} else {
+				m.Record.RegisterVariable(v.Name, val)
+			}
+		}
+	}
+
+}
+
+func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {
+	args := make([]tracetypes.FullValueRecord, 0)
+	for _, argRec := range rec.Params {
+		val, err := readVariable(m, argRec, functionRecord, locals)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Can't read inline argument %s: %v\n", argRec.Name, err)
+		} else {
+			args = append(args, m.Record.Arg(argRec.Name, val))
+		}
+	}
+
+	m.Record.RegisterStep(rec.FileName, tracetypes.Line(rec.CallLine))
+	traceCurrentLocals(currLocals, offset, m, &functionRecord, locals)
+
+	// assuming that this can't be the first recorded function, as there are steps up as well
+	// and usually the main/entry function is not inlined
+	// otherwise this will produce a wrong recording for now, as we currently assume
+	// we produce a call event before the first step I think (alexander)
+	// TODO: maybe an assert that `m.Record.CurrentCallsCount() > 0` ?
+	m.Record.RegisterStep(rec.FileName, tracetypes.Line(rec.Line))
+	m.Record.RegisterCall(rec.Name, rec.FileName, tracetypes.Line(rec.Line), args)
 }
 
 func wasmCompatMax32bits(v1, v2 uint32) uint64 {

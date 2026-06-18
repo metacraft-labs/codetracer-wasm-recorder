@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -22,9 +23,11 @@ import (
 	"github.com/tetratelabs/wazero/experimental/sock"
 	"github.com/tetratelabs/wazero/experimental/sysfs"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/tetratelabs/wazero/internal/stylus"
 	internalsys "github.com/tetratelabs/wazero/internal/sys"
 	"github.com/tetratelabs/wazero/internal/version"
 	"github.com/tetratelabs/wazero/sys"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 func main() {
@@ -38,7 +41,15 @@ func doMain(stdOut io.Writer, stdErr logging.Writer) int {
 	var help bool
 	flag.BoolVar(&help, "h", false, "Prints usage.")
 
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Prints version.")
+
 	flag.Parse()
+
+	if showVersion {
+		fmt.Fprintln(stdOut, "wazero", version.GetWazeroVersion())
+		return 0
+	}
 
 	if help || flag.NArg() == 0 {
 		printUsage(stdErr)
@@ -156,7 +167,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.BoolVar(&help, "h", false, "Prints usage.")
 
 	var useInterpreter bool
-	flags.BoolVar(&useInterpreter, "interpreter", false,
+	flags.BoolVar(&useInterpreter, "interpreter", true,
 		"Interprets WebAssembly modules instead of compiling them into native code.")
 
 	var envs sliceFlag
@@ -206,6 +217,35 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			"Enables memory profiling and writes the profile at the given path.")
 	}
 
+	// TODO: maybe better usage description?
+	var stylusTracePath string
+	flags.StringVar(&stylusTracePath, "stylus", "",
+		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
+
+	// Convention compliance follow-up — 2026-05-08 (Recorder-CLI-Conventions.md
+	// §3 / §4 / §5):
+	//
+	// * `--out-dir` is the canonical output-directory flag.  When omitted, the
+	//   recorder falls back to the `CODETRACER_WASM_RECORDER_OUT_DIR`
+	//   environment variable so callers (CI runners, test harnesses, IDE
+	//   extensions) can configure the output directory without rebuilding the
+	//   command line.
+	//
+	// * The `--format` flag is intentionally absent.  Recorders are CTFS-only
+	//   per §4; human-readable conversion is the job of `ct print` shipped
+	//   with `codetracer-trace-format-nim`.  The wazero binary name is the
+	//   one documented exception to §1's `codetracer-<lang>-recorder`
+	//   pattern (this is a fork of Tetrate's wazero with tracing layered in,
+	//   not a CodeTracer-named tool).  See AUDIT-CTFS-2026-05.md
+	//   "Convention compliance follow-up — 2026-05-08".
+	var outDir string
+	flags.StringVar(&outDir, "out-dir", "",
+		"Directory where to save the CTFS trace bundle.  Falls back to the "+
+			"CODETRACER_WASM_RECORDER_OUT_DIR environment variable when this "+
+			"flag is omitted.  Use 'ct print' from codetracer-trace-format-nim "+
+			"to convert the bundle to a human-readable JSON for debugging or "+
+			"golden-snapshot fixtures.")
+
 	cacheDir := cacheDirFlag(flags)
 
 	_ = flags.Parse(args)
@@ -231,6 +271,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	wasmPath := flags.Arg(0)
+	wasmFile := path.Base(wasmPath)
 	wasmArgs := flags.Args()[1:]
 	if len(wasmArgs) > 1 {
 		// Skip "--" if provided
@@ -323,38 +364,118 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		return 1
 	}
 
+	// CTFS-only writer dispatch (Recorder-CLI-Conventions.md §4).  Every
+	// run produces a single multi-stream `.ct` container via the cgo binding
+	// in `tracewriter/ctfs_writer.go`, which calls into the C FFI exposed by
+	// `codetracer-trace-format-nim`.  The legacy three-file JSON writer
+	// (`trace.json` + `trace_metadata.json` + `trace_paths.json`) was
+	// removed alongside the `tracewriter.GoWriter` deletion — see
+	// AUDIT-CTFS-2026-05.md ("Convention compliance follow-up — 2026-05-08")
+	// for the full record.
+	//
+	// `CODETRACER_WASM_RECORDER_DISABLED` short-circuits recording entirely
+	// so the wazero process can be wrapped under recording-aware harnesses
+	// (CI, IDE extensions) without rebuilding the command line.
+	var recorder tracewriter.TraceRecorder
+	disabled := os.Getenv("CODETRACER_WASM_RECORDER_DISABLED") != ""
+	if outDir == "" {
+		// Fall back to CODETRACER_WASM_RECORDER_OUT_DIR per
+		// `Recorder-CLI-Conventions.md` §5.
+		if envOutDir := os.Getenv("CODETRACER_WASM_RECORDER_OUT_DIR"); envOutDir != "" {
+			outDir = envOutDir
+		}
+	}
+	if outDir != "" && !disabled {
+		recorder = tracewriter.NewCtfsTraceWriter()
+	}
+
+	var stylusState *stylus.StylusTrace
+	if stylusTracePath != "" {
+		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, recorder)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus trace: %v\n", err)
+			return 1
+		}
+		conf = conf.WithStartFunctions()
+	}
+
+	// TODO: detect if the stylus functions are present and show error if there is no stylus trace file
 	switch detectImports(guest.ImportedFunctions()) {
 	case modeWasi:
 		wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-		_, err = rt.InstantiateModule(ctx, guest, conf)
 	case modeWasiUnstable:
 		// Instantiate the current WASI functions under the wasi_unstable
 		// instead of wasi_snapshot_preview1.
 		wasiBuilder := rt.NewHostModuleBuilder("wasi_unstable")
 		wasi_snapshot_preview1.NewFunctionExporter().ExportFunctions(wasiBuilder)
 		_, err = wasiBuilder.Instantiate(ctx)
-		if err == nil {
-			// Instantiate our binary, but using the old import names.
-			_, err = rt.InstantiateModule(ctx, guest, conf)
-		}
-	case modeDefault:
-		_, err = rt.InstantiateModule(ctx, guest, conf)
+	}
+
+	var module api.Module
+	if err == nil {
+		module, err = rt.InstantiateModuleWithRecord(ctx, guest, conf, recorder)
 	}
 
 	if err != nil {
+		// produceTrace MUST run on every termination path, not just
+		// clean *sys.ExitError exits.  A Rust panic!() raises a wasm
+		// `unreachable` trap which surfaces as a generic error here;
+		// without writing the trace we silently lose every recorded
+		// step/call/event up to the trap (the very debugging signal
+		// the user opened the recorder for).  The interpreter has
+		// already registered an EventKindError io_event capturing the
+		// trap reason — we just have to flush the .ct bundle to disk.
 		if exitErr, ok := err.(*sys.ExitError); ok {
 			exitCode := exitErr.ExitCode()
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
+			produceTrace(outDir, wasmFile, recorder)
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
+		produceTrace(outDir, wasmFile, recorder)
 		return 1
 	}
 
-	// We're done, _start was called as part of instantiating the module.
+	if stylusTracePath != "" {
+		arg, err := stylusState.GetEntrypointArg()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)
+		}
+
+		res, err := module.ExportedFunction("user_entrypoint").Call(ctx, arg)
+		if err != nil {
+			fmt.Fprintf(stdErr, "error executing stylus entrypoint: %v\n", err)
+		}
+
+		retval, err := stylusState.GetReturnedValue()
+		if err != nil {
+			fmt.Fprintf(stdErr, "error reading stylus user returned result: %v\n", err)
+		}
+
+		if len(res) != 1 || res[0] != retval {
+			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
+		}
+	} else {
+		// We're done, _start was called as part of instantiating the module.
+	}
+
+	produceTrace(outDir, wasmFile, recorder)
+
 	return 0
+}
+
+func produceTrace(outDir string, fileName string, recorder tracewriter.TraceRecorder) {
+
+	// TODO: Handle error
+	workDir, _ := os.Getwd()
+	if outDir != "" && recorder != nil {
+		err := recorder.ProduceTrace(outDir, fileName, workDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
+		}
+	}
 }
 
 func validateMounts(mounts sliceFlag, stdErr logging.Writer) (rc int, rootPath string, config wazero.FSConfig) {
@@ -484,6 +605,20 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  compile\tPre-compiles a WebAssembly binary")
 	fmt.Fprintln(stdErr, "  run\t\tRuns a WebAssembly binary")
 	fmt.Fprintln(stdErr, "  version\tDisplays the version of wazero CLI")
+	fmt.Fprintln(stdErr)
+	// Recorder-CLI-Conventions.md §1 / §4 / §5: the wazero binary is the
+	// documented exception to the `codetracer-<lang>-recorder` naming pattern
+	// (this is a fork of Tetrate's wazero with tracing layered in, not a
+	// CodeTracer-named tool).  The trace bundle is always CTFS; convert it
+	// with `ct print` from codetracer-trace-format-nim for human-readable
+	// output.
+	fmt.Fprintln(stdErr, "Recording:")
+	fmt.Fprintln(stdErr, "  Pass `--out-dir <path>` to `wazero run` to produce a CTFS trace bundle.")
+	fmt.Fprintln(stdErr, "  The CODETRACER_WASM_RECORDER_OUT_DIR environment variable provides a")
+	fmt.Fprintln(stdErr, "  fallback when --out-dir is omitted; CODETRACER_WASM_RECORDER_DISABLED=1")
+	fmt.Fprintln(stdErr, "  skips recording entirely.  Use `ct print` from codetracer-trace-format-nim")
+	fmt.Fprintln(stdErr, "  to convert the bundle to a human-readable JSON.  The `wazero` binary name")
+	fmt.Fprintln(stdErr, "  is the one documented exception to the codetracer-<lang>-recorder pattern.")
 }
 
 func printCompileUsage(stdErr io.Writer, flags *flag.FlagSet) {
@@ -502,6 +637,15 @@ func printRunUsage(stdErr io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(stdErr)
 	fmt.Fprintln(stdErr, "Options:")
 	flags.PrintDefaults()
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "Environment:")
+	fmt.Fprintln(stdErr, "  CODETRACER_WASM_RECORDER_OUT_DIR  Fallback for --out-dir.")
+	fmt.Fprintln(stdErr, "  CODETRACER_WASM_RECORDER_DISABLED When set, runs the target without recording.")
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "Output format:")
+	fmt.Fprintln(stdErr, "  The recorder always writes a CTFS trace bundle (`Recorder-CLI-Conventions.md`")
+	fmt.Fprintln(stdErr, "  §4).  Pipe the bundle through `ct print` from codetracer-trace-format-nim for")
+	fmt.Fprintln(stdErr, "  human-readable JSON output.")
 }
 
 func startCPUProfile(stdErr io.Writer, path string) (stopCPUProfile func()) {

@@ -11,3 +11,5 @@ retract (
 	v1.0.0-beta.2
 	v1.0.0-beta.1
 )
+
+require github.com/rdleal/intervalst v1.5.0

@@ -211,6 +211,14 @@ func TestDecodeModule(t *testing.T) {
 		require.NotNil(t, m.DWARFLines)
 	})
 
+	t.Run("DWARF enabled without debug sections", func(t *testing.T) {
+		wasmBinary := binaryencoding.EncodeModule(&wasm.Module{})
+		mod, decodeErr := DecodeModule(wasmBinary, api.CoreFeaturesV1, wasm.MemoryLimitPages, false, true, false)
+		require.NoError(t, decodeErr)
+		require.Nil(t, mod.DWARFData)
+		require.Nil(t, mod.DWARFLines)
+	})
+
 	t.Run("DWARF disabled", func(t *testing.T) {
 		m, err := DecodeModule(dwarftestdata.ZigWasm, api.CoreFeaturesV2, wasm.MemoryLimitPages, false, false, true)
 		require.NoError(t, err)

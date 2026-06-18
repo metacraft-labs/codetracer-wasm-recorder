@@ -25,6 +25,13 @@ type line struct {
 	pos  dwarf.LineReaderPos
 }
 
+type DebugPosition struct {
+	InstructionOffset uint64
+	Line              LineRecord
+	Function          FunctionRecord
+	Inlined           bool
+}
+
 // NewDWARFLines returns DWARFLines for the given *dwarf.Data.
 func NewDWARFLines(d *dwarf.Data) *DWARFLines {
 	if d == nil {
@@ -46,9 +53,7 @@ func isTombstoneAddr(addr uint64) bool {
 		addr32 == 0 // This covers 1 <<32.
 }
 
-// Line returns the line information for the given instructionOffset which is an offset in
-// the code section of the original Wasm binary. Returns empty string if the info is not found.
-func (d *DWARFLines) Line(instructionOffset uint64) (ret []string) {
+func (d *DWARFLines) DebugPositions(instructionOffset uint64) (res []DebugPosition) {
 	if d == nil {
 		return
 	}
@@ -63,6 +68,8 @@ func (d *DWARFLines) Line(instructionOffset uint64) (ret []string) {
 
 	var inlinedRoutines []*dwarf.Entry
 	var cu *dwarf.Entry
+	var function *dwarf.Entry
+
 	var inlinedDone bool
 entry:
 	for {
@@ -72,14 +79,14 @@ entry:
 		}
 
 		// If we already found the compilation unit and relevant inlined routines, we can stop searching entries.
-		if cu != nil && inlinedDone {
+		if cu != nil && function != nil && inlinedDone {
 			break
 		}
 
 		switch ent.Tag {
-		case dwarf.TagCompileUnit, dwarf.TagInlinedSubroutine:
+		case dwarf.TagCompileUnit, dwarf.TagInlinedSubroutine, dwarf.TagSubprogram:
 		default:
-			// Only CompileUnit and InlinedSubroutines are relevant.
+			// Only CompileUnit, InlinedSubroutines ans Subprograms are relevant.
 			continue
 		}
 
@@ -103,6 +110,9 @@ entry:
 					inlinedDone = !ent.Children
 					// Not that "children" in the DWARF spec is defined as the next entry to this entry.
 					// See "2.3 Relationship of Debugging Information Entries" in https://dwarfstd.org/doc/DWARF4.pdf
+
+				case dwarf.TagSubprogram:
+					function = ent
 				}
 				continue entry
 			}
@@ -176,33 +186,115 @@ entry:
 		panic("BUG: stored dwarf.LineReaderPos is invalid")
 	}
 
+	files := lineReader.Files()
+
 	// In the inlined case, the line info is the innermost inlined function call.
 	inlined := len(inlinedRoutines) != 0
-	prefix := fmt.Sprintf("%#x: ", instructionOffset)
-	ret = append(ret, formatLine(prefix, le.File.Name, int64(le.Line), int64(le.Column), inlined))
+	res = append(res, DebugPosition{
+		InstructionOffset: instructionOffset,
+		Line: LineRecord{
+			FileName: le.File.Name,
+			Line:     int64(le.Line),
+			Column:   int64(le.Column),
+		},
+		Inlined: inlined,
+	})
 
 	if inlined {
-		prefix = strings.Repeat(" ", len(prefix))
-		files := lineReader.Files()
 		// inlinedRoutines contain the inlined call information in the reverse order (children is higher than parent),
 		// so we traverse the reverse order and emit the inlined calls.
 		for i := len(inlinedRoutines) - 1; i >= 0; i-- {
 			inlined := inlinedRoutines[i]
-			fileIndex, ok := inlined.Val(dwarf.AttrCallFile).(int64)
-			if !ok {
-				return
-			} else if fileIndex >= int64(len(files)) {
-				// This in theory shouldn't happen according to the spec, but guard against ill-formed DWARF info.
-				return
+			fileField := inlined.AttrField(dwarf.AttrCallFile)
+			if fileField == nil {
+				continue
+			}
+			fileIndex, ok := fileField.Val.(int64)
+			if !ok || fileIndex < 0 || fileIndex >= int64(len(files)) {
+				continue
 			}
 			fileName := files[fileIndex]
-			line, _ := inlined.Val(dwarf.AttrCallLine).(int64)
-			col, _ := inlined.Val(dwarf.AttrCallColumn).(int64)
-			ret = append(ret, formatLine(prefix, fileName.Name, line, col,
-				// Last one is the origin of the inlined function calls.
-				i != 0))
+			var line, col int64
+			if lineField := inlined.AttrField(dwarf.AttrCallLine); lineField != nil {
+				line, _ = lineField.Val.(int64)
+			}
+			if colField := inlined.AttrField(dwarf.AttrCallColumn); colField != nil {
+				col, _ = colField.Val.(int64)
+			}
+			res = append(res, DebugPosition{
+				InstructionOffset: instructionOffset,
+				Line: LineRecord{
+					// TODO: is this the data?
+					FileName: fileName.Name,
+					Line:     line,
+					Column:   col,
+				},
+				// TODO: extract function decl
+				// Function: FunctionRecord{
+				// 	Name:     inlined.AttrField(dwarf.AttrName).Val.(string),
+				// 	FileName: files[inlined.Val(dwarf.AttrDeclFile).(int64)].Name,
+				// 	Line:     inlined.AttrField(dwarf.AttrDeclLine).Val.(int64),
+				// },
+				Inlined: i != 0,
+			})
 		}
 	}
+
+	if function == nil || len(res) == 0 {
+		return
+	}
+
+	nameField := function.AttrField(dwarf.AttrName)
+	if nameField == nil {
+		return
+	}
+	fname, ok := nameField.Val.(string)
+	if !ok {
+		return
+	}
+
+	fileField := function.AttrField(dwarf.AttrDeclFile)
+	if fileField == nil {
+		return
+	}
+	find, ok := fileField.Val.(int64)
+	if !ok || find < 0 || find >= int64(len(files)) {
+		return
+	}
+
+	lineField := function.AttrField(dwarf.AttrDeclLine)
+	if lineField == nil {
+		return
+	}
+	fline, ok := lineField.Val.(int64)
+	if !ok {
+		return
+	}
+
+	res[len(res)-1].Function = FunctionRecord{
+		Name:     fname,
+		FileName: files[find].Name,
+		Line:     fline,
+	}
+
+	return
+}
+
+// Line returns the line information for the given instructionOffset which is an offset in
+// the code section of the original Wasm binary. Returns empty string if the info is not found.
+func (d *DWARFLines) Line(instructionOffset uint64) (ret []string) {
+	positions := d.DebugPositions(instructionOffset)
+
+	prefix := fmt.Sprintf("%#x: ", instructionOffset)
+
+	for i, pos := range positions {
+		if i == 1 {
+			prefix = strings.Repeat(" ", len(prefix))
+		}
+
+		ret = append(ret, formatLine(prefix, pos.Line.FileName, pos.Line.Line, pos.Line.Column, pos.Inlined))
+	}
+
 	return
 }
 

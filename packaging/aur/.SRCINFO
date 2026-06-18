@@ -1,0 +1,16 @@
+pkgbase = codetracer-wasm-recorder
+	pkgdesc = CodeTracer recorder for WebAssembly modules (wazero engine)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/metacraft-labs/codetracer-wasm-recorder
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0
+	makedepends = rust
+	makedepends = cargo
+	depends = glibc
+	provides = codetracer-wasm-recorder
+	source = codetracer-wasm-recorder-0.1.0.tar.gz::https://github.com/metacraft-labs/codetracer-wasm-recorder/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = REPLACE_AT_PUBLISH_TIME_source
+
+pkgname = codetracer-wasm-recorder

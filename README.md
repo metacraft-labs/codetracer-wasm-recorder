@@ -164,6 +164,11 @@ CODETRACER_WASM_RECORDER_DISABLED=1 ./wazero run --out-dir ./trace-output progra
 ct-print --full --strip-paths ./trace-output/program.ct
 ```
 
+See [`examples/`](examples/) for ready-to-record WASM programs and a
+walkthrough of recording + replay via the `ct` CLI, including the
+column-aware step-over demo built on
+`examples/recorder-golden/column_aware.rs`.
+
 ## Project structure
 
 ```

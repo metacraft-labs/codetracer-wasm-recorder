@@ -42,6 +42,19 @@ int  trace_writer_register_path_with_line_lengths(trace_writer_t handle,
                                                   int line_count,
                                                   const uint32_t* line_lengths);
 
+/*
+ * M-capability-flags: capability opt-ins that flip meta.dat bits 6 and 7.
+ * Bit 6 (`FLAG_SUPPORTS_COLUMN_BREAKPOINTS`) tells the GUI it may offer
+ * per-column breakpoints; bit 7 (`FLAG_SUPPORTS_COLUMN_MOTIONS`) tells
+ * the GUI it may offer per-column step-over / step-in / step-out.  Both
+ * calls implicitly enable column-aware step encoding because the
+ * capability bits are meaningless without wire-format column data.
+ * Spec: `codetracer-trace-format-spec/internal-files.md` §"Column-Aware
+ * Capability Flags".
+ */
+void trace_writer_enable_column_breakpoints_support(trace_writer_t handle);
+void trace_writer_enable_column_motions_support(trace_writer_t handle);
+
 #ifdef __cplusplus
 }
 #endif

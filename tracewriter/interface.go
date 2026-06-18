@@ -51,6 +51,24 @@ type TraceRecorder interface {
 	// should treat this as "call once at trace start".
 	EnableColumnAwareSteps()
 
+	// EnableColumnBreakpointsSupport advertises that the recorder's
+	// columns are sharp enough for the GUI to set per-column
+	// breakpoints (meta.dat bit 6, FLAG_SUPPORTS_COLUMN_BREAKPOINTS).
+	// Must be called before any step is emitted; the call also
+	// implicitly enables column-aware step encoding because the
+	// capability bit is meaningless without wire-format column data.
+	// See M-capability-flags in `codetracer-trace-format-spec/
+	// internal-files.md` §"Column-Aware Capability Flags".
+	EnableColumnBreakpointsSupport()
+
+	// EnableColumnMotionsSupport advertises that the recorder's step
+	// predicate fires per statement so the GUI can offer per-column
+	// step-over / step-in / step-out (meta.dat bit 7,
+	// FLAG_SUPPORTS_COLUMN_MOTIONS).  Like
+	// EnableColumnBreakpointsSupport, calling this also enables
+	// column-aware step encoding.
+	EnableColumnMotionsSupport()
+
 	// RegisterPathWithLineLengths registers a source path together with its
 	// per-line byte counts so the writer's global position table can decode
 	// column-aware steps back into (line, column) pairs at read time.  The

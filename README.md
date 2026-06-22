@@ -125,15 +125,16 @@ CI workflows run on self-hosted NixOS runners:
 
 - **CI** (`ci.yml`) — lint, tracewriter tests, and Nix flake build
   verification.  The CTFS writer test path requires the
-  `codetracer-trace-format-nim` sibling (cloned via
-  `.github/sibling-pins`) so the cgo build can link against
-  `libcodetracer_trace_writer.a`.
+  `codetracer-trace-format` sibling, whose revision is resolved from the
+  repo-workspaces workspace lock via `scripts/resolve-sibling-rev.sh`, so
+  the cgo build can link against the FFI library.
 - **Cross-Repo Integration Tests** (`cross-repo-tests.yml`) — builds the
   wazero binary and runs end-to-end WASM flow tests in the codetracer repo's
   db-backend. Supports bidirectional triggering via `repository_dispatch` so
   the codetracer repo can trigger these tests when WASM-related code changes.
-  Uses the standard sibling-pins priority cascade (workflow_dispatch >
-  repository_dispatch > sibling-pins > fallback).
+  Sibling revisions are resolved from the workspace lock via
+  `scripts/resolve-sibling-rev.sh`; the workflow_dispatch / repository_dispatch
+  `codetracer_ref` inputs still override the codetracer revision.
 - **Upstream Tests** (`commit.yaml`) — the original wazero test matrix
   (multi-platform, multi-Go-version, scratch container, BSD VMs, fuzzing).
 

@@ -46,16 +46,48 @@ jobs:
           substituters: ${{ vars.SUBSTITUTERS }}
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
+      - name: Checkout metacraft-manifests (workspace locks)
+        uses: actions/checkout@v5
+        with:
+          repository: metacraft-labs/metacraft-manifests
+          ref: latest
+          path: _manifests
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve cross-repo workspace-lock SHA
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
+            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
+            *) CANDS="${{ github.sha }}" ;;
+          esac
+          LOCK_SHA=""
+          for c in $CANDS; do
+            [ -z "$c" ] && continue
+            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
+            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+                 --repo codetracer-wasm-recorder --sibling codetracer \
+                 --manifest-dir "${{ github.workspace }}/_manifests" \
+                 --sha "$c" --no-walk >/dev/null 2>&1; then
+              LOCK_SHA="$c"; break
+            fi
+          done
+          if [ -z "$LOCK_SHA" ]; then
+            echo "::error::No repo-workspaces workspace lock for codetracer-wasm-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
+            exit 1
+          fi
+          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
+          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
+          echo "Resolved cross-repo lock SHA for codetracer-wasm-recorder: $LOCK_SHA"
+
       - name: Resolve sibling refs
         id: resolve-ref
+        shell: bash
         run: |
-          PINS=".github/sibling-pins"
-
-          TF_REF="main"
-          if [ -f "$PINS" ]; then
-            TF_REF="$(grep '^codetracer-trace-format ' "$PINS" | cut -d' ' -f2)" || true
-            TF_REF="${TF_REF:-main}"
-          fi
+          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
+            --repo codetracer-wasm-recorder --sibling codetracer-trace-format \
+            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
           echo "trace_format_ref=$TF_REF" >> "$GITHUB_OUTPUT"
           echo "Resolved trace-format ref: $TF_REF"
 

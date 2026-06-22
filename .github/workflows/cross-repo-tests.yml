@@ -22,7 +22,7 @@
 #   Priority cascade for resolving the codetracer ref:
 #     1. workflow_dispatch input `codetracer_ref` (manual override)
 #     2. repository_dispatch `client_payload.codetracer_ref` (bidirectional)
-#     3. repo-workspaces workspace lock (via scripts/resolve-sibling-rev.sh)
+#     3. repo-workspaces workspace lock (via setup-dev-env)
 
 name: Cross-Repo Integration Tests
 
@@ -90,108 +90,25 @@ jobs:
           fi
 
       # ------------------------------------------------------------------
-      # 2. Set up Nix and Git authentication
+      # 2. Set up the dev env and clone sibling repositories
       # ------------------------------------------------------------------
-      - name: Setup Nix and Git authentication
-        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
+      - name: Setup dev env
+        # Installs nix and clones the cross-repo siblings adjacent to this
+        # checkout at workspace-lock-pinned revisions. The workflow_dispatch
+        # input defaults to 'main', which the original resolver treated as
+        # "no override"; preserve that by only passing the input when it is
+        # set to something other than 'main'. The repository_dispatch payload
+        # (empty unless set) also overrides; empty => lock.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
+          env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
-          cachix-cache: ${{ vars.CACHIX_CACHE }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          substituters: ${{ vars.SUBSTITUTERS }}
-          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          siblings: |
+            codetracer=${{ (github.event.inputs.codetracer_ref != 'main' && github.event.inputs.codetracer_ref) || github.event.client_payload.codetracer_ref }}
+            codetracer-trace-format
 
       # ------------------------------------------------------------------
-      # 3. Resolve the cross-repo workspace-lock SHA, then sibling refs
-      # ------------------------------------------------------------------
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
-        with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
-        run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-wasm-recorder --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-wasm-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-wasm-recorder: $LOCK_SHA"
-
-      - name: Resolve sibling refs
-        id: resolve-ref
-        shell: bash
-        run: |
-          # --- Resolve codetracer ref ---
-          # The workflow_dispatch / repository_dispatch overrides still win;
-          # otherwise resolve from the workspace lock.
-          DISPATCH_REF="${{ github.event.inputs.codetracer_ref }}"
-          if [ -n "${DISPATCH_REF}" ] && [ "${DISPATCH_REF}" != "main" ]; then
-            CT_REF="${DISPATCH_REF}"
-            echo "Resolved codetracer ref from workflow_dispatch: ${CT_REF}"
-          elif [ -n "${{ github.event.client_payload.codetracer_ref }}" ]; then
-            CT_REF="${{ github.event.client_payload.codetracer_ref }}"
-            TRIGGERED_BY="${{ github.event.client_payload.triggered_by }}"
-            echo "Resolved codetracer ref from repository_dispatch: ${CT_REF}"
-            echo "  (triggered by: ${TRIGGERED_BY:-unknown})"
-          else
-            CT_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-              --repo codetracer-wasm-recorder --sibling codetracer \
-              --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-            echo "Resolved codetracer ref from workspace lock: ${CT_REF}"
-          fi
-          echo "codetracer_ref=$CT_REF" >> "$GITHUB_OUTPUT"
-
-          # --- Resolve codetracer-trace-format ref ---
-          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-wasm-recorder --sibling codetracer-trace-format \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          echo "trace_format_ref=$TF_REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved trace-format ref: $TF_REF"
-
-      # ------------------------------------------------------------------
-      # 4. Clone sibling repositories
-      # ------------------------------------------------------------------
-      - name: Clone codetracer
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer
-          ref: ${{ steps.resolve-ref.outputs.codetracer_ref }}
-          path: ${{ github.workspace }}/../codetracer
-          gh-token: ${{ steps.app-token.outputs.token }}
-          submodules: 'true'
-
-      - name: Clone codetracer-trace-format
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer-trace-format
-          ref: ${{ steps.resolve-ref.outputs.trace_format_ref }}
-          path: ${{ github.workspace }}/../codetracer-trace-format
-          gh-token: ${{ steps.app-token.outputs.token }}
-
-      # ------------------------------------------------------------------
-      # 5. Build wazero binary
+      # 3. Build wazero binary
       # ------------------------------------------------------------------
       - name: Build wazero
         run: |

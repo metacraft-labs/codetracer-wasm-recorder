@@ -64,26 +64,59 @@ export CODETRACER_TRACE_FORMAT_NIM_PATH="$_TRACE_FORMAT_NIM_DIR"
 # static library + header next to the source tree.  We only invoke it when
 # the .a file is missing so repeat shell-entries are fast.
 # ---------------------------------------------------------------------------
-_FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a"
 _FFI_INCLUDE_DIR="$_TRACE_FORMAT_NIM_DIR/include"
+# The FFI artifact may be either the static library (`.a`, produced by
+# `nimble buildLib`) or the shared library (`.so`, produced by the workspace's
+# `build-siblings.sh` via the sibling repo's own dev shell).  cgo links
+# `-lcodetracer_trace_writer`, which the toolchain resolves from EITHER form in
+# the `-L` dir, so accept whichever is present.
+if [ -f "$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a" ]; then
+  _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a"
+elif [ -f "$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.so" ]; then
+  _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.so"
+else
+  _FFI_LIB=""
+fi
 
-if [ ! -f "$_FFI_LIB" ]; then
-  echo "  detect-trace-format: building libcodetracer_trace_writer.a (first time)..." >&2
-  if command -v nimble >/dev/null 2>&1; then
-    (cd "$_TRACE_FORMAT_NIM_DIR" && nimble buildLib) || {
-      echo "  detect-trace-format: ERROR: nimble buildLib failed." >&2
-      unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR
-      return 1 2>/dev/null || exit 1
-    }
-  else
-    echo "  detect-trace-format: ERROR: nimble not found; cannot build FFI." >&2
-    unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR
+if [ -z "$_FFI_LIB" ]; then
+  echo "  detect-trace-format: building the trace-writer FFI (first time)..." >&2
+  # The FFI build needs nim/nimble + zstd, which live in the SIBLING repo's own
+  # dev shell, NOT this wasm recorder's shell.  Build the dependency in the
+  # sibling's dev shell instead of polluting this shell with those tools:
+  #   * `direnv exec <sibling>` if the sibling uses direnv (.envrc present);
+  #   * else `nix develop <sibling>` (the sibling ships a flake).
+  _BUILD_OK=""
+  if [ -f "$_TRACE_FORMAT_NIM_DIR/.envrc" ] && command -v direnv >/dev/null 2>&1; then
+    (direnv exec "$_TRACE_FORMAT_NIM_DIR" nimble -d:release buildLib) && _BUILD_OK=1
+  fi
+  if [ -z "$_BUILD_OK" ] && command -v nix >/dev/null 2>&1; then
+    (nix develop "$_TRACE_FORMAT_NIM_DIR" --command nimble -d:release buildLib) && _BUILD_OK=1
+  fi
+  if [ -z "$_BUILD_OK" ] && command -v nimble >/dev/null 2>&1; then
+    # Last resort: nimble is on PATH in this shell after all.
+    (cd "$_TRACE_FORMAT_NIM_DIR" && nimble buildLib) && _BUILD_OK=1
+  fi
+  if [ -z "$_BUILD_OK" ]; then
+    echo "  detect-trace-format: ERROR: could not build the FFI in the sibling dev shell." >&2
+    echo "  Build it once with: (cd $_TRACE_FORMAT_NIM_DIR && nix develop --command nimble buildLib)" >&2
+    unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR _BUILD_OK
     return 1 2>/dev/null || exit 1
   fi
-  echo "  detect-trace-format: FFI library built successfully." >&2
+  if [ -f "$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a" ]; then
+    _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a"
+  else
+    _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.so"
+  fi
+  unset _BUILD_OK
+  echo "  detect-trace-format: FFI library built successfully ($_FFI_LIB)." >&2
 else
   echo "  detect-trace-format: Nim FFI library found at $_FFI_LIB" >&2
 fi
+# When linking the shared library, it must also be discoverable at run time.
+case "$(uname -s)" in
+  Linux*)  export LD_LIBRARY_PATH="${_TRACE_FORMAT_NIM_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  Darwin*) export DYLD_LIBRARY_PATH="${_TRACE_FORMAT_NIM_DIR}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+esac
 
 export FFI_LIB_DIR="$_TRACE_FORMAT_NIM_DIR"
 export FFI_INCLUDE_DIR="$_FFI_INCLUDE_DIR"

@@ -26,6 +26,9 @@ jobs:
     runs-on: [self-hosted, nixos]
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Generate CI token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -34,80 +37,24 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Nix and Git authentication
-        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
+      - name: Setup dev env
+        # setup-dev-env clones the siblings listed in .github/sibling-repos
+        # (codetracer-trace-format) at the workspace-lock-pinned revision
+        # before materialising the nix env.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
-          gh-token: ${{ steps.app-token.outputs.token }}
-          cachix-cache: ${{ vars.CACHIX_CACHE }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          substituters: ${{ vars.SUBSTITUTERS }}
-          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
-
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
-        with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
-        run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-wasm-recorder --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-wasm-recorder (candidates: $CANDS). The commit must be published through the workspace tooling."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-wasm-recorder: $LOCK_SHA"
-
-      - name: Resolve sibling refs
-        id: resolve-ref
-        shell: bash
-        run: |
-          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-wasm-recorder --sibling codetracer-trace-format \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          echo "trace_format_ref=$TF_REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved trace-format ref: $TF_REF"
-
-      - name: Clone codetracer-trace-format
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer-trace-format
-          ref: ${{ steps.resolve-ref.outputs.trace_format_ref }}
-          path: ${{ github.workspace }}/../codetracer-trace-format
+          env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
 
       - name: Lint
-        run: nix develop --command just lint
+        run: dev-exec just lint
 
       - name: Pure-Go tracewriter tests
-        run: nix develop --command just test-tracewriter-go
+        run: dev-exec just test-tracewriter-go
 
       - name: Build FFI library and run tracewriter tests
         run: |
-          nix develop --command bash -c '
+          dev-exec bash -c '
             set -e
 
             # Build the FFI library from the sibling checkout
@@ -127,6 +74,8 @@ jobs:
     name: Verify nix flake packages build
     runs-on: [self-hosted, nixos]
     steps:
+      - uses: actions/checkout@v5
+
       - name: Generate CI token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -135,16 +84,11 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      - uses: actions/checkout@v5
-
-      - name: Setup Nix
-        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
+      - name: Setup dev env
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
+          env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
-          cachix-cache: ${{ vars.CACHIX_CACHE }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          substituters: ${{ vars.SUBSTITUTERS }}
-          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
       - name: Build default package
         run: nix build .#default

@@ -1,0 +1,5 @@
+# Cross-repo siblings cloned by setup-dev-env at workspace-lock-pinned
+# revisions (see codetracer-specs/Testing/Cross-Repo-CI-Integration.md).
+# Only codetracer-trace-format is needed: the Go tracewriter FFI links
+# against its codetracer_trace_writer_ffi rust crate.
+codetracer-trace-format

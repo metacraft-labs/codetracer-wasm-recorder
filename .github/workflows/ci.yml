@@ -23,7 +23,12 @@ on:
 
 jobs:
   lint-and-test:
-    runs-on: [self-hosted, nixos]
+    name: Lint and test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [incus, tart-linux-arm, macos-tart]
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -76,8 +81,12 @@ jobs:
           '
 
   nix-build:
-    name: Verify nix flake packages build
-    runs-on: [self-hosted, nixos]
+    name: Verify nix flake packages build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [incus, tart-linux-arm, macos-tart]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
 

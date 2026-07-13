@@ -1,0 +1,119 @@
+name: CI (reprobuild)
+
+# Additive side-by-side CI run that re-plays the project's
+# deterministic dev env through reprobuild instead of `nix develop` or
+# `env.ps1`. Runs alongside the existing `ci.yml` (`nix`) so regressions
+# in either of the older paths still gate merges — see
+# `codetracer-specs/Repo-Requirements.md` §2.9 and
+# `metacraft-dev-guidelines/policies/ci-shared-dev-env.md` §4 for the
+# rollout shape.
+#
+# Go / cgo scoping: this recorder is a Go module whose CTFS writer is
+# implemented twice, gated by the `cgo` build tag (see `repro.nim`'s
+# header and `tracewriter/ctfs_writer{,_stub}.go`). The reprobuild
+# recipe deliberately targets the PURE-GO build (`CGO_ENABLED=0`, the
+# `!cgo` stub). The cgo FFI recording path — which links the Rust
+# `codetracer_trace_writer_ffi` library from the sibling
+# `codetracer-trace-format-nim` repo — stays covered by the existing
+# `ci.yml` job (`cargo build -p codetracer_trace_writer_ffi --release`
+# then `CGO_ENABLED=1 go test ./tracewriter/`). It is intentionally out
+# of scope here.
+#
+# The `setup-dev-env` composite action accepts `env-flavor: reprobuild`
+# (target state per the policy). When the action's reprobuild branch
+# lands, this workflow exercises it end-to-end on every supported
+# host without any other repo-side change.
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+    branches: [main, dev, stable]
+
+jobs:
+  reprobuild:
+    name: ${{ matrix.os }}-${{ matrix.arch }} — repro build/test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x64
+            runner: eph-linux-x64
+          - os: linux
+            arch: arm64
+            runner: eph-linux-arm64
+          - os: macos
+            arch: arm64
+            runner: eph-macos-arm64
+          - os: windows
+            arch: x64
+            runner: eph-win-x64
+          - os: windows
+            arch: arm64
+            runner: eph-win-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mint a GitHub App installation token via the CI Token Provider
+      # app so the reprobuild flake/sibling steps can clone private
+      # metacraft-labs repos (codetracer-native-recorder, runquota,
+      # repo-workspaces, etc.) and so the workspace-lock checkout below
+      # can read metacraft-manifests.  GitHub free plan restricts
+      # org-level secrets with visibility ALL from being readable in
+      # private repos, so we mint per-run tokens from the app secrets
+      # stored at repo level (CI_TOKEN_PROVIDER_APP_ID +
+      # CI_TOKEN_PROVIDER_PRIVATE_KEY).
+      - name: Mint installation token for cross-repo sibling clones
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Setup dev env (reprobuild flavor)
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        with:
+          env-flavor: reprobuild
+          gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: repro build
+        # Builds the conventional `default` collection declared in
+        # `repro.nim`: the pure-Go `wazero` CLI
+        # (`CGO_ENABLED=0 go build -o wazero ./cmd/wazero`). Verifies the
+        # primary shipping artefact materialises through the reprobuild
+        # engine identically to `just build`.
+        run: dev-exec repro build
+
+      - name: repro test
+        # Materialises the `test` collection: the pure-Go writer test
+        # entry point (`CGO_ENABLED=0 go test ./tracewriter/ -v -run
+        # 'TestGoWriter'`), one-for-one with `just test-tracewriter-go`.
+        run: dev-exec repro test
+
+      - name: just build (cross-check, pure-Go)
+        # Re-runs the legacy `just build` path inside the same env so we
+        # catch silent divergences between `repro build` outputs and what
+        # the Justfile produces today. `CGO_ENABLED=0` is pinned to match
+        # the reprobuild recipe's pure-Go scope (the cgo path is gated by
+        # ci.yml, which provisions the sibling FFI library).
+        run: dev-exec bash -c 'CGO_ENABLED=0 just build'
+
+      - name: just test-tracewriter-go (cross-check, pure-Go)
+        # The Justfile recipe `repro test` mirrors verbatim. `just test`
+        # (`make test` → full `go test ./...`) is NOT run here: it needs
+        # the cgo FFI library and is covered by ci.yml.
+        run: dev-exec just test-tracewriter-go
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reprobuild-logs-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            target/
+            .repro/
+          retention-days: 7
+          if-no-files-found: ignore

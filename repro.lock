@@ -1,0 +1,9 @@
+schema = "reprobuild.solved-graph-lock.v2"
+
+[lock]
+platform = "amd64-linux"
+optimal = false
+inputs_digest = "fnv1a64:6c9bb04d4a77dd32"
+variants = []
+packages = [{ name = "codetracer_wasm_recorder", version = "0.1.0", source = "codetracer_wasm_recorder" }, { name = "go", version = "1.22.0", source = "go" }, { name = "sh", version = "1.0.0", source = "sh" }]
+deps = [{ name = "codetracer-wasm-recorder", path = ".", coord_kind = "vcs", url = "https://github.com/metacraft-labs/codetracer-wasm-recorder", ref = "mcr-stege0-and-fixes", revision = "cf3bfb52fc190a8d1c3ec264b2da661abfa70cef", integrity = "git-sha1:cf3bfb52fc190a8d1c3ec264b2da661abfa70cef", version = "", visibility = "public", participation = "", depends = "", groups = "" }]

@@ -4,9 +4,37 @@ default:
 alias t := test
 alias fmt := format
 
-# Build wazero binary
+# Build wazero binary (the OPEN artifact)
 build:
     go build -o wazero ./cmd/wazero
+
+# --- Replay snapshots: the two build variants -------------------------------
+#
+# `WASM-Replay-Snapshots-And-Slices.md` §9 splits snapshot derivation and
+# seeking out as a commercial capability, produced from this same source tree
+# behind the `ctsnapshots` build tag.  Correctness is open: the artifact
+# `just build` produces replays and materialises every recording completely,
+# including one whose `.ct` already carries snapshot namespaces (it reads and
+# ignores them).  What it does not do is seek.
+#
+# The `internal/wasmsnapshot` package is reachable from `cmd/wazero` only
+# through `cmd/wazero/snapshots.go`, which carries the tag — so the open
+# binary does not link the derivation or seek logic at all.
+
+# Build the snapshot-deriving (commercial) wazero binary.
+build-snapshots:
+    go build -tags ctsnapshots -o wazero-snapshots ./cmd/wazero
+
+# Build both release artifacts.
+build-all-variants: build build-snapshots
+
+# Run the test suite against the snapshot-deriving build.  The open build's
+# suite is `just test`; both must pass, and CI should exercise both.
+test-snapshots:
+    go test -tags ctsnapshots ./cmd/wazero/... ./internal/wasmsnapshot/... ./internal/boundarylog/... ./internal/ctfs/... ./internal/xxh3/...
+
+# Both build variants, tested.
+test-all-variants: test test-snapshots
 
 # Run all Go tests (delegates to Makefile)
 test:

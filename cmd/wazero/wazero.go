@@ -243,6 +243,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			"boundary signatures are cross-checked against the module's own type "+
 			"section; a disagreement is a hard error.")
 
+	// Replay snapshots (WASM-Replay-Snapshots-And-Slices.md).  Deriving them
+	// and seeking with them is the commercial half of the build split (§9);
+	// the flags are declared in both variants so an open build can say so
+	// rather than appear not to know the flag.  See snapshots_common.go.
+	var snapshots snapshotOptions
+	snapshots.register(flags)
+
 	// Convention compliance follow-up — 2026-05-08 (Recorder-CLI-Conventions.md
 	// §3 / §4 / §5):
 	//
@@ -431,7 +438,15 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			wasmPath:     wasmPath,
 			logPath:      boundaryLogPath,
 			manifestPath: boundaryManifestPath,
+			snapshots:    snapshots,
 		}, stdOut, stdErr)
+	}
+
+	if snapshots.requested() {
+		fmt.Fprintln(stdErr, "the snapshot flags apply to --boundary-log replay only: "+
+			"snapshots are derived by re-executing a boundary recording, never captured "+
+			"from a live run")
+		return 1
 	}
 
 	var stylusState *stylus.StylusTrace
@@ -668,6 +683,17 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  Pass `--boundary-log <path>` to materialise a trace from a browser WASM")
 	fmt.Fprintln(stdErr, "  boundary recording by re-executing the ORIGINAL, uninstrumented module")
 	fmt.Fprintln(stdErr, "  against it (WASM-Instrumentation-Layer.md §6).")
+	fmt.Fprintln(stdErr)
+	if snapshotsAvailable {
+		fmt.Fprintln(stdErr, "  This build derives replay snapshots (--snapshots) and can materialise a")
+		fmt.Fprintln(stdErr, "  sub-range of a recording without re-executing everything before it")
+		fmt.Fprintln(stdErr, "  (--seek-from / --seek-to, WASM-Replay-Snapshots-And-Slices.md).")
+	} else {
+		fmt.Fprintln(stdErr, "  This build replays and materialises every recording completely and")
+		fmt.Fprintln(stdErr, "  correctly, including one whose `.ct` already carries snapshot namespaces,")
+		fmt.Fprintln(stdErr, "  which it reads and ignores.  It does not derive snapshots or seek with")
+		fmt.Fprintln(stdErr, "  them, so reaching a point in the middle costs a linear replay.")
+	}
 }
 
 func printCompileUsage(stdErr io.Writer, flags *flag.FlagSet) {

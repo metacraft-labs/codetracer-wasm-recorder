@@ -41,6 +41,46 @@ type Options struct {
 	// which case the replay still runs and still checks for divergence
 	// but produces no trace.
 	Recorder tracewriter.TraceRecorder
+
+	// --- quiescent points and range replay -----------------------------
+	//
+	// These implement the seeking half of the boundary model, specified in
+	// `WASM-Replay-Snapshots-And-Slices.md`. A *quiescent point* is a moment
+	// when no exported function is executing: point 0 is the freshly
+	// instantiated module, point k is after the k-th top-level exported call
+	// has returned. There are `len(TopLevelExports()) + 1` of them, and the
+	// WASM stack is empty at every one — which is what makes them the only
+	// places a snapshot can be taken or resumed from (that spec's §3).
+	//
+	// `internal/wasmsnapshot` is the consumer of all three fields; they live
+	// here rather than there because the driver is what knows where the
+	// points are, and because a snapshot taken anywhere else would be silently
+	// wrong rather than loudly refused.
+
+	// AtQuiescentPoint, when non-nil, is called at every quiescent point the
+	// replay passes through: at FromPoint before the first driven call, and
+	// after each call returns. An error from it aborts the replay.
+	AtQuiescentPoint func(point int, guest api.Module) error
+
+	// FromPoint is the quiescent point the replay starts at. 0 (the default)
+	// replays from the beginning.
+	FromPoint int
+
+	// ToPoint is the quiescent point the replay stops at. 0 (the default)
+	// means "to the end of the recording".
+	ToPoint int
+
+	// Resume must restore the module's state to the captured state at
+	// FromPoint. It is called once, after instantiation and before the first
+	// driven call.
+	//
+	// It is **required** whenever FromPoint > 0. Resuming into a freshly
+	// instantiated module would re-execute a suffix against a prefix's worth
+	// of missing state — producing a trace that describes an execution that
+	// never happened while being indistinguishable on disk from a faithful
+	// one. That is the same failure spec §6's divergence rule exists to
+	// prevent, so it is refused rather than defaulted.
+	Resume func(guest api.Module) error
 }
 
 // Result reports what a successful replay did.
@@ -59,6 +99,11 @@ type Result struct {
 	// content, so this parser drops them. See `recording.go`'s "How a
 	// crossing appears in a browser `.ct`".
 	UncheckedImportCalls int
+	// FromPoint and ToPoint are the quiescent-point range that was actually
+	// driven, after Options.FromPoint / Options.ToPoint were resolved
+	// against the recording's length.
+	FromPoint int
+	ToPoint   int
 }
 
 // DivergenceError is the spec §6 hard failure: replay reached a point where
@@ -204,10 +249,50 @@ func (r *replayer) run(ctx context.Context) (Result, error) {
 	}
 
 	// --- spec §6.4: invoke each recorded export call ---------------------
-	for _, crossing := range rec.TopLevelExports() {
-		if err := r.callExport(ctx, guest, crossing); err != nil {
+	exports := rec.TopLevelExports()
+	from, to, err := r.resolveRange(len(exports))
+	if err != nil {
+		return r.result, err
+	}
+
+	if from > 0 {
+		// Seed the crossing cursor at the crossing the resumed point
+		// precedes, so import crossings keep lining up with the recording
+		// after the seek. Every crossing before it belongs to the skipped
+		// prefix.
+		//
+		// The final quiescent point is a legal seek target — it is the point
+		// after the last exported call returned — but it precedes no crossing
+		// at all, so there is no `exports[from]` to read. The recording is
+		// exhausted there, which is exactly what a cursor at the end means.
+		if from < len(exports) {
+			r.cursor = exports[from].Seq
+		} else {
+			r.cursor = len(rec.Crossings)
+		}
+		if err := r.opts.Resume(guest); err != nil {
+			return r.result, fmt.Errorf(
+				"restoring the module state at quiescent point %d: %w", from, err)
+		}
+	}
+	if err := r.atQuiescentPoint(from, guest); err != nil {
+		return r.result, err
+	}
+	for i := from; i < to; i++ {
+		if err := r.callExport(ctx, guest, exports[i]); err != nil {
 			return r.result, err
 		}
+		if err := r.atQuiescentPoint(i+1, guest); err != nil {
+			return r.result, err
+		}
+	}
+	r.result.FromPoint, r.result.ToPoint = from, to
+
+	if to != len(exports) || from != 0 {
+		// A partial range legitimately leaves crossings unconsumed at both
+		// ends, so the whole-recording check below does not apply. The
+		// per-crossing checks inside the range have all run.
+		return r.result, nil
 	}
 
 	// Every crossing the recording carries must have been consumed. A
@@ -227,6 +312,50 @@ func (r *replayer) run(ctx context.Context) (Result, error) {
 	}
 
 	return r.result, nil
+}
+
+// resolveRange validates Options.FromPoint / Options.ToPoint against the
+// recording and returns the half-open range of top-level exports to drive.
+//
+// `nExports` top-level calls give `nExports + 1` quiescent points, numbered
+// 0..nExports; driving the range [from, to) of calls moves the module from
+// quiescent point `from` to quiescent point `to`.
+func (r *replayer) resolveRange(nExports int) (from, to int, err error) {
+	from, to = r.opts.FromPoint, r.opts.ToPoint
+	if to == 0 {
+		to = nExports
+	}
+	if from < 0 || from > nExports {
+		return 0, 0, fmt.Errorf(
+			"boundary replay: quiescent point %d does not exist; the recording has "+
+				"%d top-level exported call(s), so its points are 0..%d",
+			from, nExports, nExports)
+	}
+	if to < from || to > nExports {
+		return 0, 0, fmt.Errorf(
+			"boundary replay: quiescent-point range [%d,%d] is not within 0..%d",
+			from, to, nExports)
+	}
+	if from > 0 && r.opts.Resume == nil {
+		return 0, 0, fmt.Errorf(
+			"boundary replay: resuming at quiescent point %d needs an Options.Resume "+
+				"that restores the module's state there. Replaying a suffix against a "+
+				"freshly instantiated module would materialise a trace of an execution "+
+				"that never happened, so it is refused rather than defaulted "+
+				"(WASM-Replay-Snapshots-And-Slices.md §3)", from)
+	}
+	return from, to, nil
+}
+
+// atQuiescentPoint invokes the caller's hook, if any.
+func (r *replayer) atQuiescentPoint(point int, guest api.Module) error {
+	if r.opts.AtQuiescentPoint == nil {
+		return nil
+	}
+	if err := r.opts.AtQuiescentPoint(point, guest); err != nil {
+		return fmt.Errorf("at quiescent point %d: %w", point, err)
+	}
+	return nil
 }
 
 // planImports resolves every imported function's signature, taking it from

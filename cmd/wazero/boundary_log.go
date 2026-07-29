@@ -29,6 +29,10 @@ type boundaryReplayRequest struct {
 	// manifestPath is the `--boundary-manifest` argument; empty means
 	// "discover the conventional sidecar".
 	manifestPath string
+	// snapshots carries the `--snapshots` / `--seek-*` surface. Whether it
+	// can be honoured at all depends on the build variant — see
+	// `snapshots.go` / `snapshots_disabled.go`.
+	snapshots snapshotOptions
 }
 
 // doBoundaryLogReplay implements `--boundary-log`: re-execute the original
@@ -77,14 +81,27 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 	// off the recording's rails.
 	cfg := req.moduleConfig.WithStartFunctions()
 
-	result, err := boundarylog.Replay(ctx, boundarylog.Options{
+	opts := boundarylog.Options{
 		Runtime:      req.runtime,
 		Compiled:     req.compiled,
 		Recording:    recording,
 		Manifest:     manifest,
 		ModuleConfig: cfg,
 		Recorder:     req.recorder,
-	})
+	}
+
+	// Snapshot derivation and seeking (`WASM-Replay-Snapshots-And-Slices.md`).
+	// `configure` installs the quiescent-point hook and, when seeking, the
+	// state restore; `finishSnapshots` runs after the container exists,
+	// because derived snapshots go inside it (§6) and it is only written on a
+	// fully successful replay.
+	finishSnapshots, err := req.snapshots.configure(recording, &opts, stdOut, stdErr)
+	if err != nil {
+		fmt.Fprintf(stdErr, "%v\n", err)
+		return 1
+	}
+
+	result, err := boundarylog.Replay(ctx, opts)
 	if err != nil {
 		fmt.Fprintf(stdErr, "%v\n", err)
 		return 1
@@ -104,7 +121,29 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 
 	fmt.Fprintf(stdOut, "replayed %d exported call(s) and %d imported call(s) from %s\n",
 		result.ExportCalls, result.ImportCalls, req.logPath)
+	if result.FromPoint != 0 || result.ToPoint != len(recording.TopLevelExports()) {
+		fmt.Fprintf(stdOut, "materialised quiescent-point range [%d,%d] of 0..%d\n",
+			result.FromPoint, result.ToPoint, len(recording.TopLevelExports()))
+	}
 
 	produceTrace(req.outDir, req.traceName, req.recorder)
+
+	if req.outDir != "" {
+		containerPath, err := containerPathFor(req.outDir, req.traceName)
+		if err != nil {
+			fmt.Fprintf(stdErr, "%v\n", err)
+			return 1
+		}
+		if err := finishSnapshots(containerPath); err != nil {
+			fmt.Fprintf(stdErr, "deriving replay snapshots: %v\n", err)
+			return 1
+		}
+	} else if err := finishSnapshots(""); err != nil {
+		// With no --out-dir there is no container to attach snapshots to.
+		// Reporting rather than silently dropping them keeps the failure
+		// visible: derived-and-discarded looks identical to never-derived.
+		fmt.Fprintf(stdErr, "%v\n", err)
+		return 1
+	}
 	return 0
 }

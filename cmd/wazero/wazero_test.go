@@ -708,8 +708,28 @@ Recording:
   Pass `+"`--boundary-log <path>`"+` to materialise a trace from a browser WASM
   boundary recording by re-executing the ORIGINAL, uninstrumented module
   against it (WASM-Instrumentation-Layer.md §6).
+
+`+snapshotHelpBlock+`
 `, stderr)
 }
+
+// snapshotHelpBlock is the build-variant-dependent tail of the usage text.
+// The two artifacts (`just build` and `just build-snapshots`) advertise
+// different capabilities per `WASM-Replay-Snapshots-And-Slices.md` §9, so the
+// expectation has to follow the build tag the test itself was compiled with.
+// It is derived from `snapshotsAvailable`, the same constant the usage text
+// branches on, so the two cannot drift apart silently.
+var snapshotHelpBlock = func() string {
+	if snapshotsAvailable {
+		return `  This build derives replay snapshots (--snapshots) and can materialise a
+  sub-range of a recording without re-executing everything before it
+  (--seek-from / --seek-to, WASM-Replay-Snapshots-And-Slices.md).`
+	}
+	return `  This build replays and materialises every recording completely and
+  correctly, including one whose ` + "`.ct`" + ` already carries snapshot namespaces,
+  which it reads and ignores.  It does not derive snapshots or seek with
+  them, so reaching a point in the middle costs a linear replay.`
+}()
 
 // TestNoFormatFlagInHelp asserts that the legacy `--format` flag has been
 // removed from the `wazero run` help output.  The wasm recorder is

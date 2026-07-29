@@ -704,6 +704,10 @@ Recording:
   skips recording entirely.  Use `+"`ct print`"+` from codetracer-trace-format-nim
   to convert the bundle to a human-readable JSON.  The `+"`wazero`"+` binary name
   is the one documented exception to the codetracer-<lang>-recorder pattern.
+
+  Pass `+"`--boundary-log <path>`"+` to materialise a trace from a browser WASM
+  boundary recording by re-executing the ORIGINAL, uninstrumented module
+  against it (WASM-Instrumentation-Layer.md §6).
 `, stderr)
 }
 

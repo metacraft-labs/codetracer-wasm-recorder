@@ -1,0 +1,6 @@
+[
+  {"name": "user_entrypoint", "startInk": 100, "endInk": 90, "args": "0x00000004", "outs": "0x00000000"},
+  {"name": "read_args", "startInk": 90, "endInk": 88, "args": "0x", "outs": "0xdeadbeef"},
+  {"name": "write_result", "startInk": 88, "endInk": 86, "args": "0x", "outs": "0x"},
+  {"name": "user_returned", "startInk": 10, "endInk": 8, "args": "0x", "outs": "0xefbeadde"}
+]

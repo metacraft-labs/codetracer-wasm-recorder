@@ -222,6 +222,27 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
+	// Boundary-log replay (WASM-Instrumentation-Layer.md §6).  A browser
+	// WASM recording is a *log of host interactions*, not a trace; the
+	// full step-level trace is materialised offline by re-executing the
+	// original module here, replaying the recorded host results in place
+	// of the real host.  See internal/boundarylog for the model and the
+	// input format.
+	var boundaryLogPath string
+	flags.StringVar(&boundaryLogPath, "boundary-log", "",
+		"Re-executes the module against a recorded boundary log, replaying the "+
+			"recorded host results in place of a live host, and materialises a "+
+			"CTFS trace.  The argument is the `<program>.ct` directory the "+
+			"CodeTracer backend-manager wrote for a browser WASM session (or its "+
+			"trace.json).  Pass the ORIGINAL, uninstrumented .wasm.")
+
+	var boundaryManifestPath string
+	flags.StringVar(&boundaryManifestPath, "boundary-manifest", "",
+		"Path to the `ct-instrument` sidecar manifest for --boundary-log.  "+
+			"Defaults to `<wasm>.manifest.json` when that exists.  The manifest's "+
+			"boundary signatures are cross-checked against the module's own type "+
+			"section; a disagreement is a hard error.")
+
 	// Convention compliance follow-up — 2026-05-08 (Recorder-CLI-Conventions.md
 	// §3 / §4 / §5):
 	//
@@ -387,6 +408,30 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 	if outDir != "" && !disabled {
 		recorder = tracewriter.NewCtfsTraceWriter()
+	}
+
+	// Boundary-log replay is a self-contained execution mode: it drives the
+	// recorded exported calls itself rather than running `_start`, and
+	// supplies every import from the recording rather than from WASI or a
+	// live host.  It therefore short-circuits the WASI detection and the
+	// ordinary instantiate-and-run path below.
+	if boundaryLogPath != "" {
+		if stylusTracePath != "" {
+			fmt.Fprintln(stdErr, "--boundary-log and --stylus are mutually exclusive: "+
+				"each supplies the module's imports from a different recording")
+			return 1
+		}
+		return doBoundaryLogReplay(ctx, boundaryReplayRequest{
+			runtime:      rt,
+			compiled:     guest,
+			moduleConfig: conf,
+			recorder:     recorder,
+			outDir:       outDir,
+			traceName:    wasmFile,
+			wasmPath:     wasmPath,
+			logPath:      boundaryLogPath,
+			manifestPath: boundaryManifestPath,
+		}, stdOut, stdErr)
 	}
 
 	var stylusState *stylus.StylusTrace
@@ -619,6 +664,10 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  skips recording entirely.  Use `ct print` from codetracer-trace-format-nim")
 	fmt.Fprintln(stdErr, "  to convert the bundle to a human-readable JSON.  The `wazero` binary name")
 	fmt.Fprintln(stdErr, "  is the one documented exception to the codetracer-<lang>-recorder pattern.")
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "  Pass `--boundary-log <path>` to materialise a trace from a browser WASM")
+	fmt.Fprintln(stdErr, "  boundary recording by re-executing the ORIGINAL, uninstrumented module")
+	fmt.Fprintln(stdErr, "  against it (WASM-Instrumentation-Layer.md §6).")
 }
 
 func printCompileUsage(stdErr io.Writer, flags *flag.FlagSet) {

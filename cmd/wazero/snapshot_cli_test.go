@@ -182,3 +182,55 @@ func TestOpenBuildRefusesSnapshotFlagsWithAnExplanation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, len(entries))
 }
+
+// TestOpenBuildRefusesSliceFlagsWithAnExplanation: slicing is snapshot
+// derivation — every slice opens with a base snapshot, which is the only reason
+// it is independently materialisable — so it falls on the commercial side of
+// snapshot spec §9 and the open build says so rather than producing slices
+// without bases.
+func TestOpenBuildRefusesSliceFlagsWithAnExplanation(t *testing.T) {
+	require.False(t, snapshotsAvailable)
+	dir := t.TempDir()
+	exitCode, _, stderr := runMain(t, "", []string{
+		"run",
+		"--boundary-log=testdata/boundary-log/frontend-wasm.ct",
+		"--slice-dir=" + filepath.Join(dir, "slices"),
+		"testdata/boundary-log/balance_calc.wasm",
+	})
+	require.Equal(t, 1, exitCode)
+	require.True(t, bytes.Contains([]byte(stderr), []byte("does not split a recording into slices")),
+		"unhelpful refusal: %s", stderr)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(entries))
+}
+
+// TestOpenBuildStreamsARecording: streaming is *not* commercial. It changes
+// when a recording is read, not what is derived from it, and materialisation is
+// open (snapshot spec §9). The open build must therefore accept
+// `--boundary-stream` and produce the same trace the commercial one does.
+func TestOpenBuildStreamsARecording(t *testing.T) {
+	require.False(t, snapshotsAvailable)
+	src := repeatRecording(t, 2)
+	raw, err := os.ReadFile(filepath.Join(src, "trace.json"))
+	require.NoError(t, err)
+
+	live := filepath.Join(t.TempDir(), "frontend-wasm.ct")
+	require.NoError(t, os.MkdirAll(live, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(live, "trace.json"), raw, 0o644))
+	marker := filepath.Join(t.TempDir(), "done")
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+
+	out := t.TempDir()
+	exitCode, stdout, stderr := runMain(t, "", []string{
+		"run",
+		"--boundary-log=" + live,
+		"--boundary-stream=" + filepath.Join(live, "trace.json"),
+		"--stream-done=" + marker,
+		"--out-dir=" + out,
+		"testdata/boundary-log/balance_calc.wasm",
+	})
+	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)
+	require.True(t, bytes.Contains([]byte(stdout), []byte("replayed 2 exported call(s)")), stdout)
+	require.True(t, ctfsHas(t, filepath.Join(out, "balance_calc.ct"), "steps.dat"))
+}

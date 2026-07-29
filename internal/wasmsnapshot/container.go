@@ -41,19 +41,77 @@ type Builder struct {
 // the data rather than of the format: re-deriving at a different density
 // rewrites the flags, not the schema.
 func NewBuilder(points []QuiescentPoint, tiers *Tiers, opts EncodeOptions) (*Builder, error) {
+	b, err := NewIncrementalBuilder(tiers, opts)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range points {
+		if err := b.AddPoint(p); err != nil {
+			return nil, err
+		}
+	}
+	return b, nil
+}
+
+// NewIncrementalBuilder starts a snapshot set whose quiescent points are not
+// known yet.
+//
+// This is the constructor the *streaming* pipeline of snapshot spec §2 needs.
+// There, the boundary log is still arriving, so the recording's point count is
+// unknowable until the page unloads — but a snapshot must be emitted at each
+// point *as it is reached*, not in a pass at the end. Points are therefore
+// declared with `AddPoint` as the replay discovers them.
+//
+// It is also what lets a slice (§7) carry an index covering only its own range
+// rather than the whole recording's.
+func NewIncrementalBuilder(tiers *Tiers, opts EncodeOptions) (*Builder, error) {
 	if tiers == nil || tiers.PerTrace == nil {
 		return nil, fmt.Errorf("wasmsnapshot: a snapshot builder needs a per-trace cache tier")
 	}
-	b := &Builder{points: points, tiers: tiers, opts: opts, bySeq: map[int]int{}}
-	for i, p := range points {
-		b.bySeq[p.Ordinal] = i
-		b.records = append(b.records, IndexRecord{
-			Ordinal:       uint32(p.Ordinal),
-			ExportsBefore: uint32(p.ExportsBefore),
-			CrossingSeq:   int32(p.CrossingSeq),
-		})
+	return &Builder{tiers: tiers, opts: opts, bySeq: map[int]int{}}, nil
+}
+
+// AddPoint declares one quiescent point, in ordinal order.
+//
+// Declaring a point is separate from snapshotting it (`Add`): every legal point
+// is listed in `wcp.idx` whether or not it carries data, which is what lets a
+// consumer enumerate legal snapshot points without replaying (snapshot spec
+// §8) and what makes snapshot *density* a property of the data rather than of
+// the format.
+func (b *Builder) AddPoint(p QuiescentPoint) error {
+	if _, dup := b.bySeq[p.Ordinal]; dup {
+		return fmt.Errorf(
+			"wasmsnapshot: quiescent point %d is already in this snapshot index", p.Ordinal)
 	}
-	return b, nil
+	if n := len(b.points); n > 0 && p.Ordinal <= b.points[n-1].Ordinal {
+		// The index is read back with a linear scan that stops at the first
+		// record past the point being sought (`Nearest`), so an out-of-order
+		// record would silently make earlier snapshots unreachable.
+		return fmt.Errorf(
+			"wasmsnapshot: quiescent point %d was declared after point %d; the "+
+				"snapshot index must be in ascending ordinal order",
+			p.Ordinal, b.points[n-1].Ordinal)
+	}
+	b.bySeq[p.Ordinal] = len(b.points)
+	b.points = append(b.points, p)
+	b.records = append(b.records, IndexRecord{
+		Ordinal:       uint32(p.Ordinal),
+		ExportsBefore: uint32(p.ExportsBefore),
+		CrossingSeq:   int32(p.CrossingSeq),
+	})
+	return nil
+}
+
+// PointCount reports how many quiescent points the index lists.
+func (b *Builder) PointCount() int { return len(b.points) }
+
+// PayloadBytes reports how many bytes of snapshot data have accumulated.
+//
+// This is the quantity the slice-size policy of snapshot spec §7 is driven by;
+// see `SlicePolicy.TargetBytes` for exactly what it does and does not include.
+func (b *Builder) PayloadBytes() int64 {
+	return int64(len(b.lay)+len(b.mem)+len(b.glob)+len(b.tab)) +
+		b.tiers.PerTrace.Bytes()
 }
 
 // Add records a snapshot taken at one of the builder's quiescent points.
@@ -252,6 +310,23 @@ func (s *Set) SnapshotCount() int {
 		}
 	}
 	return n
+}
+
+// Range reports the quiescent-point range this snapshot index covers, and
+// whether it opens with a base snapshot.
+//
+// For a whole-recording container that is 0..N and the base is point 0. For a
+// **slice** (snapshot spec §7) it is the slice's own range: the index carries
+// only that slice's points, the first of which is flagged as the base. That is
+// what makes a slice self-describing — a consumer that fetched slice N alone,
+// with no manifest and no sibling slices, can read off which range it holds and
+// which point to resume from.
+func (s *Set) Range() (base, end int, hasBase bool) {
+	if len(s.records) == 0 {
+		return 0, 0, false
+	}
+	first, last := s.records[0], s.records[len(s.records)-1]
+	return int(first.Ordinal), int(last.Ordinal), first.IsBase() && first.HasSnapshot()
 }
 
 // Nearest returns the snapshot-bearing quiescent point at or before `point` —

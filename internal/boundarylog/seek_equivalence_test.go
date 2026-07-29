@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tetratelabs/wazero"
@@ -87,9 +88,20 @@ func attachRecorderAt(t *testing.T, point int, w tracewriter.TraceRecorder) func
 // its path.
 func produce(t *testing.T, w tracewriter.TraceRecorder, dir string) string {
 	t.Helper()
+	return produceAs(t, w, dir, "balance_calc.wasm")
+}
+
+// produceAs is `produce` under an explicit program name.
+//
+// The name reaches `meta.dat`, so two containers that are otherwise identical
+// differ in it — which is why a slice's own trace can only be compared against
+// a linear materialisation produced under the *slice's* name.
+func produceAs(t *testing.T, w tracewriter.TraceRecorder, dir, program string) string {
+	t.Helper()
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, w.ProduceTrace(dir, "balance_calc.wasm", "/fixed/workdir"))
-	return filepath.Join(dir, "balance_calc.ct")
+	require.NoError(t, w.ProduceTrace(dir, program, "/fixed/workdir"))
+	base := filepath.Base(program)
+	return filepath.Join(dir, strings.TrimSuffix(base, filepath.Ext(base))+".ct")
 }
 
 // metaDatTraceID is the byte range of `meta.dat` holding the container's

@@ -307,6 +307,138 @@ through `ct-print`, an independent CTFS implementation).
   alone cannot catch a mistake here**, because it writes and reads with the
   same convention; that is why those two tests exist.
 
+### Streaming replay — `--boundary-stream`, `--stream-done`
+
+`WASM-Replay-Snapshots-And-Slices.md` §2 requires snapshots to be derived
+**during** recording, not in a pass afterwards: "the browser streams boundary
+events; a replaying recorder consumes that stream as it arrives and re-executes
+in lockstep, emitting snapshots as it goes. When the page stops, the snapshots
+are already there."
+
+```
+# a daemon-side tee pipes the recording's trace.json in; closing the pipe ends it
+record-web … | wazero-snapshots run --boundary-log <program>.ct \
+    --boundary-stream - --slice-dir <dir> --slice-every 10 <original>.wasm
+
+# or follow a file the producer is appending to, until it drops a marker
+wazero-snapshots run --boundary-log <program>.ct \
+    --boundary-stream <program>.ct/trace.json --stream-done <program>.ct/.complete \
+    --slice-dir <dir> <original>.wasm
+```
+
+**No producer feeds either shape yet, and the gap is larger than a tee.**
+`record-web`'s `JsonFileCtfsWriter`
+(`codetracer/src/backend-manager/src/browser_stream_host.rs`) buffers every
+event in memory and writes `trace.json` with a single `fs::write`, inside a
+one-shot `flush` guarded by `session_ended`. So the file does not exist until
+the session ends, is never appended to, and there is no byte stream to tee.
+Feeding this path needs that writer changed to serialise records as they
+arrive — for *both* shapes above, not just the pipe. Once it does, `-` is
+preferable: EOF is unambiguous and backpressure is real.
+
+Four things are load-bearing:
+
+* **The unit is a call group**, not a record: one top-level exported call plus
+  every crossing nested inside it. `internal/boundarylog/assembler.go` yields
+  one the moment the crossing stack empties. That is not a compromise — a
+  quiescent point *is* the gap between two call groups (§3), so no finer unit
+  could be acted on and no snapshot could be emitted inside one.
+* **One reconstruction, two drivers.** `assembler` holds every rule in
+  `recording.go`'s "How a crossing appears in a browser `.ct`" comment;
+  `reconstructCrossings` is a loop over it and `StreamReader` is a second loop
+  over it. `TestStreamAgreesWithTheBatchParser` fails the moment a second copy
+  of those rules appears.
+* **`io.EOF` means "the producer has finished".** A pipe already has that
+  contract; `FollowFile` gives it to a growing file, blocking at end-of-file
+  until a caller-supplied channel says the producer stopped. `--boundary-stream
+  <file>` without `--stream-done` is **refused**, because guessing wrong hangs
+  forever in one direction and truncates the recording in the other.
+* **Backpressure is structural.** `NextGroup` reads only when the driver needs
+  another call, so a producer writing into a pipe blocks rather than queueing.
+  The tests read the timing off that: an `io.Pipe` write completes only once the
+  consumer has taken the bytes, so the producer's own progress witnesses the
+  consumer's. `TestSnapshotsAreEmittedWhileTheStreamIsStillArriving` asserts
+  that by the producer's k-th write, snapshots 0..k already exist. Measured, the
+  samples are `[1 2 3 4 5 6]` — exactly `k+1`, so the consumer never runs ahead
+  and the producer really is held. Two mutations were confirmed to fail it, and
+  the second is the one that matters: draining the stream before driving
+  anything, **and** keeping the reads incremental while deferring the
+  quiescent-point hook to a pass at the end. Both make every sample 0. The test
+  therefore pins incremental *snapshotting*, not merely incremental reading.
+
+A truncated stream is classified, not lumped together: `TruncatedMidRecord`,
+`TruncatedMidCrossing` and `TruncatedUnterminated` (the benign one — every
+crossing that arrived was complete). It is reported through
+`StreamResult.Truncation` rather than returned as an error, because everything
+already replayed came from complete crossings and is faithful.
+
+### Slices — `--slice-dir`
+
+`WASM-Replay-Snapshots-And-Slices.md` §7: the recording is split into separate
+`.ct` containers at quiescent points, each sealed and emitted while the
+recording is still running, and each independently materialisable.
+
+`internal/wasmsnapshot/slice.go` earns "independently materialisable" in two
+places, and both are easy to break:
+
+* **Each slice gets a fresh page-CAS per-trace tier.** Sharing one across
+  slices would make slice N's regions `kind=2` references to pages only slice
+  0's `wcppages.ns` carries — a set of containers readable only in order, which
+  is the opposite of the point. `TestSliceCarriesEveryPageItsSnapshotsReference`
+  loads each slice with the system cache **disabled**, so the container's own
+  store is the only possible source.
+* **Each slice's `wcp.idx` lists only its own quiescent points**, the first
+  flagged as its base, so `Set.Range()` makes the slice self-describing. No new
+  namespace was needed for this.
+
+`Finish` checks that the slice ranges tile the recording (slice i's end point is
+slice i+1's base). That check cannot currently fire: `AtQuiescentPoint` opens
+each slice at the exact point the previous one was sealed at and refuses a point
+that does not advance, so neither a gap nor an overlap is reachable through the
+public API. It is an assertion about that logic, and it lives in `checkTiling`
+so `internal/wasmsnapshot/slice_test.go` can exercise both violations directly —
+a defensive check no test can reach is indistinguishable from one that does not
+work.
+
+Sizing is the user's choice and "no slicing" is the default: `--slice-every`
+(quiescent-point interval between bases) and `--slice-bytes` (the accumulated
+**snapshot payload** — not the sealed container, whose trace half the CTFS
+writer only sizes at `ProduceTrace`). With neither set, the recording becomes
+one slice. `--slice-snapshot-every` is the seek granularity *inside* a slice and
+is a deliberately separate knob; the file's header explains why it is not called
+an interval.
+
+Two traps:
+
+* **`ModuleInstance.SetRecorder`, never `mi.Record = w`.** The instance carries
+  `TypesIndex`, the memo of which DWARF types the recorder has already been told
+  about; the two are created together in `InstantiateModuleWithRecord` and must
+  be replaced together. Slicing swaps the recorder on one live instance, so a
+  bare field write left slices after the first without their type registrations
+  — measured as slice 1 and 2 declaring `i64` where linear replay declared
+  `u32`, every other stream byte-identical.
+  `TestSliceTraceEqualsTheLinearTraceOfItsRange` is the pin.
+* **The correctness tests must use a state-carrying module.**
+  `TestSliceMaterialisationNeedsItsBaseSnapshot` runs over
+  `internal/wasmsnapshot/testdata/grow_mem.wasm`, whose every export returns a
+  function of accumulated state, and asserts both directions: with the base
+  snapshot restored the slice replays and lands in exactly the state linear
+  replay reaches; without it, a `DivergenceError`. `balance_calc` cannot show
+  the second half — its only export is pure. Confirmed: delete the memory copy
+  from `Snapshot.Restore` and this test fails, while
+  `TestSliceIsIndependentlyMaterialisable` and
+  `TestSnapshotMaterialisationIsByteIdentical` both still pass.
+
+  **The two fixtures cover different halves and neither covers both.**
+  `grow_mem.wat` carries no DWARF, so its replay emits *nothing* — measured,
+  its `steps.dat`, `types.dat` and `events.dat` are all zero bytes in both the
+  slice and the linear container. So the byte-identity comparisons over
+  `grow_mem` are comparing empty traces and pin only the container scaffolding;
+  trace-content identity is established on `balance_calc`, whose export is pure,
+  and *state* identity on `grow_mem`. A single fixture that is both
+  state-carrying and DWARF-bearing would close this, and is M38b's fourth
+  deliverable.
+
 ### Boundary-log replay vs. Stylus replay — why they stay separate
 
 M37's deliverable allowed either refactoring Stylus onto the generic path or

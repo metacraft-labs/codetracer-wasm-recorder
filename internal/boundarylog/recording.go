@@ -206,10 +206,11 @@ func (v onDiskValue) raw() rawValue {
 // LoadRecording reads a boundary recording from `path`, which may be either
 // the `.ct` directory itself or its `trace.json`.
 func LoadRecording(path string) (*Recording, error) {
-	dir, err := recordingDir(path)
+	rec, err := LoadRecordingMetadata(path)
 	if err != nil {
 		return nil, err
 	}
+	dir := rec.Source
 
 	eventsRaw, err := os.ReadFile(filepath.Join(dir, "trace.json"))
 	if err != nil {
@@ -218,6 +219,31 @@ func LoadRecording(path string) (*Recording, error) {
 	var events []traceEvent
 	if err := json.Unmarshal(eventsRaw, &events); err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", filepath.Join(dir, "trace.json"), err)
+	}
+
+	crossings, err := reconstructCrossings(events)
+	if err != nil {
+		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", dir, err)
+	}
+	rec.Crossings = crossings
+	return rec, nil
+}
+
+// LoadRecordingMetadata reads everything about a recording *except* its
+// crossings: the program metadata, the source paths and the spec §3.3 / §3.4
+// host state.
+//
+// This is what a streaming replay starts from
+// (`WASM-Replay-Snapshots-And-Slices.md` §2). None of these files describes the
+// execution, so none of them has to have arrived before the first exported call
+// can be driven — and on the browser path they typically have not: the daemon's
+// `JsonFileCtfsWriter` writes them at flush time, after `trace.json` has been
+// growing for a while. Every one of them is therefore optional, exactly as it
+// already is for a finished recording.
+func LoadRecordingMetadata(path string) (*Recording, error) {
+	dir, err := recordingDir(path)
+	if err != nil {
+		return nil, err
 	}
 
 	rec := &Recording{Source: dir}
@@ -246,12 +272,6 @@ func LoadRecording(path string) (*Recording, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("reading %s: %w", pathsPath, err)
 	}
-
-	crossings, err := reconstructCrossings(events)
-	if err != nil {
-		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", dir, err)
-	}
-	rec.Crossings = crossings
 
 	state, err := loadHostState(dir)
 	if err != nil {
@@ -342,242 +362,16 @@ type openCrossing struct {
 }
 
 func reconstructCrossings(events []traceEvent) ([]Crossing, error) {
-	var (
-		functions []functionRecord
-		varNames  []string
-		crossings []Crossing
-		stack     []openCrossing
-		pending   *valueRun
-	)
-
-	// closeDanglingImports pops open import crossings from the top of the
-	// stack. An import is bracketed by its own value runs, so anything
-	// other than its result run arriving means it returned nothing and is
-	// over. `keep` is the label of a run that legitimately continues the
-	// crossing on top (its result run); pass "" to close everything.
-	closeDanglingImports := func(keep string) {
-		for len(stack) > 0 {
-			top := stack[len(stack)-1]
-			if crossings[top.idx].Kind != CrossingImport {
-				return
-			}
-			if top.label == keep {
-				return
-			}
-			stack = stack[:len(stack)-1]
-		}
-	}
-
-	// closeRun applies the accumulated value run to the crossing stack.
-	closeRun := func() error {
-		if pending == nil {
-			return nil
-		}
-		run := *pending
-		pending = nil
-
-		importIdx, isImport := parseImportLabel(run.label)
-
-		// Close any import crossing this run does not continue. A run that
-		// is not the open import's own result run means that import is
-		// over — including a fresh argument run for the SAME import, which
-		// is a second call rather than a continuation.
-		keep := ""
-		if run.role == "ret" {
-			keep = run.label
-		}
-		closeDanglingImports(keep)
-
-		if run.role == "arg" {
-			if isImport {
-				// An argument run opens an import crossing.
-				crossings = append(crossings, Crossing{
-					Seq:   len(crossings),
-					Depth: len(stack),
-					Kind:  CrossingImport,
-					Index: importIdx,
-					Args:  run.values,
-				})
-				stack = append(stack, openCrossing{idx: len(crossings) - 1, label: run.label})
-				return nil
-			}
-			// An export's argument run belongs to the frame `Call` just
-			// opened.
-			if len(stack) == 0 || stack[len(stack)-1].label != run.label {
-				return fmt.Errorf(
-					"argument run for %q has no matching open export frame; the "+
-						"recording's Call/Return bracketing and its value bindings "+
-						"disagree", run.label)
-			}
-			crossings[stack[len(stack)-1].idx].Args = run.values
-			return nil
-		}
-
-		// role == "ret"
-		if len(stack) > 0 && stack[len(stack)-1].label == run.label {
-			top := stack[len(stack)-1]
-			crossings[top.idx].Results = run.values
-			crossings[top.idx].hasResults = true
-			if isImport {
-				// Imports are bracketed by their runs; exports are popped
-				// by their `Return` record.
-				stack = stack[:len(stack)-1]
-			}
-			return nil
-		}
-		if isImport {
-			// A result run with no open crossing means an import that
-			// takes no arguments: its only on-disk trace is this run.
-			crossings = append(crossings, Crossing{
-				Seq:        len(crossings),
-				Depth:      len(stack),
-				Kind:       CrossingImport,
-				Index:      importIdx,
-				Results:    run.values,
-				hasResults: true,
-			})
-			return nil
-		}
-		return fmt.Errorf(
-			"result run for %q has no matching open export frame; the recording's "+
-				"Call/Return bracketing and its value bindings disagree", run.label)
-	}
-
+	a := newAssembler()
 	for i := range events {
-		ev := &events[i]
-		switch {
-		case ev.Function != nil:
-			if err := closeRun(); err != nil {
-				return nil, err
-			}
-			functions = append(functions, *ev.Function)
-
-		case ev.VariableName != nil:
-			varNames = append(varNames, *ev.VariableName)
-
-		case ev.Value != nil:
-			id := int(ev.Value.VariableID)
-			if id < 0 || id >= len(varNames) {
-				return nil, fmt.Errorf(
-					"Value record references variable_id %d but only %d "+
-						"VariableName records have been seen", id, len(varNames))
-			}
-			name := varNames[id]
-			label, role, slot, ok := parseBindingName(name)
-			if !ok {
-				// A binding the boundary model does not produce. Close any
-				// run in flight and ignore it: a future producer may
-				// legitimately add non-boundary bindings, and dropping a
-				// value we do not understand is safe here precisely
-				// because replay independently re-derives everything
-				// inside the module.
-				if err := closeRun(); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			var odv onDiskValue
-			if err := json.Unmarshal(ev.Value.Value, &odv); err != nil {
-				return nil, fmt.Errorf("decoding value for binding %q: %w", name, err)
-			}
-			// A run ends when the binding's (label, role) changes, or when
-			// the slot index restarts at 0 — the latter is what
-			// distinguishes two back-to-back calls of the SAME import from
-			// one over-long tuple. (`Step` closes runs too, and the
-			// producer emits one before every flush, so this is a second,
-			// independent signal rather than the only one.)
-			if pending != nil && (pending.label != label || pending.role != role ||
-				(slot == 0 && len(pending.values) > 0)) {
-				if err := closeRun(); err != nil {
-					return nil, err
-				}
-			}
-			if pending == nil {
-				pending = &valueRun{label: label, role: role}
-			}
-			if slot != len(pending.values) {
-				return nil, fmt.Errorf(
-					"binding %q arrived at slot %d but %d value(s) of this tuple "+
-						"have been seen; the recording's value runs are not in slot order",
-					name, slot, len(pending.values))
-			}
-			pending.values = append(pending.values, odv.raw())
-
-		case ev.Call != nil:
-			if err := closeRun(); err != nil {
-				return nil, err
-			}
-			id := int(ev.Call.FunctionID)
-			if id < 0 || id >= len(functions) {
-				return nil, fmt.Errorf(
-					"Call record references function_id %d but only %d Function "+
-						"records have been seen", id, len(functions))
-			}
-			name := functions[id].Name
-			crossings = append(crossings, Crossing{
-				Seq:   len(crossings),
-				Depth: len(stack),
-				Kind:  CrossingExport,
-				Name:  name,
-			})
-			stack = append(stack, openCrossing{idx: len(crossings) - 1, label: name})
-
-		case ev.Return != nil:
-			if err := closeRun(); err != nil {
-				return nil, err
-			}
-			// An import still open when its caller returns had no results;
-			// the export's `Return` is proof it is over.
-			closeDanglingImports("")
-			if len(stack) == 0 {
-				return nil, fmt.Errorf("Return record with no open export frame")
-			}
-			top := stack[len(stack)-1]
-			if crossings[top.idx].Kind != CrossingExport {
-				return nil, fmt.Errorf(
-					"Return record closes %s, but an export frame was expected; "+
-						"the recording is structurally unbalanced",
-					crossings[top.idx].Describe())
-			}
-			stack = stack[:len(stack)-1]
-
-		default:
-			// Path / Step / Event records carry no boundary structure of
-			// their own, but they DO delimit value runs: `flushValues`
-			// emits exactly one `Step` immediately before each run, so a
-			// `Step` closes whatever run preceded it.
-			if ev.Path != nil || ev.Event != nil || ev.Step != nil {
-				if err := closeRun(); err != nil {
-					return nil, err
-				}
-			}
+		if err := a.push(&events[i]); err != nil {
+			return nil, err
 		}
 	}
-	if err := closeRun(); err != nil {
+	if err := a.finish(); err != nil {
 		return nil, err
 	}
-	closeDanglingImports("")
-
-	if len(stack) > 0 {
-		// An unbalanced stream. `codetracer-wasm-instrumenter`'s own
-		// reference decoder rejects this too: an export that exits by
-		// branching to its own function label emits no `__ct_emit_return`
-		// and leaves the crossing open (see M35b). Replaying such a
-		// recording would silently mis-attribute everything after the
-		// hole, so it is refused (spec §8).
-		open := make([]string, 0, len(stack))
-		for _, s := range stack {
-			open = append(open, crossings[s.idx].Describe())
-		}
-		return nil, fmt.Errorf(
-			"boundary recording is structurally unbalanced: %d crossing(s) never "+
-				"closed (%s). An exported function that exits by branching to its "+
-				"own label emits no return hook; such a recording cannot be replayed "+
-				"faithfully (spec §8)",
-			len(stack), strings.Join(open, ", "))
-	}
-
-	return crossings, nil
+	return a.crossings, nil
 }
 
 // parseBindingName splits `browser_session.js`'s `boundaryBindingName`

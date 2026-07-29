@@ -236,6 +236,26 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			"CodeTracer backend-manager wrote for a browser WASM session (or its "+
 			"trace.json).  Pass the ORIGINAL, uninstrumented .wasm.")
 
+	// Streaming boundary-log replay (WASM-Replay-Snapshots-And-Slices.md §2).
+	// The recording is consumed as it arrives and re-executed in lockstep, so
+	// snapshots and slices exist by the time the page stops rather than being
+	// derived in a pass afterwards.
+	var boundaryStreamPath string
+	flags.StringVar(&boundaryStreamPath, "boundary-stream", "",
+		"Consumes the --boundary-log recording as it is still being produced, "+
+			"re-executing in lockstep.  `-` reads the recording's trace.json from "+
+			"stdin, which is what a daemon-side tee provides and where closing the "+
+			"pipe ends the stream; a path follows a file the producer is appending "+
+			"to and then needs --stream-done.  The --boundary-log argument still "+
+			"supplies the recording's metadata and host state.")
+
+	var streamDonePath string
+	flags.StringVar(&streamDonePath, "stream-done", "",
+		"With --boundary-stream <file>, the `marker` file whose appearance means "+
+			"the producer has finished writing.  A file has no end of stream, so "+
+			"without this there is no way to tell a recording still in progress from "+
+			"one that is over.")
+
 	var boundaryManifestPath string
 	flags.StringVar(&boundaryManifestPath, "boundary-manifest", "",
 		"Path to the `ct-instrument` sidecar manifest for --boundary-log.  "+
@@ -437,9 +457,19 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			traceName:    wasmFile,
 			wasmPath:     wasmPath,
 			logPath:      boundaryLogPath,
+			streamPath:   boundaryStreamPath,
+			streamDone:   streamDonePath,
+			stdin:        os.Stdin,
 			manifestPath: boundaryManifestPath,
 			snapshots:    snapshots,
 		}, stdOut, stdErr)
+	}
+
+	if boundaryStreamPath != "" || streamDonePath != "" {
+		fmt.Fprintln(stdErr, "--boundary-stream and --stream-done apply to "+
+			"--boundary-log replay only: they say how the recording arrives, and "+
+			"nothing else consumes a boundary recording")
+		return 1
 	}
 
 	if snapshots.requested() {

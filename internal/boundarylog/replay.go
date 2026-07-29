@@ -157,6 +157,8 @@ func (p *importPlan) describe() string {
 type replayer struct {
 	opts    Options
 	imports []importPlan
+	// planned guards `planImports` against running twice.
+	planned bool
 	// cursor is the index of the next crossing the recording expects.
 	// Every export call and every checked import call advances it, so the
 	// exact *global interleaving* of the recording is verified, not just
@@ -193,32 +195,20 @@ func Replay(ctx context.Context, opts Options) (Result, error) {
 	return r.run(ctx)
 }
 
-func (r *replayer) run(ctx context.Context) (Result, error) {
-	rec := r.opts.Recording
-	if rec == nil {
-		return r.result, fmt.Errorf("boundary replay: no recording supplied")
-	}
-
+// prepare performs every step of spec §6 that precedes the first driven call:
+// resolving the imports, satisfying them, instantiating the guest and applying
+// §3.3 initial state.
+//
+// It is shared by the batch driver (`run`) and the streaming driver
+// (`StreamingReplay`), because none of it depends on the recording's crossings
+// — only on the module and on the host state — and so none of it has to wait
+// for a stream to finish arriving.
+func (r *replayer) prepare(ctx context.Context) (api.Module, error) {
 	if err := r.planImports(); err != nil {
-		return r.result, err
-	}
-	if err := r.checkExports(); err != nil {
-		return r.result, err
+		return nil, err
 	}
 	if err := r.checkImportedMemories(); err != nil {
-		return r.result, err
-	}
-	if nested := rec.NestedExports(); len(nested) > 0 {
-		names := make([]string, 0, len(nested))
-		for _, c := range nested {
-			names = append(names, c.Describe())
-		}
-		return r.result, fmt.Errorf(
-			"boundary recording contains %d exported call(s) made while another "+
-				"crossing was open (%s). Replaying a host callback would need the "+
-				"host's own control flow, which a boundary log does not carry; such "+
-				"a recording is refused rather than silently replayed wrong (spec §8)",
-			len(nested), strings.Join(names, ", "))
+		return nil, err
 	}
 
 	// --- spec §6.2 and §3.3: satisfy every one of the guest's imports ----
@@ -227,7 +217,7 @@ func (r *replayer) run(ctx context.Context) (Result, error) {
 	// exist before the guest is instantiated, because the guest imports
 	// from them.
 	if err := r.instantiateHostModules(ctx); err != nil {
-		return r.result, err
+		return nil, err
 	}
 
 	cfg := r.opts.ModuleConfig
@@ -237,7 +227,7 @@ func (r *replayer) run(ctx context.Context) (Result, error) {
 	guest, err := r.opts.Runtime.InstantiateModuleWithRecord(
 		ctx, r.opts.Compiled, cfg, r.opts.Recorder)
 	if err != nil {
-		return r.result, fmt.Errorf("instantiating the recorded module for replay: %w", err)
+		return nil, fmt.Errorf("instantiating the recorded module for replay: %w", err)
 	}
 
 	// The initial *contents* of an imported memory are written after
@@ -245,6 +235,50 @@ func (r *replayer) run(ctx context.Context) (Result, error) {
 	// this fills it in. Both happen before the first exported call, as
 	// spec §3.3 requires.
 	if err := r.applyInitialMemory(); err != nil {
+		return nil, err
+	}
+	return guest, nil
+}
+
+// refuseNestedExports is spec §8's discipline: a recording containing an
+// exported call made while another crossing was open cannot be replayed, so it
+// is refused rather than silently replayed wrong.
+func refuseNestedExports(nested []*Crossing) error {
+	if len(nested) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(nested))
+	for _, c := range nested {
+		names = append(names, c.Describe())
+	}
+	return fmt.Errorf(
+		"boundary recording contains %d exported call(s) made while another "+
+			"crossing was open (%s). Replaying a host callback would need the "+
+			"host's own control flow, which a boundary log does not carry; such "+
+			"a recording is refused rather than silently replayed wrong (spec §8)",
+		len(nested), strings.Join(names, ", "))
+}
+
+func (r *replayer) run(ctx context.Context) (Result, error) {
+	rec := r.opts.Recording
+	if rec == nil {
+		return r.result, fmt.Errorf("boundary replay: no recording supplied")
+	}
+
+	// Import planning first, so handing replay the *instrumented* module is
+	// reported as the mistake it is rather than as a mismatched export.
+	if err := r.planImports(); err != nil {
+		return r.result, err
+	}
+	if err := r.checkExports(); err != nil {
+		return r.result, err
+	}
+	if err := refuseNestedExports(rec.NestedExports()); err != nil {
+		return r.result, err
+	}
+
+	guest, err := r.prepare(ctx)
+	if err != nil {
 		return r.result, err
 	}
 
@@ -361,7 +395,15 @@ func (r *replayer) atQuiescentPoint(point int, guest api.Module) error {
 // planImports resolves every imported function's signature, taking it from
 // the module's own type section and cross-checking it against the manifest
 // when one is supplied.
+//
+// It is idempotent: both `run` (which calls it early, so that being handed the
+// instrumented module is reported before anything else) and `prepare` (which
+// needs it for the streaming path, where there is no early call) invoke it.
 func (r *replayer) planImports() error {
+	if r.planned {
+		return nil
+	}
+	r.planned = true
 	defs := r.opts.Compiled.ImportedFunctions()
 	// `ImportedFunctions` returns definitions in function-import index
 	// order, which is exactly the order `ct-instrument` numbers imports
@@ -427,58 +469,71 @@ func (r *replayer) planImports() error {
 // module with a compatible signature, before anything is instantiated, so a
 // mismatched module fails with a clear message rather than mid-replay.
 func (r *replayer) checkExports() error {
-	exported := r.opts.Compiled.ExportedFunctions()
 	for _, c := range r.opts.Recording.TopLevelExports() {
-		if c.Name == "" {
-			return fmt.Errorf(
-				"%s has no function name: the recording was made without a "+
-					"`ct-instrument` manifest, so its exported calls cannot be "+
-					"matched to the module's exports", c.Describe())
+		if err := r.checkExportCrossing(c); err != nil {
+			return err
 		}
-		def, ok := exported[c.Name]
-		if !ok {
-			names := make([]string, 0, len(exported))
-			for n := range exported {
-				names = append(names, n)
-			}
-			sort.Strings(names)
-			return fmt.Errorf(
-				"%s: the module exports no function named %q (it exports: %s)",
-				c.Describe(), c.Name, strings.Join(names, ", "))
+	}
+	return nil
+}
+
+// checkExportCrossing validates one recorded exported call against the module.
+//
+// The streaming driver calls this per crossing as it arrives, which is the only
+// thing it *can* do: a stream has no "every export" to iterate before the first
+// call is driven. The batch driver keeps running it over all of them up front,
+// so a mismatched module still fails before anything is instantiated.
+func (r *replayer) checkExportCrossing(c *Crossing) error {
+	exported := r.opts.Compiled.ExportedFunctions()
+	if c.Name == "" {
+		return fmt.Errorf(
+			"%s has no function name: the recording was made without a "+
+				"`ct-instrument` manifest, so its exported calls cannot be "+
+				"matched to the module's exports", c.Describe())
+	}
+	def, ok := exported[c.Name]
+	if !ok {
+		names := make([]string, 0, len(exported))
+		for n := range exported {
+			names = append(names, n)
 		}
-		sig, err := signatureOf(def)
+		sort.Strings(names)
+		return fmt.Errorf(
+			"%s: the module exports no function named %q (it exports: %s)",
+			c.Describe(), c.Name, strings.Join(names, ", "))
+	}
+	sig, err := signatureOf(def)
+	if err != nil {
+		return fmt.Errorf("export %q: %w", c.Name, err)
+	}
+	if b := r.opts.Manifest.ExportBoundaryByName(c.Name); b != nil {
+		msig, err := b.Signature()
 		if err != nil {
-			return fmt.Errorf("export %q: %w", c.Name, err)
+			return err
 		}
-		if b := r.opts.Manifest.ExportBoundaryByName(c.Name); b != nil {
-			msig, err := b.Signature()
-			if err != nil {
-				return err
-			}
-			if !msig.Equal(sig) {
-				return fmt.Errorf(
-					"instrumentation manifest and module disagree about export %q: "+
-						"manifest says %s, module says %s. The recording was made "+
-						"from a different build of this module", c.Name, msig, sig)
-			}
+		if !msig.Equal(sig) {
+			return fmt.Errorf(
+				"instrumentation manifest and module disagree about export %q: "+
+					"manifest says %s, module says %s. The recording was made "+
+					"from a different build of this module", c.Name, msig, sig)
 		}
-		if len(c.Args) != len(sig.Params) {
-			return &DivergenceError{
-				What:     "exported call arity",
-				Where:    c.Describe(),
-				Recorded: fmt.Sprintf("%d argument(s)", len(c.Args)),
-				Actual:   fmt.Sprintf("the module's %q takes %d %s", c.Name, len(sig.Params), sig),
-			}
+	}
+	if len(c.Args) != len(sig.Params) {
+		return &DivergenceError{
+			What:     "exported call arity",
+			Where:    c.Describe(),
+			Recorded: fmt.Sprintf("%d argument(s)", len(c.Args)),
+			Actual:   fmt.Sprintf("the module's %q takes %d %s", c.Name, len(sig.Params), sig),
 		}
-		if len(sig.Results) > 0 && !c.hasResults {
-			return &DivergenceError{
-				What:     "exported return value",
-				Where:    c.Describe(),
-				Recorded: "no result values",
-				Actual:   fmt.Sprintf("the module's %q returns %d value(s) %s", c.Name, len(sig.Results), sig),
-				Detail: "the recording carries no `:ret<n>` bindings for this call, " +
-					"so the replayed return value cannot be checked against anything",
-			}
+	}
+	if len(sig.Results) > 0 && !c.hasResults {
+		return &DivergenceError{
+			What:     "exported return value",
+			Where:    c.Describe(),
+			Recorded: "no result values",
+			Actual:   fmt.Sprintf("the module's %q returns %d value(s) %s", c.Name, len(sig.Results), sig),
+			Detail: "the recording carries no `:ret<n>` bindings for this call, " +
+				"so the replayed return value cannot be checked against anything",
 		}
 	}
 	return nil

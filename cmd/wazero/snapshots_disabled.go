@@ -40,18 +40,20 @@ func (o snapshotOptions) configure(
 	rec *boundarylog.Recording,
 	opts *boundarylog.Options,
 	stdOut, stdErr io.Writer,
-) (func(containerPath string) error, error) {
+) (snapshotPlan, error) {
 	if err := o.validate(); err != nil {
-		return nil, err
+		return snapshotPlan{}, err
 	}
 	if o.requested() {
-		return nil, fmt.Errorf(
-			"this build of the recorder does not derive or consume replay snapshots. " +
+		return snapshotPlan{}, fmt.Errorf(
+			"this build of the recorder does not derive or consume replay snapshots, " +
+				"and does not split a recording into slices (every slice opens with a " +
+				"base snapshot, so slicing is snapshot derivation). " +
 				"It replays a boundary recording end to end and materialises a complete, " +
 				"correct trace — including from a `.ct` that already carries snapshot " +
 				"namespaces, which it reads and ignores. What it does not do is reach a " +
 				"point in the middle without re-executing everything before it. Drop " +
 				"--snapshots / --seek-from to materialise the recording linearly")
 	}
-	return func(string) error { return nil }, nil
+	return snapshotPlan{finish: func(string) error { return nil }}, nil
 }

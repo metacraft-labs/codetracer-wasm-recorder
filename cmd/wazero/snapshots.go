@@ -31,6 +31,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/boundarylog"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmsnapshot"
+	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 // snapshotsAvailable reports whether this build derives and consumes
@@ -47,21 +48,45 @@ func (o snapshotOptions) configure(
 	rec *boundarylog.Recording,
 	opts *boundarylog.Options,
 	stdOut, stdErr io.Writer,
-) (finish func(containerPath string) error, err error) {
+) (plan snapshotPlan, err error) {
 	if err := o.validate(); err != nil {
-		return nil, err
+		return plan, err
 	}
 
+	var hooks []func(int, api.Module) error
+
+	// Slice production (§7) needs no up-front point index: it declares each
+	// quiescent point as the replay reaches it, which is what lets it work
+	// against a recording that is still arriving (`--boundary-stream`).
+	if o.slicing() {
+		sw, err := o.sliceWriter(rec)
+		if err != nil {
+			return plan, err
+		}
+		hooks = append(hooks, sw.AtQuiescentPoint)
+		opts.AtQuiescentPoint = chainHooks(hooks)
+		// The slice writer owns the module's recorder slot from quiescent
+		// point 0 onwards, so the whole-trace recorder must not also be
+		// installed — two writers cannot both hold `ModuleInstance.Record`,
+		// and a trace half-recorded into each would be neither.
+		opts.Recorder = nil
+		return snapshotPlan{slicing: true, finish: func(string) error {
+			return finishSlices(sw, stdOut)
+		}}, nil
+	}
+
+	// Everything below needs to know the recording's quiescent points up
+	// front, which means the recording has to be complete. A streaming replay
+	// is refused before it gets here (see `boundary_log.go`).
 	points, err := wasmsnapshot.QuiescentPoints(rec)
 	if err != nil {
-		return nil, err
+		return plan, err
 	}
-	var hooks []func(int, api.Module) error
 
 	if o.seeking() {
 		set, diag, err := wasmsnapshot.Load(o.source, true)
 		if err != nil {
-			return nil, err
+			return plan, err
 		}
 		if set == nil {
 			// The narrowed version gate of snapshot spec §6: the container is
@@ -69,20 +94,20 @@ func (o snapshotOptions) configure(
 			// *seek*, not the recording — the caller can drop --seek-from and
 			// materialise the whole recording linearly.
 			fmt.Fprintf(stdErr, "note: %s\n", diag)
-			return nil, fmt.Errorf(
+			return plan, fmt.Errorf(
 				"--seek-from was requested but %s carries no usable snapshots; drop "+
 					"--seek-from to materialise the recording by linear replay", o.source)
 		}
 		nearest, ok := set.Nearest(o.from)
 		if !ok {
-			return nil, fmt.Errorf(
+			return plan, fmt.Errorf(
 				"%s carries no snapshot at or before quiescent point %d, so that point "+
 					"cannot be seeked to; it has %d snapshot(s) across %d point(s)",
 				o.source, o.from, set.SnapshotCount(), len(set.Points()))
 		}
 		snap, err := set.Snapshot(nearest)
 		if err != nil {
-			return nil, err
+			return plan, err
 		}
 		if int(nearest.Ordinal) != o.from {
 			// Seeking lands on the nearest preceding snapshot and replays
@@ -111,7 +136,7 @@ func (o snapshotOptions) configure(
 				if !ok {
 					return fmt.Errorf("module is a %T, not a wazero ModuleInstance", mod)
 				}
-				mi.Record = recorder
+				mi.SetRecorder(recorder)
 				return nil
 			})
 		}
@@ -123,7 +148,7 @@ func (o snapshotOptions) configure(
 			wasmsnapshot.NewTiers(o.useSystemCache),
 			wasmsnapshot.EncodeOptions{PromoteToSystem: o.promote})
 		if err != nil {
-			return nil, err
+			return plan, err
 		}
 		every := o.every
 		if every < 1 {
@@ -142,17 +167,10 @@ func (o snapshotOptions) configure(
 	}
 
 	if len(hooks) > 0 {
-		opts.AtQuiescentPoint = func(p int, mod api.Module) error {
-			for _, h := range hooks {
-				if err := h(p, mod); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
+		opts.AtQuiescentPoint = chainHooks(hooks)
 	}
 
-	return func(containerPath string) error {
+	return snapshotPlan{finish: func(containerPath string) error {
 		if builder == nil {
 			return nil
 		}
@@ -172,5 +190,57 @@ func (o snapshotOptions) configure(
 		fmt.Fprintf(stdOut, "attached %d snapshot(s) across %d quiescent point(s) to %s\n",
 			builder.SnapshotCount(), len(points), containerPath)
 		return nil
-	}, nil
+	}}, nil
+}
+
+// chainHooks runs several quiescent-point hooks as one, in order.
+func chainHooks(hooks []func(int, api.Module) error) func(int, api.Module) error {
+	return func(p int, mod api.Module) error {
+		for _, h := range hooks {
+			if err := h(p, mod); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// sliceWriter builds the slice producer of snapshot spec §7 from the flags.
+func (o snapshotOptions) sliceWriter(rec *boundarylog.Recording) (*wasmsnapshot.SliceWriter, error) {
+	program := rec.Program
+	if program == "" {
+		// A recording still being streamed may not have had its
+		// `trace_metadata.json` written yet. The name only decides what the
+		// slice containers are called, so a stable fallback is better than
+		// refusing to slice.
+		program = "recording"
+	}
+	return wasmsnapshot.NewSliceWriter(wasmsnapshot.SliceOptions{
+		Dir:     o.sliceDir,
+		Program: program,
+		Workdir: rec.Workdir,
+		Policy: wasmsnapshot.SlicePolicy{
+			EveryPoints: o.sliceEvery,
+			TargetBytes: o.sliceBytes,
+		},
+		SnapshotEvery:  o.sliceSnapshotEvery,
+		UseSystemCache: o.useSystemCache,
+		Encode:         wasmsnapshot.EncodeOptions{PromoteToSystem: o.promote},
+		NewRecorder:    func() tracewriter.TraceRecorder { return tracewriter.NewCtfsTraceWriter() },
+	})
+}
+
+// finishSlices seals the last slice, writes the manifest and reports the set.
+func finishSlices(sw *wasmsnapshot.SliceWriter, stdOut io.Writer) error {
+	m, path, err := sw.Finish()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdOut, "wrote %d slice(s) covering quiescent points 0..%d, manifest at %s\n",
+		len(m.Slices), m.TotalPoints-1, path)
+	for _, s := range m.Slices {
+		fmt.Fprintf(stdOut, "  slice %d: points [%d,%d], %d call(s), %d snapshot(s), %d bytes -> %s\n",
+			s.Index, s.BasePoint, s.EndPoint, s.ExportCalls, s.Snapshots, s.Bytes, s.File)
+	}
+	return nil
 }

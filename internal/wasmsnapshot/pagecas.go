@@ -101,6 +101,18 @@ func (c *PerTraceCache) Describe() string { return "per-trace cache (wcppages.ns
 // Len reports how many distinct pages the tier holds.
 func (c *PerTraceCache) Len() int { return len(c.pages) }
 
+// Bytes reports the total page content held, which is what the tier
+// contributes to a container's `wcppages.ns` stream. It is the dominant term
+// in a slice's snapshot payload, so `SlicePolicy.TargetBytes` is measured
+// against it.
+func (c *PerTraceCache) Bytes() int64 {
+	var n int64
+	for _, p := range c.pages {
+		n += int64(len(p))
+	}
+	return n
+}
+
 // ---------------------------------------------------------------------------
 // Tier 2 — the system cache
 // ---------------------------------------------------------------------------

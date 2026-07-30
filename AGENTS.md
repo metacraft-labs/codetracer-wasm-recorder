@@ -210,24 +210,56 @@ each reported rather than guessed at:
   `codetracer` repo (`wasm-memory-calldata/ledger-settle.ct` carries three
   import crossings in the old spelling).
 
-  Two residual cases, stated so neither is mistaken for a check that exists:
+  One residual case, stated so it is not mistaken for a check that exists:
 
   1. A recording that carries **no import crossing at all** is
      indistinguishable from a pre-M39 one, so a replay of it that calls a
      `() -> ()` import falls back to counting rather than diverging. Any
      recording that crossed out even once under an M39 producer is in the
      strict mode.
-  2. **The streaming driver derives the witness one call group late.**
-     `LoadRecording` sees the whole recording, so the batch driver knows the
-     format before it drives anything. `StreamingReplay` cannot: it sets the
-     witness in `appendGroup`, from the crossings of the group about to be
-     driven, so a `() -> ()` import call made while replaying a group that
-     arrives *before* the recording's first import crossing is counted
-     unchecked — where the batch driver would have diverged on it. Measured:
-     an M39 recording whose first group carries no import crossing replays
-     through `Replay` as a `DivergenceError` and through `StreamingReplay`
-     with `err == nil` and `UncheckedImportCalls == 1`. The two paths are
-     supposed to differ only in what they know, never in what they accept.
+
+  **The streaming driver reaches the same verdict, and it gets there by
+  deferring rather than by deriving** (M51). The witness is a property of the
+  *whole* recording, and a stream is not whole while it is being replayed:
+  `appendGroup` can only accumulate it from the groups that have arrived, so
+  a false value there means "not yet", not "not at all". Classifying a
+  `() -> ()` import call on that would answer permissively a question the
+  batch driver answers strictly — which is what it used to do, and the one
+  place M39 left the two drivers disagreeing about what to accept.
+
+  So `serviceUnwitnessedValuelessImport` does not answer at the call. It
+  stashes what a strict reading would have reported, replays on under the
+  permissive reading (the only one under which replaying on means anything),
+  and `resolveDeferredValuelessImports` decides at end of stream, where the
+  accumulated witness is by construction the one `LoadRecording` derives from
+  the same bytes. Three outcomes, no quiet fallback among them: witness true
+  → the stashed divergence is the replay's error; witness false on a complete
+  stream → the M37 unchecked count, which is exactly what the batch driver
+  would have done; witness false on a **truncated** stream → refused, because
+  a prefix cannot settle a property of the whole recording and guessing
+  permissively is the degradation §8 forbids.
+
+  The diagnostics can still differ where the knowledge does: a streaming
+  refusal names the crossing it had seen at the deferred call, which is
+  fewer than the batch driver had. The *verdict* is what is held equal, by
+  `TestBothDriversAgreeOnAValuelessImportDivergence` over every position of
+  the recording's first import crossing, by
+  `TestBothDriversAgreeOnSeveralValuelessImportsInOneGroup` over its position
+  *within* a group, and by `TestBothDriversAgreeOnAMixedRecording` over a
+  recording that interleaves a value-less crossing with a value-carrying one
+  in both vintages. Two properties underneath them are asserted directly
+  rather than inferred from a pair of verdicts, because they are the reasons
+  the verdicts agree: `TestTheStreamingWitnessEqualsTheBatchWitness` (the
+  accumulated witness at end of stream *is* `LoadRecording`'s — two separate
+  derivations, one statement) and
+  `TestNoAcceptedStreamingReplayLeavesAClassificationPending` (an accepted
+  streaming replay reporting an unchecked value-less call had a genuinely
+  false witness on a stream that genuinely ended — driven over every call-group
+  prefix of every shape, so a deferral dropped on a truncation is caught).
+  `matchImportCrossing`'s side-effect freedom is pinned at the unit level by
+  `TestTheSpeculativeStrictCheckLeavesNoTrace` and end to end by the mixed
+  recording, where a spurious cursor advance would eat the crossing the next
+  call needs.
 * Floats lose NaN payloads on the browser path (JS `Number`), which spec §7 flags
   as a divergence risk. `host_runtime.js` documents the same limit.
 * `boundary_state.json` (spec §3.3 / §3.4) **is** produced as of M44, by
@@ -403,14 +435,23 @@ the whole path from a headless browser and times each slice against
 `trace.json`'s mtime — the write of the `]` closing its array, and so the
 instant the recording stopped being produced.
 
-**One caveat that is not the daemon's.** Both browser producers
-(`@codetracer/runtime-browser` and the instrumenter's browser session)
-buffer 256 events before their first flush, with no time-based flush. A page
-producing fewer than that hands the daemon its whole recording in one batch
-at `stop()`, and then nothing here can derive anything "while the page is
-still running" no matter how promptly it reads. The demo script patches
-`flushThreshold: 1` into its scratch page for exactly this reason. Treat a
-short page's recording as arriving all at once until that default changes.
+**The producers stream by default** (M38d). They used to not: both browser
+producers (`@codetracer/runtime-browser` and the instrumenter's browser
+session) buffered 256 events before their first flush with no time bound, so a
+page producing fewer than that — most short pages, and every fixture here —
+handed the daemon its whole recording in one batch at `stop()`, and nothing on
+this side could derive anything "while the page is still running" however
+promptly it read. `stream-snapshots-demo.sh` patched `flushThreshold: 1` into
+its scratch page for exactly that reason.
+
+Both now flush on whichever bound is reached first: 256 events, **or** 50ms
+since the batch's first event (`DEFAULT_FLUSH_INTERVAL_MS`). The interval caps
+timer-driven frames at 20/second whatever the event rate, and a page producing
+more than 5120 events/second reaches the count threshold first and never arms
+the timer at all — measured, a 1M-event loop ships the same 3907 frames as
+before, at the same cost inside run-to-run noise. The demo no longer patches
+anything into its page and refuses to run if something does, so the check is
+now on the shipped defaults.
 
 Four things are load-bearing:
 

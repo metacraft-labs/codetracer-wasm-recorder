@@ -82,7 +82,16 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 				"finished container instead")
 	}
 
-	r := &replayer{opts: opts, providers: map[string]api.Module{}}
+	// The streaming driver cannot decide, at the moment of the call, whether an
+	// unmatched `() -> ()` import call is a §6 divergence or an M37 unchecked
+	// call: `Recording.MarkersIdentifyImports` is a property of the whole
+	// recording and the whole recording has not arrived. It therefore defers
+	// the question and `resolveDeferredValuelessImports` answers it below,
+	// against a witness that is final. See `serviceUnwitnessedValuelessImport`.
+	r := &replayer{
+		opts: opts, providers: map[string]api.Module{},
+		deferValuelessImports: true,
+	}
 	guest, err := r.prepare(ctx)
 	if err != nil {
 		return out, err
@@ -130,6 +139,15 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 	out.Result = r.result
 	out.Result.FromPoint, out.Result.ToPoint = 0, point
 
+	// The stream is over, so `rec.MarkersIdentifyImports` now says exactly what
+	// `LoadRecording` would have said about the same bytes. Any value-less
+	// import call whose classification was deferred is decided here, before the
+	// checks below, because the batch driver would have reported it at the call
+	// itself — which precedes every one of them.
+	if err := r.resolveDeferredValuelessImports(rec, out.Truncation); err != nil {
+		return out, err
+	}
+
 	// Every crossing the stream delivered must have been consumed. A leftover
 	// means the module stopped calling out earlier than it did when recorded —
 	// the same check `Replay` makes at the end of a whole recording, and just
@@ -149,6 +167,55 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 	return out, nil
 }
 
+// resolveDeferredValuelessImports answers, at end of stream, the question
+// `serviceUnwitnessedValuelessImport` refused to answer at the call.
+//
+// This is M51's fix. The three outcomes are exhaustive and none of them is a
+// quiet fallback:
+//
+//   - the witness ended TRUE — the recording's markers do name the import
+//     edge, so the batch driver would have been strict from its first call and
+//     would have diverged where this replay deferred. The stashed divergence is
+//     returned, and the two drivers reach the same verdict.
+//   - the witness ended FALSE on a complete stream — the recording carries no
+//     import-labelled marker anywhere, which is exactly what `LoadRecording`
+//     would have derived from the same bytes. The batch driver would have taken
+//     the same M37 arm at the same call, so the two runs are identical and the
+//     count in `Result.UncheckedImportCalls` is the shared answer.
+//   - the witness ended FALSE on a TRUNCATED stream — "false" here means "no
+//     import marker arrived before the producer stopped", which is not the same
+//     statement and cannot be promoted to it. The classification is genuinely
+//     unresolvable, so it is refused. Accepting it would be a guess, and a
+//     guess in the permissive direction is precisely the degradation §8 forbids.
+func (r *replayer) resolveDeferredValuelessImports(rec *Recording, trunc *TruncationError) error {
+	if r.deferredValueless == nil {
+		return nil
+	}
+	if rec.MarkersIdentifyImports {
+		return r.deferredValueless
+	}
+	if trunc != nil {
+		return fmt.Errorf(
+			"a call to a `() -> ()` import could not be classified: %s. Whether such "+
+				"a call is a spec §6 divergence or an unchecked call (the pre-M39 "+
+				"behaviour) depends on whether the recording's realm markers name the "+
+				"import edge, and no such marker had arrived when the stream was cut "+
+				"short (%s). A prefix cannot settle a property of the whole recording, "+
+				"so the replay is refused rather than accepted under a guess (spec §8). "+
+				"Replay the finished recording instead. What the strict reading would "+
+				"have reported: %w",
+			r.deferredValuelessSite(), trunc.Kind, r.deferredValueless)
+	}
+	return nil
+}
+
+// deferredValuelessSite names where the deferred classification arose, for the
+// truncation diagnostic above.
+func (r *replayer) deferredValuelessSite() string {
+	return fmt.Sprintf("after %d exported and %d imported call(s)",
+		r.result.ExportCalls, r.result.ImportCalls)
+}
+
 // appendGroup adds one call group's crossings to the growing recording and
 // returns the index of the group's top-level export crossing.
 //
@@ -166,11 +233,18 @@ func (r *replayer) appendGroup(rec *Recording, group []Crossing) (int, error) {
 	var nested []*Crossing
 	for i := range group {
 		c := group[i]
-		// The recording's format witness, established as it arrives: a
+		// The recording's format witness, accumulated as it arrives: a
 		// crossing bracketed by import-labelled realm markers can only come
-		// from an M39 producer. It has to be set before the group is driven,
-		// because it is what decides whether a `() -> ()` import call the
-		// replay makes is checked or counted (see `serviceImport`).
+		// from an M39 producer, so once true it stays true.
+		//
+		// It is **monotone, not final**. A true value here is sound — the
+		// marker really did arrive — but a false one only means "not yet",
+		// and `LoadRecording` derives the same flag from the WHOLE document.
+		// That gap is M51: a `() -> ()` import call made while this is still
+		// false must not be classified on it, and is not. See
+		// `serviceUnwitnessedValuelessImport` and
+		// `resolveDeferredValuelessImports`, which decide once the stream has
+		// ended and the two derivations agree by construction.
 		if c.markerBracketed {
 			rec.MarkersIdentifyImports = true
 		}

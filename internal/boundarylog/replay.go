@@ -179,6 +179,31 @@ type replayer struct {
 	// guest is set once the module is instantiated, so mutation
 	// application can reach its imported memories.
 	providers map[string]api.Module
+
+	// deferValuelessImports switches the `() -> ()` unwitnessed-import arm of
+	// `serviceImport` from *deciding* to *deferring*. It is set by
+	// `StreamingReplay` and by nothing else.
+	//
+	// `Recording.MarkersIdentifyImports` is a property of the WHOLE recording:
+	// `LoadRecording` derives it before `Replay` drives anything, so the batch
+	// driver knows, at its first call, whether an unmatched value-less import
+	// call is a spec §6 divergence or an M37 unchecked call. A streaming
+	// driver cannot know that — the marker that would establish it may not
+	// have been produced yet — and guessing "not yet seen" means answering
+	// *permissively* on a question the batch driver answers strictly, which is
+	// the silent degradation §8 exists to prevent (M51).
+	//
+	// So the streaming driver does not answer it at the call. It replays the
+	// call under the permissive reading (the only reading under which
+	// replaying on is meaningful), stashes what a strict reading would have
+	// said in `deferredValueless`, and re-decides at end of stream, where the
+	// witness is final and identical to the one `LoadRecording` computes.
+	deferValuelessImports bool
+	// deferredValueless holds what the strict reading would have reported at
+	// the FIRST value-less import call that could not be classified when it
+	// was made. It is returned as the replay's error if, and only if, the
+	// witness ends up true.
+	deferredValueless error
 }
 
 // Replay re-executes the recorded module against its boundary recording and
@@ -802,72 +827,15 @@ func (r *replayer) serviceImport(plan *importPlan, mod api.Module, stack []uint6
 	// the interleaving are verified and a mismatch is a divergence.
 	if len(plan.sig.Params) == 0 && len(plan.sig.Results) == 0 &&
 		!r.opts.Recording.MarkersIdentifyImports {
-		r.result.UncheckedImportCalls++
+		r.serviceUnwitnessedValuelessImport(plan)
 		return
 	}
 
-	crossings := r.opts.Recording.Crossings
-	if r.cursor >= len(crossings) {
-		r.err = &DivergenceError{
-			What:     "import call",
-			Where:    plan.describe(),
-			Recorded: fmt.Sprintf("nothing — the recording ends after %d crossing(s)", len(crossings)),
-			Actual:   "replay called this import",
-			Detail: "the module crossed the boundary more times than it did when " +
-				"recorded",
-		}
-		zeroStack(stack, len(plan.resultTyps))
-		return
-	}
-
-	c := &crossings[r.cursor]
-	if c.Kind != CrossingImport {
-		r.err = &DivergenceError{
-			What:     "crossing kind",
-			Where:    fmt.Sprintf("crossing #%d", c.Seq),
-			Recorded: c.Describe(),
-			Actual:   fmt.Sprintf("replay called %s", plan.describe()),
-		}
-		zeroStack(stack, len(plan.resultTyps))
-		return
-	}
-	if c.Index != plan.index {
-		r.err = &DivergenceError{
-			What:     "import index",
-			Where:    fmt.Sprintf("crossing #%d", c.Seq),
-			Recorded: fmt.Sprintf("import #%d", c.Index),
-			Actual:   fmt.Sprintf("import #%d (%s.%s)", plan.index, plan.module, plan.name),
-			Detail: "replay reached a different host call than the one recorded at " +
-				"this point",
-		}
-		zeroStack(stack, len(plan.resultTyps))
-		return
-	}
-
-	// --- arguments: assert the recorded values match ---------------------
-	wantArgs, err := decodeTuple("argument", c.Args, plan.sig.Params)
+	c, err := r.matchImportCrossing(plan, stack)
 	if err != nil {
-		r.err = fmt.Errorf("%s at %s: %w", plan.describe(), c.Describe(), err)
+		r.err = err
 		zeroStack(stack, len(plan.resultTyps))
 		return
-	}
-	gotArgs := make([]Value, len(plan.sig.Params))
-	for i, t := range plan.sig.Params {
-		gotArgs[i] = FromWazero(t, stack[i])
-	}
-	for i := range wantArgs {
-		if !wantArgs[i].Equal(gotArgs[i]) {
-			r.err = &DivergenceError{
-				What:     fmt.Sprintf("import argument %d", i),
-				Where:    fmt.Sprintf("%s, %s", c.Describe(), plan.describe()),
-				Recorded: wantArgs[i].String(),
-				Actual:   gotArgs[i].String(),
-				Detail: fmt.Sprintf("full recorded tuple %s, replayed tuple %s",
-					formatValues(wantArgs), formatValues(gotArgs)),
-			}
-			zeroStack(stack, len(plan.resultTyps))
-			return
-		}
 	}
 
 	// --- spec §3.4: host mutations made while servicing this call --------
@@ -906,6 +874,121 @@ func (r *replayer) serviceImport(plan *importPlan, mod api.Module, stack []uint6
 
 	r.cursor++
 	r.result.ImportCalls++
+}
+
+// matchImportCrossing decides whether the crossing the recording expects next
+// is the import call replay has just made, and if so returns it.
+//
+// It is deliberately **side-effect free**: it does not advance the cursor,
+// apply a §3.4 mutation or write to the operand stack. That is what lets the
+// streaming driver ask "would a strict reading have accepted this call?"
+// without committing to the answer (see `serviceUnwitnessedValuelessImport`).
+func (r *replayer) matchImportCrossing(plan *importPlan, stack []uint64) (*Crossing, error) {
+	crossings := r.opts.Recording.Crossings
+	if r.cursor >= len(crossings) {
+		return nil, &DivergenceError{
+			What:     "import call",
+			Where:    plan.describe(),
+			Recorded: fmt.Sprintf("nothing — the recording ends after %d crossing(s)", len(crossings)),
+			Actual:   "replay called this import",
+			Detail: "the module crossed the boundary more times than it did when " +
+				"recorded",
+		}
+	}
+
+	c := &crossings[r.cursor]
+	if c.Kind != CrossingImport {
+		return nil, &DivergenceError{
+			What:     "crossing kind",
+			Where:    fmt.Sprintf("crossing #%d", c.Seq),
+			Recorded: c.Describe(),
+			Actual:   fmt.Sprintf("replay called %s", plan.describe()),
+		}
+	}
+	if c.Index != plan.index {
+		return nil, &DivergenceError{
+			What:     "import index",
+			Where:    fmt.Sprintf("crossing #%d", c.Seq),
+			Recorded: fmt.Sprintf("import #%d", c.Index),
+			Actual:   fmt.Sprintf("import #%d (%s.%s)", plan.index, plan.module, plan.name),
+			Detail: "replay reached a different host call than the one recorded at " +
+				"this point",
+		}
+	}
+
+	// --- arguments: assert the recorded values match ---------------------
+	wantArgs, err := decodeTuple("argument", c.Args, plan.sig.Params)
+	if err != nil {
+		return nil, fmt.Errorf("%s at %s: %w", plan.describe(), c.Describe(), err)
+	}
+	gotArgs := make([]Value, len(plan.sig.Params))
+	for i, t := range plan.sig.Params {
+		gotArgs[i] = FromWazero(t, stack[i])
+	}
+	for i := range wantArgs {
+		if !wantArgs[i].Equal(gotArgs[i]) {
+			return nil, &DivergenceError{
+				What:     fmt.Sprintf("import argument %d", i),
+				Where:    fmt.Sprintf("%s, %s", c.Describe(), plan.describe()),
+				Recorded: wantArgs[i].String(),
+				Actual:   gotArgs[i].String(),
+				Detail: fmt.Sprintf("full recorded tuple %s, replayed tuple %s",
+					formatValues(wantArgs), formatValues(gotArgs)),
+			}
+		}
+	}
+	return c, nil
+}
+
+// serviceUnwitnessedValuelessImport services a call to a `() -> ()` import
+// while `Recording.MarkersIdentifyImports` is false.
+//
+// For the batch driver that flag is final, so this is simply M37's behaviour:
+// nothing on disk can be matched to the call, it is serviced as a no-op and
+// counted so the caller can report it. The stack needs no zeroing — a
+// `() -> ()` import has no result slots.
+//
+// For the streaming driver the flag is **not** final, and the whole of M51 is
+// here. `appendGroup` can only set it from groups that have arrived, so a
+// recording whose first import crossing is in group 3 has the flag false while
+// groups 0..2 are driven — and the batch driver, which read the same recording
+// whole, would have been strict for all of them. Answering "unchecked" here
+// would therefore be a *permissive* answer to a question the other driver
+// answers strictly, on the same recording and the same module.
+//
+// So the streaming driver does not answer. It asks what a strict reading would
+// have said, stashes that, and replays on under the permissive reading —
+// which is the only one under which replaying on means anything, since a
+// strict reading would have aborted. `StreamingReplay` re-decides at end of
+// stream against the final witness.
+func (r *replayer) serviceUnwitnessedValuelessImport(plan *importPlan) {
+	if r.deferValuelessImports && r.deferredValueless == nil {
+		// `stack` is not passed: a `() -> ()` import has no argument slots, so
+		// the argument comparison in `matchImportCrossing` reads nothing.
+		if _, err := r.matchImportCrossing(plan, nil); err != nil {
+			r.deferredValueless = err
+		} else {
+			// The strict reading ACCEPTED the call, so the two readings differ
+			// in more than a verdict: strict would have consumed the crossing
+			// at the cursor and permissive does not, and from here the two
+			// drivers walk different crossing streams.
+			//
+			// This needs a recording in which a value-less import crossing was
+			// recovered from its value runs alone — which an M39 producer never
+			// writes, since it brackets every import crossing in markers. If
+			// the witness nonetheless ends up true, the recording mixes the two
+			// vintages and its crossing stream cannot be attributed; that is
+			// refused rather than replayed under a guess (spec §8).
+			r.deferredValueless = fmt.Errorf(
+				"%s matched %s, a value-less import crossing recovered without "+
+					"import-labelled realm markers, in a recording that does carry "+
+					"such markers elsewhere. The recording mixes the pre-M39 and "+
+					"M39 renderings of an import edge, so which crossing this call "+
+					"belongs to cannot be established (spec §8)",
+				plan.describe(), r.opts.Recording.Crossings[r.cursor].Describe())
+		}
+	}
+	r.result.UncheckedImportCalls++
 }
 
 // applyMutations applies the spec §3.4 host writes anchored to one crossing.

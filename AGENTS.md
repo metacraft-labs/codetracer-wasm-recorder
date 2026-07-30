@@ -152,12 +152,15 @@ The flow in `internal/boundarylog`:
    receiver wrote and recovers the boundary crossings from it. **Read the long
    comment there before touching it** — the browser renders the hook stream into
    the JS recorder's vocabulary before it reaches disk, and imports in particular
-   leave no `Call`/`Return` record at all, so the crossings have to be recovered
-   from the value runs. The committed demo recording exercises only the *export*
-   path (it has no import crossings), so the import half of the format is held
-   to the producers' source by `internal/boundarylog/browser_format_test.go`
-   rather than by the pin against that recording; the header comment there
-   spells out what the pin does and does not cover.
+   leave no `Call`/`Return` record at all — an import crossing is bracketed by
+   its pair of `wasm import #<n>` realm markers, with its value runs filling in
+   the tuples, and by its value runs alone in a recording made before M39
+   spelled the two edges apart. The committed demo recording exercises only the
+   *export* path (it has no import crossings), so the import half of the format
+   is held to the producers' source by
+   `internal/boundarylog/browser_format_test.go` rather than by the pin against
+   that recording; the header comment there spells out what the pin does and
+   does not cover.
 2. `manifest.go` parses the optional `ct-instrument` sidecar
    (`<module>.wasm.manifest.json`, auto-discovered). Its signatures are
    **cross-checked** against the module's own type section; a disagreement is a
@@ -188,21 +191,52 @@ Two rules that are load-bearing and easy to break:
 Known limits, all inherited from the *producer* rather than from this code, and
 each reported rather than guessed at:
 
-* An import whose signature is `() -> ()` contributes no boundary values to a
-  browser `.ct`, and an import emits no `Call`/`Return` record, so no crossing
-  is recovered for it. Such calls are replayed unchecked and counted in
-  `Result.UncheckedImportCalls`, which the CLI reports on stderr. The crossing
-  is *not* absent from the recording — an import edge emits the same pair of
-  realm markers an export does, naming its index — but the marker label uses
-  the same `wasm export #<n>` template for both edges, so closing this gap
-  needs a producer change in `browser_session.js`, not just a parser change.
+* **An import whose signature is `() -> ()` is recovered from its realm
+  markers (M39), and only in recordings new enough to carry them.** Such a
+  crossing contributes no boundary values, and an import emits no
+  `Call`/`Return` record either, so its pair of `js-wasm-realm` markers is its
+  entire trace on disk. `browser_session.js` now spells the two edges apart —
+  `wasm import #<n>` against `wasm export #<n>` — so the markers bracket the
+  crossing and it is checked like any other: index, interleaving, call count.
+  A recording made before that change spells both edges `wasm export #<n>`;
+  its markers cannot be attributed, so a value-less crossing is still lost
+  there and the call is replayed unchecked and counted in
+  `Result.UncheckedImportCalls`, which the CLI reports on stderr.
+  `Recording.MarkersIdentifyImports` is what tells the two vintages apart, and
+  it is **derived from the records, not declared** — a crossing recovered from
+  an import-labelled marker pair sets it, so a producer cannot claim the newer
+  format without having used it. Backward compatibility is a requirement:
+  boundary recordings are artefacts users hold, and two are committed in the
+  `codetracer` repo (`wasm-memory-calldata/ledger-settle.ct` carries three
+  import crossings in the old spelling).
+
+  Two residual cases, stated so neither is mistaken for a check that exists:
+
+  1. A recording that carries **no import crossing at all** is
+     indistinguishable from a pre-M39 one, so a replay of it that calls a
+     `() -> ()` import falls back to counting rather than diverging. Any
+     recording that crossed out even once under an M39 producer is in the
+     strict mode.
+  2. **The streaming driver derives the witness one call group late.**
+     `LoadRecording` sees the whole recording, so the batch driver knows the
+     format before it drives anything. `StreamingReplay` cannot: it sets the
+     witness in `appendGroup`, from the crossings of the group about to be
+     driven, so a `() -> ()` import call made while replaying a group that
+     arrives *before* the recording's first import crossing is counted
+     unchecked — where the batch driver would have diverged on it. Measured:
+     an M39 recording whose first group carries no import crossing replays
+     through `Replay` as a `DivergenceError` and through `StreamingReplay`
+     with `err == nil` and `UncheckedImportCalls == 1`. The two paths are
+     supposed to differ only in what they know, never in what they accept.
 * Floats lose NaN payloads on the browser path (JS `Number`), which spec §7 flags
   as a divergence risk. `host_runtime.js` documents the same limit.
 * `boundary_state.json` (spec §3.3 / §3.4) **is** produced as of M44, by
   `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` plus
   `codetracer/src/backend-manager/src/browser_stream_host.rs`; the schema and
-  the two host writes the producer refuses to record rather than mis-anchor are
-  documented in `hoststate.go`. The end-to-end fixture is
+  the host write the producer refuses to record rather than mis-anchor is
+  documented in `hoststate.go`. (M44 had two refusals; M39 resolved the second
+  — a host write made while servicing a `() -> ()` import now has a crossing to
+  anchor to, and is recorded.) The end-to-end fixture is
   `codetracer/src/db-backend/tests/fixtures/wasm-memory-calldata/`, whose
   `verify.sh` shows that withholding either record diverges. **Expect
   `Error constructing DWARF data …: too short` on any recording with a

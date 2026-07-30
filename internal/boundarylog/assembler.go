@@ -50,23 +50,39 @@ type assembler struct {
 	// groupEnds holds the exclusive end index of each completed call group, so
 	// group i spans crossings[start_i:groupEnds[i]].
 	groupEnds []int
+
+	// sawImportMarker records that at least one `wasm import #<n>` realm
+	// marker arrived, i.e. that this recording's producer spells the two
+	// edges apart (M39). See `Recording.MarkersIdentifyImports`.
+	sawImportMarker bool
 }
 
 func newAssembler() *assembler { return &assembler{} }
 
 // closeDanglingImports pops open import crossings from the top of the stack.
 //
-// An import is bracketed by its own value runs, so anything other than its
-// result run arriving means it returned nothing and is over. `keep` is the
-// label of a run that legitimately continues the crossing on top (its result
-// run); pass "" to close everything.
-func (a *assembler) closeDanglingImports(keep string) {
+// An import recovered from its *value runs alone* — every import in a
+// recording older than M39 — is bracketed by those runs, so anything other
+// than its result run arriving means it returned nothing and is over. `keep`
+// is the label of a run that legitimately continues the crossing on top (its
+// result run); pass "" to close everything.
+//
+// A crossing bracketed by its own realm markers is exempt unless `force`:
+// it is closed by its `LEAVE` marker and by nothing else, which is what
+// makes a `() -> ()` crossing — with no runs at all to be delimited by —
+// recoverable. `force` is for end of input, where an unclosed crossing is a
+// truncation rather than a structure to be respected.
+func (a *assembler) closeDanglingImports(keep string, force bool) {
 	for len(a.stack) > 0 {
 		top := a.stack[len(a.stack)-1]
-		if a.crossings[top.idx].Kind != CrossingImport {
+		c := &a.crossings[top.idx]
+		if c.Kind != CrossingImport {
 			return
 		}
 		if top.label == keep {
+			return
+		}
+		if c.markerBracketed && !force {
 			return
 		}
 		a.stack = a.stack[:len(a.stack)-1]
@@ -91,7 +107,7 @@ func (a *assembler) closeRun() error {
 	if run.role == "ret" {
 		keep = run.label
 	}
-	a.closeDanglingImports(keep)
+	a.closeDanglingImports(keep, false)
 
 	if run.role == "arg" {
 		if isImport {
@@ -122,9 +138,11 @@ func (a *assembler) closeRun() error {
 		top := a.stack[len(a.stack)-1]
 		a.crossings[top.idx].Results = run.values
 		a.crossings[top.idx].hasResults = true
-		if isImport {
-			// Imports are bracketed by their runs; exports are popped by their
-			// `Return` record.
+		if isImport && !a.crossings[top.idx].markerBracketed {
+			// A run-bracketed import ends with its result run; exports are
+			// popped by their `Return` record, and a marker-bracketed import
+			// by its `LEAVE` marker (which the producer emits AFTER this
+			// run — see the framing contract in `hooks.rs`).
 			a.stack = a.stack[:len(a.stack)-1]
 		}
 		return nil
@@ -183,13 +201,21 @@ func (a *assembler) push(ev *traceEvent) error {
 		})
 		a.stack = append(a.stack, openCrossing{idx: len(a.crossings) - 1, label: name})
 
+	case ev.Event != nil:
+		if err := a.pushEvent(ev); err != nil {
+			return err
+		}
+
 	case ev.Return != nil:
 		if err := a.closeRun(); err != nil {
 			return err
 		}
 		// An import still open when its caller returns had no results; the
-		// export's `Return` is proof it is over.
-		a.closeDanglingImports("")
+		// export's `Return` is proof it is over. A marker-bracketed import is
+		// NOT closed here: its `LEAVE` marker precedes the export's `Return`
+		// in a well-formed recording, so one still open means the recording
+		// is unbalanced, which the check below reports.
+		a.closeDanglingImports("", false)
 		if len(a.stack) == 0 {
 			return fmt.Errorf("Return record with no open export frame")
 		}
@@ -203,11 +229,11 @@ func (a *assembler) push(ev *traceEvent) error {
 		a.stack = a.stack[:len(a.stack)-1]
 
 	default:
-		// Path / Step / Event records carry no boundary structure of their own,
-		// but they DO delimit value runs: `flushValues` emits exactly one
-		// `Step` immediately before each run, so a `Step` closes whatever run
+		// Path / Step records carry no boundary structure of their own, but
+		// they DO delimit value runs: `flushValues` emits exactly one `Step`
+		// immediately before each run, so a `Step` closes whatever run
 		// preceded it.
-		if ev.Path != nil || ev.Event != nil || ev.Step != nil {
+		if ev.Path != nil || ev.Step != nil {
 			if err := a.closeRun(); err != nil {
 				return err
 			}
@@ -216,6 +242,89 @@ func (a *assembler) push(ev *traceEvent) error {
 
 	a.noteGroupBoundary()
 	return nil
+}
+
+// pushEvent handles one `Event` record.
+//
+// Every `Event` closes the value run in flight, exactly as a `Step` does:
+// the producer flushes an import's argument tuple *inside* the realm-marker
+// hook, immediately before emitting the marker, so the run is complete by
+// the time the marker record lands.
+//
+// Beyond that, only a `js-wasm-realm` marker naming an IMPORT edge carries
+// boundary structure — and it carries all of it for a crossing whose
+// signature is `() -> ()`, which leaves nothing else on disk at all.
+// Everything else (an export's own markers, a domain marker some other
+// producer on the page emitted) is a delimiter and nothing more.
+func (a *assembler) pushEvent(ev *traceEvent) error {
+	if err := a.closeRun(); err != nil {
+		return err
+	}
+	m, ok := parseRealmMarker(*ev.Event)
+	if !ok || m.kind != CrossingImport {
+		return nil
+	}
+	// Reached only by a producer that spells the two edges apart (M39).
+	a.sawImportMarker = true
+	if m.enter {
+		a.openMarkedImport(m.index)
+		return nil
+	}
+	return a.closeMarkedImport(m.index)
+}
+
+// openMarkedImport begins the crossing an `ENTER` marker names.
+//
+// The argument run, if the import has one, was flushed one record earlier
+// and has already opened this very crossing (`closeRun`'s "arg" arm). That
+// is not a race to be resolved but the same crossing seen twice, so the
+// marker adopts it rather than opening a second — and either way the
+// crossing lands at this position in the append order, which is what
+// `browser_session.js` predicts when it anchors a spec §3.4 mutation.
+func (a *assembler) openMarkedImport(index uint32) {
+	if n := len(a.stack); n > 0 {
+		top := a.stack[n-1]
+		c := &a.crossings[top.idx]
+		if c.Kind == CrossingImport && c.Index == index && !c.markerBracketed {
+			c.markerBracketed = true
+			return
+		}
+	}
+	a.crossings = append(a.crossings, Crossing{
+		Seq:             len(a.crossings),
+		Depth:           len(a.stack),
+		Kind:            CrossingImport,
+		Index:           index,
+		markerBracketed: true,
+	})
+	a.stack = append(a.stack, openCrossing{
+		idx: len(a.crossings) - 1, label: importLabel(index),
+	})
+}
+
+// closeMarkedImport ends the crossing a `LEAVE` marker names.
+//
+// A mismatch is refused rather than repaired. The two markers are emitted
+// by the same splice around one call instruction, so they cannot legitimately
+// disagree; a recording where they do is one whose crossing structure this
+// replayer would have to guess at, and guessing is what spec §8 forbids.
+func (a *assembler) closeMarkedImport(index uint32) error {
+	if n := len(a.stack); n > 0 {
+		top := a.stack[n-1]
+		c := &a.crossings[top.idx]
+		if c.Kind == CrossingImport && c.Index == index && c.markerBracketed {
+			a.stack = a.stack[:n-1]
+			return nil
+		}
+	}
+	open := "nothing"
+	if n := len(a.stack); n > 0 {
+		open = a.crossings[a.stack[n-1].idx].Describe()
+	}
+	return fmt.Errorf(
+		"a realm marker closes import #%d, but the innermost open crossing is "+
+			"%s; the recording's realm markers are not properly nested, so its "+
+			"crossing structure cannot be recovered (spec §8)", index, open)
 }
 
 // pushValue handles one `Value` record.
@@ -288,7 +397,12 @@ func (a *assembler) finish() error {
 	if err := a.closeRun(); err != nil {
 		return err
 	}
-	a.closeDanglingImports("")
+	// `force`: at end of input an import whose `LEAVE` marker never arrived
+	// is a truncated recording, not a structure to preserve. Closing it here
+	// keeps the classification in `StreamReader.finishStream` on the export
+	// that encloses it, which is the crossing that actually cannot be
+	// replayed.
+	a.closeDanglingImports("", true)
 
 	if len(a.stack) > 0 {
 		open := make([]string, 0, len(a.stack))

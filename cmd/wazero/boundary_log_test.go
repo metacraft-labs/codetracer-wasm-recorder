@@ -27,11 +27,19 @@ import (
 )
 
 const (
-	boundaryTestdata     = "testdata/boundary-log"
-	demoWasm             = boundaryTestdata + "/balance_calc.wasm"
-	demoRecording        = boundaryTestdata + "/frontend-wasm.ct"
-	demoManifest         = boundaryTestdata + "/balance_calc.wasm.manifest.json"
-	hookImportsWasm      = boundaryTestdata + "/hook_imports.wasm"
+	boundaryTestdata = "testdata/boundary-log"
+	demoWasm         = boundaryTestdata + "/balance_calc.wasm"
+	demoRecording    = boundaryTestdata + "/frontend-wasm.ct"
+	demoManifest     = boundaryTestdata + "/balance_calc.wasm.manifest.json"
+	hookImportsWasm  = boundaryTestdata + "/hook_imports.wasm"
+	// The M39 fixture: a module whose `host_ping` import has the signature
+	// `() -> ()`, and a recording of two crossings into it. Both the module
+	// and the recording are described in
+	// `internal/boundarylog/void_import_fixture_test.go`, which also holds
+	// the guard that keeps the committed `.ct` equal to what this suite's
+	// producer replica builds.
+	voidImportWasm       = boundaryTestdata + "/void_import.wasm"
+	voidImportRecording  = boundaryTestdata + "/void-import.ct"
 	stylusEntrypoint     = "testdata/stylus/entrypoint.wasm"
 	stylusEntryTracePath = "testdata/stylus/entrypoint_trace.json"
 )
@@ -483,6 +491,129 @@ func TestSuccessfulReplayDoesWriteATrace(t *testing.T) {
 	exitCode, _, stderr := runMain(t, "", []string{
 		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
 	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)
+
+	candidates, _ := filepath.Glob(filepath.Join(outDir, "*.ct"))
+	require.Equal(t, 1, len(candidates),
+		"a successful replay must write exactly one .ct; got %v", candidates)
+	// The same helper the divergence test uses to assert "nothing was
+	// left behind" must SEE something here. Without this the negative
+	// assertion could be passing because `tracePaths` looks in a place the
+	// replay never writes to, which is a way for a divergence test to be
+	// vacuously green.
+	require.True(t, len(tracePaths(t, outDir)) > 0,
+		"tracePaths must find the artefacts of a successful replay, or its use "+
+			"as a negative assertion proves nothing; %s contained nothing", outDir)
+}
+
+// ===========================================================================
+// M39 — a `() -> ()` import crossing is checked, and its divergence is hard
+// ===========================================================================
+
+// TestVerifyZeroArityImportDivergenceIsAHardError is the CLI-level proof
+// that M39 turned an unchecked call into a checked one.
+//
+// The fixture records `ping_n(2)`: one exported call and two crossings into
+// `host_ping`, whose signature is `() -> ()`. Neither crossing carries a
+// single value — their realm markers are their whole trace on disk — so
+// before M39 both were replayed unchecked, and the CLI said so on stderr
+// and exited 0 whatever the module did.
+//
+// Both corruptions below are corruptions of a value-less crossing:
+//
+//   - the first changes how MANY of them the replayed module makes (the
+//     export's argument is the only number in the recording that decides
+//     it, and `ping_n` returns it, so the recording stays internally
+//     consistent — nothing but the crossing count differs);
+//   - the second changes WHICH import one of them names, by editing the
+//     marker label that is the only place the index appears.
+//
+// Each must exit non-zero, name the recorded-vs-actual pair, and leave
+// NOTHING on disk. `TestSuccessfulReplayDoesWriteATrace` is the control
+// that the last of those can fail.
+func TestVerifyZeroArityImportDivergenceIsAHardError(t *testing.T) {
+	cases := []struct {
+		name     string
+		old, new string
+		wantIn   []string
+	}{
+		{
+			// `ping_n(3)` pings three times; the recording carries two
+			// crossings. The third finds the recording exhausted.
+			name: "more value-less crossings than the recording carries",
+			old:  `"i":"2"`,
+			new:  `"i":"3"`,
+			wantIn: []string{
+				"diverged from the recording",
+				"import call",
+				"the recording ends after 3 crossing(s)",
+				"env.host_ping",
+				"more times than it did when recorded",
+				"No trace has been written",
+			},
+		},
+		{
+			// The markers claim the crossings were into import #1
+			// (`host_add`); the module calls import #0 (`host_ping`).
+			name: "a marker naming a different import index",
+			old:  `wasm import #0`,
+			new:  `wasm import #1`,
+			wantIn: []string{
+				"diverged from the recording",
+				"import index",
+				"recorded: import #1",
+				"actual:   import #0 (env.host_ping)",
+				"No trace has been written",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			bad := corruptRecording(t, voidImportRecording, tmp, tc.old, tc.new)
+			outDir := filepath.Join(tmp, "traces")
+
+			exitCode, stdout, stderr := runMain(t, "", []string{
+				"run", "--boundary-log=" + bad, "--out-dir=" + outDir, voidImportWasm})
+
+			require.Equal(t, 1, exitCode,
+				"a divergence must exit non-zero; stdout:\n%s\nstderr:\n%s", stdout, stderr)
+			for _, frag := range tc.wantIn {
+				require.True(t, strings.Contains(stderr, frag),
+					"the diagnostic must contain %q; stderr:\n%s", frag, stderr)
+			}
+			// The M37 fallback must be gone for this recording: an
+			// unmatched `() -> ()` call is a divergence, not a note.
+			require.False(t, strings.Contains(stderr, "replayed unchecked"),
+				"a recording whose markers name the import edge must never fall back "+
+					"to the unchecked-call note; stderr:\n%s", stderr)
+			require.False(t, strings.Contains(strings.ToLower(stderr), "warning"),
+				"a divergence must never be reported as a warning; stderr:\n%s", stderr)
+			require.False(t, strings.Contains(stdout, "replayed"),
+				"a diverged replay must not report success; stdout:\n%s", stdout)
+
+			leftovers := tracePaths(t, outDir)
+			require.Equal(t, 0, len(leftovers),
+				"a diverged replay must leave nothing behind, but %s contains: %v",
+				outDir, leftovers)
+		})
+	}
+}
+
+// TestZeroArityImportReplayIsCheckedNotCounted is the positive control for
+// the test above, and the one that shows the crossings are *consumed*: the
+// uncorrupted fixture replays, reports two imported calls, and prints no
+// unchecked-call note at all.
+func TestZeroArityImportReplayIsCheckedNotCounted(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "traces")
+	exitCode, stdout, stderr := runMain(t, "", []string{
+		"run", "--boundary-log=" + voidImportRecording, "--out-dir=" + outDir, voidImportWasm})
+	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)
+	require.True(t, strings.Contains(stdout, "replayed 1 exported call(s) and 2 imported call(s)"),
+		"both `() -> ()` crossings must be counted as imported calls serviced "+
+			"from the recording; stdout:\n%s", stdout)
+	require.False(t, strings.Contains(stderr, "replayed unchecked"),
+		"nothing may be taken on trust; stderr:\n%s", stderr)
 
 	candidates, _ := filepath.Glob(filepath.Join(outDir, "*.ct"))
 	require.Equal(t, 1, len(candidates),

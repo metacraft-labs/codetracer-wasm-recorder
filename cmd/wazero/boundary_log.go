@@ -163,13 +163,28 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 
 	if result.UncheckedImportCalls > 0 {
 		// Not a failure, but the user should know a part of the replay was
-		// taken on trust: a `() -> ()` import contributes no boundary
-		// values and no Call/Return record, so the recording yields no
-		// crossing to check the call against.
+		// taken on trust — and, since M39, why.
+		//
+		// A `() -> ()` import contributes no boundary values and no
+		// Call/Return record, so its realm markers are its whole trace on
+		// disk. A recording made before M39 spelled those markers the same
+		// as an export's, so they cannot be attributed and no crossing is
+		// recovered.
+		//
+		// The note must NOT assert the recording's age, because the witness
+		// cannot establish it: `MarkersIdentifyImports` is false both for a
+		// pre-M39 recording and for a current one that happens to carry no
+		// import crossing at all, and the two are indistinguishable from the
+		// records. Saying "this recording is old" to someone who just made it
+		// would send them re-recording a page that is already current.
 		fmt.Fprintf(stdErr,
 			"note: %d call(s) to imports with an empty `() -> ()` signature were "+
-				"replayed unchecked — such a crossing contributes no values to a "+
-				"browser boundary log, so there is nothing to check it against\n",
+				"replayed unchecked. This boundary log carries no realm marker that "+
+				"names an import edge, so such a crossing leaves nothing on disk that "+
+				"can be matched to it — either it was recorded before the recorder "+
+				"named the two edges apart, or it contains no imported call at all. "+
+				"Re-record the page with a current `browser_session.js` to have these "+
+				"calls checked\n",
 			result.UncheckedImportCalls)
 	}
 

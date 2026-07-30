@@ -59,6 +59,14 @@ type Crossing struct {
 	// crossing that legitimately returns nothing is distinguishable from
 	// one whose results the rendering dropped.
 	hasResults bool
+	// markerBracketed records that this crossing was delimited by its own
+	// pair of `wasm import #<n>` realm markers rather than only by its
+	// value runs (M39). It is the whole reason a crossing whose signature
+	// is `() -> ()` can be recovered at all — such a crossing has no value
+	// runs — and it doubles as the recording's format witness: a producer
+	// older than M39 spelled both edges `wasm export #<n>`, so it never
+	// sets this. See `Recording.MarkersIdentifyImports`.
+	markerBracketed bool
 }
 
 // Describe renders the crossing for a diagnostic.
@@ -85,6 +93,30 @@ type Recording struct {
 	// HostState carries spec §3.3 initial state and §3.4 mutations when
 	// the recording ships a `boundary_state.json` sidecar; nil otherwise.
 	HostState *HostState
+	// MarkersIdentifyImports reports that this recording's realm markers
+	// name the import edge in their own right (`wasm import #<n>`), which
+	// is what M39 added to `browser_session.js`.
+	//
+	// It is the recording's producer-version witness, and it decides one
+	// thing: whether a call to an import with an empty `() -> ()`
+	// signature that replay cannot match is a **divergence** or an
+	// unchecked call.
+	//
+	//   - true — every import crossing is on disk in a form this parser
+	//     recovers, including the value-less ones. A call that does not
+	//     match the recording is a spec §6 divergence, like any other.
+	//   - false — the recording predates M39 (or carries no import
+	//     crossing at all, which is indistinguishable from it). A
+	//     value-less crossing left only `wasm export #<n>` markers, which
+	//     cannot be attributed to an import, so such a call is replayed
+	//     unchecked and counted in `Result.UncheckedImportCalls`. That is
+	//     the M37 behaviour, kept so an already-recorded trace still
+	//     replays rather than being rejected for its age.
+	//
+	// It is derived from the records, not declared: any crossing recovered
+	// from an import-labelled marker pair sets it. A producer cannot claim
+	// the newer format without having used it.
+	MarkersIdentifyImports bool
 	// Source is the path the recording was loaded from, for diagnostics.
 	Source string
 }
@@ -221,11 +253,12 @@ func LoadRecording(path string) (*Recording, error) {
 		return nil, fmt.Errorf("decoding %s: %w", filepath.Join(dir, "trace.json"), err)
 	}
 
-	crossings, err := reconstructCrossings(events)
+	crossings, marked, err := reconstructCrossings(events)
 	if err != nil {
 		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", dir, err)
 	}
 	rec.Crossings = crossings
+	rec.MarkersIdentifyImports = marked
 	return rec, nil
 }
 
@@ -322,29 +355,40 @@ func recordingDir(path string) (string, error) {
 //     export crossing is bracketed on disk even when it has no values.
 //   - An **import** crossing emits *no* `Call` and *no* `Return` —
 //     `browser_session.js` returns early for any `fnKind` that is not
-//     `FUNC_KIND_EXPORT`. It DOES emit the same pair of correlation
-//     markers an export does: `replace_imported_call` in the instrumenter
-//     pushes `push_realm_boundary(..., FUNC_KIND_IMPORT, ...)` on both
-//     sides of the edge, and `__ct_emit_realm_boundary` ignores its
-//     `fnKind` argument. Those markers carry no boundary values, so the
-//     import's structure still has to be recovered from its value runs.
+//     `FUNC_KIND_EXPORT`. It DOES emit a pair of correlation markers, as
+//     an export does: `replace_imported_call` in the instrumenter pushes
+//     `push_realm_boundary(..., FUNC_KIND_IMPORT, ...)` on both sides of
+//     the edge. As of M39 those markers name the edge — `show_value` is
+//     `wasm import #<n>` for an import and `wasm export #<n>` for an
+//     export — so an import crossing IS bracketed on disk, by its markers,
+//     even when it carries no values at all.
 //
-// The reconstruction below therefore brackets exports on `Call`/`Return`
-// and brackets imports on their argument/result runs. Two consequences are
-// inherent to the *producer* and are reported rather than guessed at:
+// The reconstruction below therefore brackets exports on `Call`/`Return`,
+// brackets imports on their `wasm import #<n>` marker pair, and fills the
+// argument/result tuples in from the value runs that fall inside it.
 //
-//  1. An import whose signature is `() -> ()` contributes no value runs,
-//     so this parser does not recover it. Its index is not absent from the
-//     recording — the markers name it — but the marker label uses the same
-//     `wasm export #<n>` template for both edges, so a marker cannot be
-//     attributed to an import by its own content. Recovering these
-//     crossings needs the producer to spell the two edges differently;
-//     until then replay reports them (`Result.UncheckedImportCalls`).
-//  2. Two adjacent import crossings of the same import, the first with
-//     arguments but no results, are indistinguishable from one crossing
-//     whose argument run was recorded twice. `reconstructCrossings` closes
-//     the open crossing when a second argument run for the same import
-//     arrives, which is the reading that keeps call counts right.
+// # Recordings older than M39
+//
+// A recording produced before M39 spells BOTH edges `wasm export #<n>`, so
+// its import markers cannot be attributed to an import by their own
+// content. Such a recording is still accepted, and its imports are still
+// recovered — from their value runs, which is what M37 did and what the
+// `role == "ret"` and `closeDanglingImports` paths below implement. Only
+// one shape is lost with it: an import whose signature is `() -> ()`
+// contributes no value runs either, so no crossing is recovered for it and
+// replay counts the call in `Result.UncheckedImportCalls` rather than
+// checking it. `Recording.MarkersIdentifyImports` is what tells the two
+// vintages apart, and it is derived from the records rather than declared.
+//
+// # One ambiguity that survives in both vintages
+//
+// Two adjacent import crossings of the same import, the first with
+// arguments but no results, are indistinguishable *by their value runs*
+// from one crossing whose argument run was recorded twice.
+// `reconstructCrossings` closes the open crossing when a second argument
+// run for the same import arrives, which is the reading that keeps call
+// counts right. With M39 markers the question does not arise: each
+// crossing has its own `ENTER`/`LEAVE` pair.
 
 // valueRun is a maximal consecutive group of `Value` records sharing one
 // `(label, role)` pair.
@@ -361,17 +405,20 @@ type openCrossing struct {
 	label string
 }
 
-func reconstructCrossings(events []traceEvent) ([]Crossing, error) {
+// reconstructCrossings recovers every crossing from a whole `trace.json`,
+// and reports whether the recording's realm markers name the import edge
+// (see `Recording.MarkersIdentifyImports`).
+func reconstructCrossings(events []traceEvent) ([]Crossing, bool, error) {
 	a := newAssembler()
 	for i := range events {
 		if err := a.push(&events[i]); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if err := a.finish(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return a.crossings, nil
+	return a.crossings, a.sawImportMarker, nil
 }
 
 // parseBindingName splits `browser_session.js`'s `boundaryBindingName`
@@ -411,6 +458,12 @@ func parseBindingName(name string) (label, role string, slot int, ok bool) {
 // crossing's value bindings: “ `import #${fnIndex}` “.
 const importLabelPrefix = "import #"
 
+// importLabel renders the binding label of one import index, so the
+// assembler and `parseImportLabel` cannot disagree about its spelling.
+func importLabel(index uint32) string {
+	return importLabelPrefix + strconv.FormatUint(uint64(index), 10)
+}
+
 // parseImportLabel reports whether a binding label denotes an import
 // crossing and, if so, which import index.
 func parseImportLabel(label string) (uint32, bool) {
@@ -422,4 +475,136 @@ func parseImportLabel(label string) (uint32, bool) {
 		return 0, false
 	}
 	return uint32(n), true
+}
+
+// ---------------------------------------------------------------------------
+// Realm markers
+// ---------------------------------------------------------------------------
+//
+// A realm marker is what `browser_session.js`'s `emitRealmBoundary`
+// produces on each side of a crossing, rendered by the backend-manager's
+// `JsonFileCtfsWriter` into a `RecordEvent`:
+//
+//	{"Event": {"kind": 12,
+//	           "metadata": "{…\"boundary_id\":\"js-wasm-realm\",
+//	                          \"direction\":\"recv\",
+//	                          \"show_value\":\"wasm import #3\"…}",
+//	           "content":  "{\"key\":\"7\",\"payload\":\"wasm import #3\"}"}}
+//
+// Both `metadata` and `content` are JSON *strings* nested inside the JSON,
+// which is the daemon's rendering and not something this package chose.
+//
+// The pair is primarily a cross-recording correlation key (the page's own
+// JS recording carries the mirrored half), and the db-backend pairs them by
+// `key`. What this package takes from them is narrower and purely local:
+// `show_value` names which edge the marker belongs to and which index, so a
+// crossing that leaves nothing else on disk can still be bracketed.
+
+// eventKindTraceLogEvent is `EVENT_KIND_TRACE_LOG_EVENT`, the `kind` the
+// daemon gives a correlation marker.
+const eventKindTraceLogEvent = 12
+
+// jsWasmRealmBoundary is `browser_session.js`'s `JS_WASM_REALM_BOUNDARY`.
+// Markers of any other boundary belong to some other producer on the page
+// and say nothing about this module's crossings.
+const jsWasmRealmBoundary = "js-wasm-realm"
+
+// The two `show_value` templates `emitRealmBoundary` renders. They differ
+// only as of M39; before it, an import edge also said "wasm export #".
+const (
+	exportMarkerPrefix = "wasm export #"
+	importMarkerPrefix = "wasm import #"
+)
+
+// markerEnterDirection is the `direction` an ENTER marker carries.
+// `emitRealmBoundary` renders `REALM_DIRECTION_LEAVE` as "send" (the value
+// flows WASM -> host) and `REALM_DIRECTION_ENTER` as "recv".
+const (
+	markerEnterDirection = "recv"
+	markerLeaveDirection = "send"
+)
+
+// eventRecord is one `Event` element of `trace.json`.
+type eventRecord struct {
+	Kind     int    `json:"kind"`
+	Metadata string `json:"metadata"`
+	Content  string `json:"content"`
+}
+
+// markerMetadata is the subset of the nested `metadata` string this package
+// reads. `show_value` may be JSON `null`, which leaves the field empty.
+type markerMetadata struct {
+	BoundaryID string `json:"boundary_id"`
+	Direction  string `json:"direction"`
+	ShowValue  string `json:"show_value"`
+}
+
+// realmMarker is one decoded `js-wasm-realm` marker.
+type realmMarker struct {
+	// kind is the edge the marker names.
+	kind CrossingKind
+	// index is the import index (for an import edge) or the export index
+	// (for an export edge, where this package does not use it — exports are
+	// identified by name, and the two numberings are unrelated).
+	index uint32
+	// enter is true for the marker at the call site, false at the return
+	// site.
+	enter bool
+}
+
+// parseRealmMarker decodes one `Event` record as a `js-wasm-realm` marker.
+//
+// It returns ok=false for anything else — a marker of another boundary, an
+// event of another kind, a `show_value` that is not one of the two
+// templates, or malformed JSON. That is deliberately quiet rather than
+// fatal: `Event` records are an open extension point on this path (the JS
+// recorder puts HTTP and other domain markers into its own recordings), so
+// an unrecognised one must not fail a recording. Nothing is lost by
+// ignoring one, because a marker this package cannot read contributes no
+// crossing — it only delimits value runs, which the caller does anyway.
+func parseRealmMarker(raw json.RawMessage) (realmMarker, bool) {
+	var ev eventRecord
+	if err := json.Unmarshal(raw, &ev); err != nil || ev.Kind != eventKindTraceLogEvent {
+		return realmMarker{}, false
+	}
+	var meta markerMetadata
+	if err := json.Unmarshal([]byte(ev.Metadata), &meta); err != nil {
+		return realmMarker{}, false
+	}
+	if meta.BoundaryID != jsWasmRealmBoundary {
+		return realmMarker{}, false
+	}
+
+	var m realmMarker
+	switch {
+	case strings.HasPrefix(meta.ShowValue, importMarkerPrefix):
+		m.kind = CrossingImport
+		m.index = 0
+		if n, err := strconv.ParseUint(
+			meta.ShowValue[len(importMarkerPrefix):], 10, 32); err == nil {
+			m.index = uint32(n)
+		} else {
+			return realmMarker{}, false
+		}
+	case strings.HasPrefix(meta.ShowValue, exportMarkerPrefix):
+		m.kind = CrossingExport
+		if n, err := strconv.ParseUint(
+			meta.ShowValue[len(exportMarkerPrefix):], 10, 32); err == nil {
+			m.index = uint32(n)
+		} else {
+			return realmMarker{}, false
+		}
+	default:
+		return realmMarker{}, false
+	}
+
+	switch meta.Direction {
+	case markerEnterDirection:
+		m.enter = true
+	case markerLeaveDirection:
+		m.enter = false
+	default:
+		return realmMarker{}, false
+	}
+	return m, true
 }

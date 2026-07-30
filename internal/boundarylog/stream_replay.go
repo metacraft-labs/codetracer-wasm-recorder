@@ -166,6 +166,14 @@ func (r *replayer) appendGroup(rec *Recording, group []Crossing) (int, error) {
 	var nested []*Crossing
 	for i := range group {
 		c := group[i]
+		// The recording's format witness, established as it arrives: a
+		// crossing bracketed by import-labelled realm markers can only come
+		// from an M39 producer. It has to be set before the group is driven,
+		// because it is what decides whether a `() -> ()` import call the
+		// replay makes is checked or counted (see `serviceImport`).
+		if c.markerBracketed {
+			rec.MarkersIdentifyImports = true
+		}
 		if c.Seq != base+i {
 			return 0, fmt.Errorf(
 				"boundary streaming replay: crossing #%d arrived at position %d of the "+

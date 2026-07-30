@@ -19,6 +19,7 @@ const (
 	importsDemoWasm = "../../cmd/wazero/testdata/boundary-log/imports_demo.wasm"
 	hookImportsWasm = "../../cmd/wazero/testdata/boundary-log/hook_imports.wasm"
 	hostStateWasm   = "../../cmd/wazero/testdata/boundary-log/host_state.wasm"
+	voidImportWasm  = "../../cmd/wazero/testdata/boundary-log/void_import.wasm"
 	balanceCalcWasm = "../../cmd/wazero/testdata/boundary-log/balance_calc.wasm"
 	balanceManifest = "../../cmd/wazero/testdata/boundary-log/balance_calc.wasm.manifest.json"
 )
@@ -299,6 +300,191 @@ func TestTheRealDemoManifestValidatesTheRealDemoModule(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.ExportCalls)
 	require.Equal(t, 0, res.ImportCalls)
+}
+
+// ---------------------------------------------------------------------------
+// M39 — a `() -> ()` import crossing, recovered from its realm markers
+// ---------------------------------------------------------------------------
+//
+// `void_import.wasm` imports `host_ping: () -> ()` at index 0. A crossing
+// into it carries no arguments, no results, no `Call` and no `Return`, so
+// its pair of `wasm import #0` realm markers is the whole of it on disk.
+// The tests below check that the crossing is CHECKED and not merely
+// counted: its index, its position in the interleaving and its call count
+// all have to match, and each of them has a negative control.
+
+// TestZeroArityImportCrossingIsConsumedFromTheRecording is the positive
+// case: `ping_n(3)` makes three value-less crossings and every one of them
+// is serviced from a recovered crossing.
+func TestZeroArityImportCrossingIsConsumedFromTheRecording(t *testing.T) {
+	b := newRecordingBuilder("void-ok")
+	b.export("ping_n", 0, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(3)}, []jsValue{jsInt(3)}, func() {
+			for i := 0; i < 3; i++ {
+				b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+			}
+		})
+	dir := b.write(t, t.TempDir())
+
+	res, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ExportCalls)
+	require.Equal(t, 3, res.ImportCalls,
+		"each `() -> ()` crossing is consumed from the recording")
+	require.Equal(t, 0, res.UncheckedImportCalls,
+		"nothing may be taken on trust once the markers name the edge")
+}
+
+// TestZeroArityImportCrossingIsCheckedAgainstItsIndex is the negative
+// control the milestone asks for by name: a log whose marker names a
+// DIFFERENT import index is a hard error naming the recorded-vs-actual
+// pair.
+//
+// It is what proves the crossing is checked rather than counted: the
+// recording has the right NUMBER of crossings, and only the index of one
+// of them is wrong.
+func TestZeroArityImportCrossingIsCheckedAgainstItsIndex(t *testing.T) {
+	b := newRecordingBuilder("void-bad-index")
+	b.export("ping_n", 0, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(2)}, []jsValue{jsInt(2)}, func() {
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+			// The module calls import #0 again; the recording says #1.
+			b.importCall(1, "/src/void_import.wat", 1, nil, nil)
+		})
+	dir := b.write(t, t.TempDir())
+
+	_, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.Error(t, err)
+	var d *DivergenceError
+	require.True(t, errors.As(err, &d), "want a *DivergenceError, got %T: %v", err, err)
+	require.Equal(t, "import index", d.What)
+	require.Equal(t, "import #1", d.Recorded)
+	require.True(t, strings.Contains(d.Actual, "import #0"), "got %q", d.Actual)
+	require.True(t, strings.Contains(d.Actual, "env.host_ping"),
+		"the diagnostic must name the import the module actually called; got %q", d.Actual)
+}
+
+// TestZeroArityImportCrossingIsCheckedAgainstItsPosition proves the
+// crossing joins the *cursor* stream and not a per-import tally: the
+// recording carries the right crossings in the wrong order.
+func TestZeroArityImportCrossingIsCheckedAgainstItsPosition(t *testing.T) {
+	b := newRecordingBuilder("void-bad-order")
+	// `run(7)` pings first and then calls host_add. The recording has them
+	// the other way round.
+	b.export("run", 1, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(7)}, []jsValue{jsInt(107)}, func() {
+			b.importCall(1, "/src/void_import.wat", 1,
+				[]jsValue{jsInt(7), jsInt(100)}, []jsValue{jsInt(107)})
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+		})
+	dir := b.write(t, t.TempDir())
+
+	_, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.Error(t, err)
+	var d *DivergenceError
+	require.True(t, errors.As(err, &d), "want a *DivergenceError, got %T: %v", err, err)
+	require.Equal(t, "import index", d.What)
+	require.Equal(t, "import #1", d.Recorded)
+	require.True(t, strings.Contains(d.Actual, "import #0"), "got %q", d.Actual)
+}
+
+// TestZeroArityImportInterleavingIsReplayedFaithfully is that test's
+// positive control: with the two crossings in the order the module makes
+// them, the same recording replays.
+func TestZeroArityImportInterleavingIsReplayedFaithfully(t *testing.T) {
+	b := newRecordingBuilder("void-order-ok")
+	b.export("run", 1, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(7)}, []jsValue{jsInt(107)}, func() {
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+			b.importCall(1, "/src/void_import.wat", 1,
+				[]jsValue{jsInt(7), jsInt(100)}, []jsValue{jsInt(107)})
+		})
+	dir := b.write(t, t.TempDir())
+
+	res, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.ImportCalls)
+	require.Equal(t, 0, res.UncheckedImportCalls)
+}
+
+// TestUnrecordedZeroArityImportCallDiverges is the milestone's second
+// named check: a module that calls a `() -> ()` import MORE times than the
+// recording carries fails loudly instead of being counted as unchecked.
+func TestUnrecordedZeroArityImportCallDiverges(t *testing.T) {
+	b := newRecordingBuilder("void-too-few")
+	// `ping_n(3)` pings three times; the recording carries two.
+	b.export("ping_n", 0, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(3)}, []jsValue{jsInt(3)}, func() {
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+		})
+	dir := b.write(t, t.TempDir())
+
+	res, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.Error(t, err)
+	var d *DivergenceError
+	require.True(t, errors.As(err, &d), "want a *DivergenceError, got %T: %v", err, err)
+	require.Equal(t, "import call", d.What)
+	require.True(t, strings.Contains(d.Recorded, "the recording ends after 3 crossing(s)"),
+		"the diagnostic must say the recording ran out; got %q", d.Recorded)
+	require.True(t, strings.Contains(err.Error(), "env.host_ping"),
+		"the diagnostic must name the unrecorded call; got: %v", err)
+	require.Equal(t, 0, res.UncheckedImportCalls,
+		"the call must not be counted as unchecked — that is what M39 removed")
+}
+
+// TestUnconsumedZeroArityCrossingDiverges is the mirror image: the
+// recording carries a value-less crossing the module never makes. Before
+// M39 no crossing existed to be left over, so this could not be detected
+// at all.
+func TestUnconsumedZeroArityCrossingDiverges(t *testing.T) {
+	b := newRecordingBuilder("void-too-many")
+	b.export("ping_n", 0, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(1)}, []jsValue{jsInt(1)}, func() {
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+			b.importCall(0, "/src/void_import.wat", 1, nil, nil)
+		})
+	dir := b.write(t, t.TempDir())
+
+	_, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.Error(t, err)
+	var d *DivergenceError
+	require.True(t, errors.As(err, &d), "want a *DivergenceError, got %T: %v", err, err)
+	require.Equal(t, "crossing count", d.What)
+	require.True(t, strings.Contains(d.Recorded, "import #0"), "got %q", d.Recorded)
+}
+
+// TestLegacyRecordingStillReplaysWithTheUncheckedNote is the milestone's
+// third named check, and the backward-compatibility contract in one test.
+//
+// The recording is the same one `TestZeroArityImportInterleavingIsReplayedFaithfully`
+// drives, rendered with the pre-M39 marker spelling. The parser recovers no
+// crossing for the value-less call — it cannot, the markers do not say
+// which edge they are — so the call is replayed unchecked and reported,
+// exactly as under M37. What must NOT happen is a rejection, or a
+// divergence blamed on the module.
+func TestLegacyRecordingStillReplaysWithTheUncheckedNote(t *testing.T) {
+	b := newRecordingBuilder("void-legacy")
+	b.export("run", 1, "/src/void_import.wat", 1,
+		[]jsValue{jsInt(7)}, []jsValue{jsInt(107)}, func() {
+			b.legacyImportCall(0, "/src/void_import.wat", 1, nil, nil)
+			b.legacyImportCall(1, "/src/void_import.wat", 1,
+				[]jsValue{jsInt(7), jsInt(100)}, []jsValue{jsInt(107)})
+		})
+	dir := b.write(t, t.TempDir())
+
+	rec, err := LoadRecording(dir)
+	require.NoError(t, err)
+	require.False(t, rec.MarkersIdentifyImports)
+	require.Equal(t, 2, len(rec.Crossings),
+		"the export and host_add; the value-less crossing is not recoverable here")
+
+	res, err := replayFixture(t, voidImportWasm, dir, nil)
+	require.NoError(t, err, "an older recording must replay, not be rejected")
+	require.Equal(t, 1, res.ExportCalls)
+	require.Equal(t, 1, res.ImportCalls)
+	require.Equal(t, 1, res.UncheckedImportCalls,
+		"the M37 behaviour, reported rather than hidden")
 }
 
 // ---------------------------------------------------------------------------

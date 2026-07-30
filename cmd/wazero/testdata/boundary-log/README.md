@@ -66,18 +66,39 @@ Small hand-written modules, each committed as both `.wat` source and the
 | `imports_demo.wat` / `.wasm` | Imported functions — one returning a value, one returning nothing. Drives the generic import stubs. |
 | `host_state.wat` / `.wasm` | An imported memory and an imported mutable global — spec §3.3 initial state and §3.4 host mutation. |
 | `hook_imports.wat` / `.wasm` | A module still carrying the instrumenter's `__codetracer` hooks, i.e. the one replay must refuse. |
+| `void_import.wat` / `.wasm` | An import whose signature is `() -> ()` — the crossing that carries no boundary values at all, and whose realm markers are its whole trace on disk (M39). |
 
 Rebuild with:
 
 ```sh
-for f in imports_demo host_state hook_imports; do wat2wasm $f.wat -o $f.wasm; done
+for f in imports_demo host_state hook_imports void_import; do wat2wasm $f.wat -o $f.wasm; done
 ```
 
-The recordings that drive these are **not** committed. They are built in
-the tests by the producer replica in
+The recordings that drive these are **not** committed, with one exception
+below. They are built in the tests by the producer replica in
 `internal/boundarylog/browser_format_test.go`, which re-implements
 `browser_session.js`'s emission rules and
 `browser_stream_host.rs`'s `.ct` writer.
 `TestBuilderReproducesTheCommittedBrowserRecording` pins that replica
 against `frontend-wasm.ct` above, so a drift in the synthetic recordings'
 format fails loudly rather than quietly making the suite test a fiction.
+
+## `void-import.ct` — the one committed synthetic recording
+
+`void-import.ct/` records one `ping_n(2)` call against `void_import.wasm`:
+one exported call and two crossings into `host_ping`, each carrying no
+values whatsoever.
+
+It is committed because `cmd/wazero/boundary_log_test.go` needs it and
+cannot build it. That suite is `package main`, and the producer replica is
+a `_test.go` file in `package boundarylog`, so it is not importable. The
+CLI is the only place the "a diverged replay writes no trace" policy can be
+observed at all — `internal/boundarylog` replays with a nil recorder and
+writes nothing either way — so the recording has to be on disk.
+
+A committed copy drifts, so it is not left on trust:
+`internal/boundarylog/void_import_fixture_test.go` rebuilds it from the
+same replica every run and asserts the bytes match
+(`TestCommittedVoidImportRecordingMatchesTheReplica`). Regenerate it by
+running that test's builder — `voidImportRecording()` there is the single
+definition of its content.

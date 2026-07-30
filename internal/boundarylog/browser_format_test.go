@@ -45,16 +45,25 @@ import (
 //     `codetracer-wasm-instrumenter/crates/codetracer-wasm-instrumenter/src/lib.rs`
 //     wraps an import edge with `push_realm_boundary(..., FUNC_KIND_IMPORT,
 //     ...)` on BOTH sides, exactly as it does for an export edge.
-//   - `browser_session.js`'s `__ct_emit_realm_boundary(direction, _fnKind,
-//     fnIndex, token)` ignores `_fnKind` entirely and unconditionally emits
-//     a `CorrelationMarker`.
+//   - `browser_session.js`'s `__ct_emit_realm_boundary(direction, fnKind,
+//     fnIndex, token)` emits a `CorrelationMarker` for either edge, and
+//     since M39 labels it `wasm import #<n>` when `fnKind` is
+//     `FUNC_KIND_IMPORT` and `wasm export #<n>` otherwise.
 //
 // So a real import crossing DOES leave two correlation-marker records on
 // disk — an earlier reading of this package had it that it left none —
-// and `importCall` emits them. They carry no boundary values, so the
-// parser treats them as run delimiters exactly like the `Step` records
-// that also bracket every run; `TestImportCrossingCarriesItsRealmMarkers`
-// and `TestFaithfulImportRecordingRoundTrips` pin both halves.
+// and `importCall` emits them. Since M39 they are also what BRACKETS the
+// crossing, which is what makes a `() -> ()` import recoverable at all:
+// such a crossing has no `Call`, no `Return` and no value run, so its
+// markers are the whole of it. `TestImportCrossingCarriesItsRealmMarkers`,
+// `TestFaithfulImportRecordingRoundTrips` and
+// `TestZeroArityImportIsRecoveredFromItsRealmMarkers` pin the halves.
+//
+// `legacyImportCall` produces the pre-M39 rendering, where both edges said
+// `wasm export #<n>`. Recordings in that shape exist on disk today and
+// must keep replaying; `TestLegacyImportRecordingStillRoundTrips` and
+// `TestZeroArityImportInALegacyRecordingIsStillNotRecovered` hold that
+// line.
 
 // jsValue is a value as `browser_session.js` puts it on the wire: a JSON
 // payload plus a `typeKind` tag.
@@ -249,23 +258,48 @@ func (b *recordingBuilder) export(name string, exportIndex int, path string, lin
 //
 // `browser_session.js` emits no `Call` and no `Return` for an import — it
 // returns early for any `fnKind` that is not `FUNC_KIND_EXPORT`. It DOES
-// emit the two realm markers, because `__ct_emit_realm_boundary` ignores
-// its `fnKind` argument and the instrumenter pushes the hook on both sides
-// of an import edge just as it does for an export (see the file header).
-// The `show_value` label is the same `wasm export #<n>` template in both
-// cases — the runtime has no separate import spelling — so on disk an
-// import crossing's markers are indistinguishable from an export's except
-// by their surroundings.
+// emit the two realm markers, because the instrumenter pushes the hook on
+// both sides of an import edge just as it does for an export (see the file
+// header), and as of M39 `emitRealmBoundary` spells the import edge
+// `wasm import #<n>` rather than reusing the export template.
+//
+// That spelling is the crossing's ONLY trace on disk when the signature is
+// `() -> ()`, so it is what this replica has to get right; the pre-M39
+// spelling is still produced, by `legacyImportCall` below.
+//
+// The `LEAVE` marker carries no `show_text`: both sources of one
+// (`returnValueNames`, `lastResultBinding`) are keyed by the EXPORT index,
+// and an import index is drawn from a different numbering.
 func (b *recordingBuilder) importCall(index int, path string, line int, args, results []jsValue) {
 	pid := b.pathID(path)
 	label := fmt.Sprintf("import #%d", index)
 	// `__ct_emit_call(FUNC_KIND_IMPORT, n)` leaves nothing on disk.
 	b.values(pid, line, label, "arg", args)
 	// `__ct_emit_realm_boundary(ENTER, FUNC_KIND_IMPORT, n, tok)`.
-	b.marker("recv", fmt.Sprintf("wasm export #%d", index), "")
+	b.marker("recv", fmt.Sprintf("wasm import #%d", index), "")
 	b.values(pid, line, label, "ret", results)
 	// `__ct_emit_return(FUNC_KIND_IMPORT, n)` leaves nothing on disk;
 	// `__ct_emit_realm_boundary(LEAVE, FUNC_KIND_IMPORT, n, tok)` does.
+	b.marker("send", fmt.Sprintf("wasm import #%d", index), "")
+}
+
+// legacyImportCall emits one import crossing the way a runtime older than
+// M39 rendered it: identical in every respect except that both realm
+// markers say `wasm export #<n>`.
+//
+// It is not a hypothetical shape. Two recordings committed in the
+// `codetracer` repo carry it —
+// `src/db-backend/tests/fixtures/wasm-memory-calldata/ledger-settle.ct`
+// has three import crossings labelled that way — and they must keep
+// replaying. Backward compatibility is a requirement here, not a
+// courtesy: a boundary recording is an artefact users hold, and a
+// consumer that rejected one for its age would strand it.
+func (b *recordingBuilder) legacyImportCall(index int, path string, line int, args, results []jsValue) {
+	pid := b.pathID(path)
+	label := fmt.Sprintf("import #%d", index)
+	b.values(pid, line, label, "arg", args)
+	b.marker("recv", fmt.Sprintf("wasm export #%d", index), "")
+	b.values(pid, line, label, "ret", results)
 	b.marker("send", fmt.Sprintf("wasm export #%d", index), "")
 }
 
@@ -368,21 +402,10 @@ func TestCommittedBrowserRecordingParsesToTheExpectedCrossing(t *testing.T) {
 	require.Equal(t, 0, len(rec.NestedExports()))
 }
 
-// TestImportCrossingCarriesItsRealmMarkers pins the half of the format the
-// committed fixture cannot pin, because it has no import crossings.
-//
-// The correction matters beyond bookkeeping: it means an import's INDEX is
-// on disk even when the crossing carries no values at all. A `() -> ()`
-// import is therefore not, as this package previously recorded, invisible
-// to a browser recording — it is invisible to THIS PARSER, which drops the
-// markers. See `TestZeroArityImportIsRecordedButNotRecovered`.
-func TestImportCrossingCarriesItsRealmMarkers(t *testing.T) {
-	b := newRecordingBuilder("marker-shape")
-	b.export("run", 0, "/src/x.wat", 1,
-		[]jsValue{jsInt(5)}, []jsValue{jsInt(30)}, func() {
-			b.importCall(3, "/src/x.wat", 1, []jsValue{jsInt(5)}, []jsValue{jsInt(7)})
-		})
-
+// markerLabels lists every realm marker a builder emitted, as
+// "<direction> <show_value>", in emission order.
+func markerLabels(t *testing.T, b *recordingBuilder) []string {
+	t.Helper()
 	var markers []string
 	for _, ev := range b.events {
 		raw, ok := ev["Event"]
@@ -397,20 +420,60 @@ func TestImportCrossingCarriesItsRealmMarkers(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(meta), &payload))
 		markers = append(markers, payload.Direction+" "+payload.ShowValue)
 	}
+	return markers
+}
+
+// TestImportCrossingCarriesItsRealmMarkers pins the half of the format the
+// committed fixture cannot pin, because it has no import crossings.
+//
+// The two edges must be spelled APART. That is what makes an import's
+// index attributable: an index alone would not do, because the import and
+// export numberings overlap, so `wasm export #3` and an import at index 3
+// would be the same record.
+func TestImportCrossingCarriesItsRealmMarkers(t *testing.T) {
+	b := newRecordingBuilder("marker-shape")
+	b.export("run", 3, "/src/x.wat", 1,
+		[]jsValue{jsInt(5)}, []jsValue{jsInt(30)}, func() {
+			b.importCall(3, "/src/x.wat", 1, []jsValue{jsInt(5)}, []jsValue{jsInt(7)})
+		})
+
 	// Export ENTER, import ENTER, import LEAVE, export LEAVE — the order
 	// `replace_imported_call` and `instrument_exported_function` produce.
+	// The export and the import deliberately share the index 3, so only the
+	// edge word tells the four apart.
+	require.Equal(t, []string{
+		"recv wasm export #3",
+		"recv wasm import #3",
+		"send wasm import #3",
+		"send wasm export #3",
+	}, markerLabels(t, b),
+		"an import crossing must carry its own pair of realm markers, named "+
+			"for the import edge")
+}
+
+// TestLegacyImportCrossingCarriesTheAmbiguousLabel pins the shape this
+// package must keep reading: the same four markers, all saying "export".
+func TestLegacyImportCrossingCarriesTheAmbiguousLabel(t *testing.T) {
+	b := newRecordingBuilder("legacy-marker-shape")
+	b.export("run", 0, "/src/x.wat", 1,
+		[]jsValue{jsInt(5)}, []jsValue{jsInt(30)}, func() {
+			b.legacyImportCall(3, "/src/x.wat", 1,
+				[]jsValue{jsInt(5)}, []jsValue{jsInt(7)})
+		})
 	require.Equal(t, []string{
 		"recv wasm export #0",
 		"recv wasm export #3",
 		"send wasm export #3",
 		"send wasm export #0",
-	}, markers, "an import crossing must carry its own pair of realm markers")
+	}, markerLabels(t, b))
 }
 
-// TestFaithfulImportRecordingRoundTrips proves the markers do not disturb
-// crossing recovery: they carry no boundary values, so the parser treats
-// them as run delimiters exactly like the `Step` records that already
-// bracket every run.
+// TestFaithfulImportRecordingRoundTrips proves the markers bracket a
+// crossing without disturbing the value runs inside it: the tuples are
+// still recovered from the runs, and the crossing count is unchanged from
+// what the pre-M39 run-bracketing produced (see
+// `TestLegacyImportRecordingStillRoundTrips`, which asserts the same
+// crossings off the old spelling).
 func TestFaithfulImportRecordingRoundTrips(t *testing.T) {
 	b := newRecordingBuilder("faithful")
 	b.export("run", 0, "/src/x.wat", 1,
@@ -421,6 +484,7 @@ func TestFaithfulImportRecordingRoundTrips(t *testing.T) {
 	rec, err := LoadRecording(b.write(t, t.TempDir()))
 	require.NoError(t, err)
 
+	require.True(t, rec.MarkersIdentifyImports)
 	require.Equal(t, 3, len(rec.Crossings))
 	require.Equal(t, CrossingExport, rec.Crossings[0].Kind)
 	require.Equal(t, CrossingImport, rec.Crossings[1].Kind)
@@ -433,28 +497,112 @@ func TestFaithfulImportRecordingRoundTrips(t *testing.T) {
 	require.False(t, rec.Crossings[2].hasResults)
 }
 
-// TestZeroArityImportIsRecordedButNotRecovered documents the known gap
-// precisely, so it is not mistaken for a limit of the recording format.
+// TestZeroArityImportIsRecoveredFromItsRealmMarkers is the M39 half of what
+// used to be `TestZeroArityImportIsRecordedButNotRecovered`.
 //
-// The crossing IS on disk: its two markers name import index 7. This
-// parser does not recover it, because the marker's `show_value` uses the
-// same `wasm export #<n>` template for both edges and so cannot be told
-// apart from an export's marker by its own content. Closing the gap needs
-// the producer to spell the two differently; until then a `() -> ()`
-// import is replayed unchecked (`Result.UncheckedImportCalls`).
-func TestZeroArityImportIsRecordedButNotRecovered(t *testing.T) {
+// That test asserted both halves of the gap: that the crossing reached disk
+// (through its realm markers) and that this parser dropped it. The first
+// half is unchanged and still asserted here; the second is now false and is
+// replaced by its opposite. The gap it pinned was never in the recording
+// format — it was that the marker's `show_value` used the same
+// `wasm export #<n>` template for both edges, so a marker could not be told
+// apart from an export's by its own content. `browser_session.js` now
+// spells them apart, and the crossing joins the cursor stream like any
+// other, with its index and its interleaving checked.
+//
+// The legacy behaviour it pinned has not been dropped either; it moved to
+// `TestZeroArityImportInALegacyRecordingIsStillNotRecovered` below, which
+// drives the old spelling.
+func TestZeroArityImportIsRecoveredFromItsRealmMarkers(t *testing.T) {
 	b := newRecordingBuilder("void-import")
 	b.export("run", 0, "/src/x.wat", 1, nil, nil, func() {
 		b.importCall(7, "/src/x.wat", 1, nil, nil)
 	})
 	raw, err := json.Marshal(b.events)
 	require.NoError(t, err)
-	require.True(t, strings.Contains(string(raw), `wasm export #7`),
+	// The crossing's ENTIRE trace on disk: no Call, no Return, no Value,
+	// two markers.
+	require.True(t, strings.Contains(string(raw), `wasm import #7`),
 		"the import's index reaches disk through its realm markers; got:\n%s", string(raw))
+	require.False(t, strings.Contains(string(raw), `import #7:`),
+		"a `() -> ()` crossing must contribute no value binding; got:\n%s", string(raw))
 
 	rec, err := LoadRecording(b.write(t, t.TempDir()))
 	require.NoError(t, err)
-	require.Equal(t, 1, len(rec.Crossings),
-		"only the export is recovered; the value-less import crossing is dropped")
+	require.True(t, rec.MarkersIdentifyImports,
+		"a recording carrying import-labelled markers is the M39 format")
+	require.Equal(t, 2, len(rec.Crossings),
+		"the export and the value-less import crossing are both recovered")
 	require.Equal(t, CrossingExport, rec.Crossings[0].Kind)
+
+	c := rec.Crossings[1]
+	require.Equal(t, CrossingImport, c.Kind)
+	require.Equal(t, uint32(7), c.Index, "the index comes from the marker label")
+	require.Equal(t, 1, c.Seq)
+	require.Equal(t, 1, c.Depth, "it happened inside the exported call")
+	require.Equal(t, 0, len(c.Args))
+	require.Equal(t, 0, len(c.Results))
+	require.False(t, c.hasResults)
+}
+
+// TestZeroArityImportInALegacyRecordingIsStillNotRecovered keeps the
+// pre-M39 reading alive for pre-M39 recordings.
+//
+// This is the whole of the backward-compatibility contract: the same
+// module, the same crossing, the old marker spelling — accepted, parsed,
+// and short exactly the crossing the old spelling could not express. It is
+// not rejected for its age, and it is not silently promoted either: the
+// call is replayed unchecked and reported (`Result.UncheckedImportCalls`,
+// asserted in `replay_test.go`).
+func TestZeroArityImportInALegacyRecordingIsStillNotRecovered(t *testing.T) {
+	b := newRecordingBuilder("void-import-legacy")
+	b.export("run", 0, "/src/x.wat", 1, nil, nil, func() {
+		b.legacyImportCall(7, "/src/x.wat", 1, nil, nil)
+	})
+	rec, err := LoadRecording(b.write(t, t.TempDir()))
+	require.NoError(t, err)
+	require.False(t, rec.MarkersIdentifyImports)
+	require.Equal(t, 1, len(rec.Crossings),
+		"only the export is recovered; the ambiguous markers cannot be attributed")
+	require.Equal(t, CrossingExport, rec.Crossings[0].Kind)
+}
+
+// TestLegacyImportRecordingStillRoundTrips is the same round trip
+// `TestFaithfulImportRecordingRoundTrips` makes, driven through the old
+// marker spelling. The crossings recovered must be identical: the pre-M39
+// path recovers an import from its value runs, and those are unchanged.
+func TestLegacyImportRecordingStillRoundTrips(t *testing.T) {
+	b := newRecordingBuilder("legacy-faithful")
+	b.export("run", 0, "/src/x.wat", 1,
+		[]jsValue{jsInt(5)}, []jsValue{jsInt(30)}, func() {
+			b.legacyImportCall(0, "/src/x.wat", 1,
+				[]jsValue{jsInt(5), jsInt(10)}, []jsValue{jsInt(15)})
+			b.legacyImportCall(1, "/src/x.wat", 1, []jsValue{jsInt(15)}, nil)
+		})
+	rec, err := LoadRecording(b.write(t, t.TempDir()))
+	require.NoError(t, err)
+
+	require.False(t, rec.MarkersIdentifyImports)
+	require.Equal(t, 3, len(rec.Crossings))
+	require.Equal(t, CrossingExport, rec.Crossings[0].Kind)
+	require.Equal(t, CrossingImport, rec.Crossings[1].Kind)
+	require.Equal(t, uint32(0), rec.Crossings[1].Index)
+	require.Equal(t, []rawValue{{Kind: "Int", Text: "5"}, {Kind: "Int", Text: "10"}},
+		rec.Crossings[1].Args)
+	require.Equal(t, []rawValue{{Kind: "Int", Text: "15"}}, rec.Crossings[1].Results)
+	require.Equal(t, CrossingImport, rec.Crossings[2].Kind)
+	require.Equal(t, uint32(1), rec.Crossings[2].Index)
+	require.False(t, rec.Crossings[2].hasResults)
+}
+
+// TestTheCommittedBrowserRecordingIsReadAsPreM39 states, against the real
+// artefact, what the format witness says about a recording that predates
+// M39 — and that saying so costs it nothing, since it carries no import
+// crossing to lose.
+func TestTheCommittedBrowserRecordingIsReadAsPreM39(t *testing.T) {
+	rec, err := LoadRecording(demoRecordingPath)
+	require.NoError(t, err)
+	require.False(t, rec.MarkersIdentifyImports,
+		"the committed recording was made before M39; its markers say `wasm export #`")
+	require.Equal(t, 1, len(rec.Crossings))
 }

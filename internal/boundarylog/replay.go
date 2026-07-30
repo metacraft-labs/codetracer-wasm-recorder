@@ -91,13 +91,19 @@ type Result struct {
 	// the recording.
 	ImportCalls int
 	// UncheckedImportCalls counts calls to imports whose signature is
-	// `() -> ()`. Such a crossing contributes no value runs and no
-	// Call/Return record, so `LoadRecording` recovers no crossing for it
-	// and replay has nothing to check the call against. The crossing is
-	// not truly absent from the recording — its two realm markers name the
-	// index — but they are not attributable to an import by their own
-	// content, so this parser drops them. See `recording.go`'s "How a
-	// crossing appears in a browser `.ct`".
+	// `() -> ()` **in a recording older than M39**, where nothing on disk
+	// can be matched to them: such a crossing contributes no value runs and
+	// no Call/Return record, and the realm markers that do name its index
+	// were spelled the same as an export's, so `LoadRecording` recovers no
+	// crossing for it.
+	//
+	// It is always 0 for a recording whose markers name the import edge
+	// (`Recording.MarkersIdentifyImports`). There the crossing is recovered
+	// like any other and a call that does not match it is a spec §6
+	// divergence — the fallback is not available, because "replayed
+	// unchecked" is exactly the silent degradation §8 exists to prevent.
+	// It survives only so an already-recorded trace replays rather than
+	// being rejected for its age.
 	UncheckedImportCalls int
 	// FromPoint and ToPoint are the quiescent-point range that was actually
 	// driven, after Options.FromPoint / Options.ToPoint were resolved
@@ -783,14 +789,19 @@ func (r *replayer) serviceImport(plan *importPlan, mod api.Module, stack []uint6
 	}
 
 	// An import whose signature is `() -> ()` contributes no value runs to
-	// a browser `.ct`, and `browser_session.js` emits no Call/Return
-	// record for an import, so `LoadRecording` recovered no crossing for
-	// it: there is nothing to check against and nothing to feed back.
-	// Such a call is serviced as a no-op and counted separately so the
-	// caller can report it. (The crossing's realm markers ARE on disk;
-	// recovering the index from them needs a producer change — see
-	// `recording.go`.)
-	if len(plan.sig.Params) == 0 && len(plan.sig.Results) == 0 {
+	// a browser `.ct`, and `browser_session.js` emits no Call/Return record
+	// for an import, so in a recording made before M39 the crossing left
+	// only a pair of realm markers spelled exactly like an export's and
+	// `LoadRecording` recovered nothing for it: there is nothing to check
+	// against and nothing to feed back. Such a call is serviced as a no-op
+	// and counted separately so the caller can report it.
+	//
+	// From M39 the markers name the import edge, the crossing IS recovered,
+	// and this arm is skipped — the call falls through to exactly the same
+	// checks every other import call gets, so its index and its position in
+	// the interleaving are verified and a mismatch is a divergence.
+	if len(plan.sig.Params) == 0 && len(plan.sig.Results) == 0 &&
+		!r.opts.Recording.MarkersIdentifyImports {
 		r.result.UncheckedImportCalls++
 		return
 	}

@@ -14,14 +14,44 @@ import (
 // mutations. It is optional: a module that defines its own memory and
 // globals needs none of it, because the `.wasm` already contains them.
 //
-// PRODUCER STATUS, stated plainly so nobody mistakes this for something the
-// browser writes today: as of M37 **no producer emits this file**. The
-// browser recorder (`browser_session.js`) records only the hook stream, and
-// the backend-manager receiver (`browser_stream_host.rs`) writes only the
-// three trace files. This schema and its application are implemented here
-// so that (a) the replay side of spec §3.3/§3.4 exists and is tested, and
-// (b) a producer has a defined target to write. A recording without the
-// file replays exactly as before.
+// PRODUCER STATUS: as of M44 this file **is** produced by the browser
+// pipeline. `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js`
+// captures the state (`host_state.js` explains why by snapshot-and-diff from
+// the host side and not by a bytecode hook — a host write happens in
+// JavaScript, outside the module, where no instruction of the module runs),
+// emits it as `HostInitialState` / `HostMutation` browser events, and
+// `codetracer/src/backend-manager/src/browser_stream_host.rs` renders those
+// into this schema. A recording whose module defines its own memory and
+// globals still carries no such file, and replays exactly as before.
+//
+// The end-to-end fixture is
+// `codetracer/src/db-backend/tests/fixtures/wasm-memory-calldata/`, whose
+// `verify.sh` replays a real browser recording and shows that withholding
+// either record produces a `DivergenceError` rather than a wrong trace.
+//
+// Two limits of the producer, both reported at the cause rather than
+// dropped (spec §8), and neither of them this package's to fix:
+//
+//   - A host write made *between* two top-level exported calls has no
+//     anchor in this schema — §3.3 is "before the FIRST call" and §3.4 is
+//     "during crossing N". The producer refuses to invent one. This covers
+//     an imported global the host reassigns between calls as well as a
+//     memory write: `applyMutations` only ever sets a provider global from
+//     a mutation, so an assignment anchored to neither record would simply
+//     never be applied.
+//   - A `() -> ()` import leaves no value run, so no crossing is recovered
+//     for it (see `recording.go`) and a mutation made during it has no
+//     `AfterCrossing` that would be true. Likewise refused.
+//
+// A third case is refused *here* rather than by the producer, and it is
+// what makes the producer's capture windows exact. §3.4's window is the
+// span between an import's two hooks, on the reasoning that only the host
+// runs inside it. The one way a module store can land there is a host
+// function calling back into an exported function — and such a recording
+// carries an export crossing at non-zero depth, which `refuseNestedExports`
+// rejects on both the batch and the streaming path. So a host write and a
+// module write to overlapping addresses cannot reach a materialised trace:
+// the recording is refused, not mis-attributed.
 const HostStateFileName = "boundary_state.json"
 
 // hostStateVersion is the schema version this package understands. An

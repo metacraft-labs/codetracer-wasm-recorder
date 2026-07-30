@@ -198,11 +198,28 @@ each reported rather than guessed at:
   needs a producer change in `browser_session.js`, not just a parser change.
 * Floats lose NaN payloads on the browser path (JS `Number`), which spec §7 flags
   as a divergence risk. `host_runtime.js` documents the same limit.
-* `boundary_state.json` (spec §3.3 / §3.4) has **no producer yet**. The replay
-  side is implemented and tested; the schema is documented in `hoststate.go`.
+* `boundary_state.json` (spec §3.3 / §3.4) **is** produced as of M44, by
+  `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` plus
+  `codetracer/src/backend-manager/src/browser_stream_host.rs`; the schema and
+  the two host writes the producer refuses to record rather than mis-anchor are
+  documented in `hoststate.go`. The end-to-end fixture is
+  `codetracer/src/db-backend/tests/fixtures/wasm-memory-calldata/`, whose
+  `verify.sh` shows that withholding either record diverges. **Expect
+  `Error constructing DWARF data …: too short` on any recording with a
+  host-supplied memory**: that is the *synthesised provider module*
+  (`provider.go`) having no DWARF sections, not the guest — the guest's trace
+  still carries per-line steps and locals.
+  `internal/testing/maintester/dwarfwarn.go` already filters the same message
+  elsewhere.
 * A recording containing an export crossing *nested* inside another crossing (a
   host callback re-entering the module) is refused: driving it would need the
-  host's own control flow, which a boundary log does not carry.
+  host's own control flow, which a boundary log does not carry. That refusal
+  carries more weight than it looks: it is also what makes the producer's §3.4
+  capture window exact. The window is "between the import's two hooks, where
+  only the host runs", and a host callback is the one way a *module* store can
+  land inside it. Refusing the recording is what stops such a store being
+  recorded as a host write. Do not relax this without giving the producer
+  another way to tell the two apart.
 
 ### Replay snapshots (fast seeking) — `--snapshots`, `--seek-from`
 

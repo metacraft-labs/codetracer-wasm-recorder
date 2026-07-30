@@ -326,15 +326,40 @@ wazero-snapshots run --boundary-log <program>.ct \
     --slice-dir <dir> <original>.wasm
 ```
 
-**No producer feeds either shape yet, and the gap is larger than a tee.**
-`record-web`'s `JsonFileCtfsWriter`
-(`codetracer/src/backend-manager/src/browser_stream_host.rs`) buffers every
-event in memory and writes `trace.json` with a single `fs::write`, inside a
-one-shot `flush` guarded by `session_ended`. So the file does not exist until
-the session ends, is never appended to, and there is no byte stream to tee.
-Feeding this path needs that writer changed to serialise records as they
-arrive — for *both* shapes above, not just the pipe. Once it does, `-` is
-preferable: EOF is unambiguous and backpressure is real.
+**Both shapes now have a producer** (M38c). `record-web`'s
+`JsonFileCtfsWriter` (`codetracer/src/backend-manager/src/browser_stream_host.rs`)
+used to buffer every event in memory and write `trace.json` with a single
+`fs::write` inside a one-shot `flush`, so the file did not exist until the
+session ended and there was no byte stream to tee — a gap larger than a tee,
+since it was a change to a producer. It now appends each record as it is
+translated (`[` on the first, `,` before each later one, `]` at session end),
+and offers both shapes:
+
+* `record-web --snapshot-consumer <word> …` spawns a command per recording and
+  tees the exact `trace.json` bytes into its stdin — the `-` shape, and the
+  preferable one: EOF is unambiguous and backpressure is real.
+* `record-web --stream-done-marker .complete` creates the marker
+  `--stream-done` waits for, for the file-following shape.
+
+Both are off by default. Two properties of that producer are what the pins
+here rest on, and both are tested on its side: the appended rendering is
+**byte-identical** to the old single-shot one (positional `Function` /
+`VariableName` / `Path` tables mean anything else would silently renumber
+every lookup), and a recording cut off mid-session ends on a whole record, so
+it lands in `TruncatedUnterminated` rather than `TruncatedMidRecord`.
+`stream-snapshots-demo.sh` in codetracer's cross-process demo fixture drives
+the whole path from a headless browser and times each slice against
+`trace.json`'s mtime — the write of the `]` closing its array, and so the
+instant the recording stopped being produced.
+
+**One caveat that is not the daemon's.** Both browser producers
+(`@codetracer/runtime-browser` and the instrumenter's browser session)
+buffer 256 events before their first flush, with no time-based flush. A page
+producing fewer than that hands the daemon its whole recording in one batch
+at `stop()`, and then nothing here can derive anything "while the page is
+still running" no matter how promptly it reads. The demo script patches
+`flushThreshold: 1` into its scratch page for exactly this reason. Treat a
+short page's recording as arriving all at once until that default changes.
 
 Four things are load-bearing:
 

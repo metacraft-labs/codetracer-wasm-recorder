@@ -5,6 +5,61 @@ and `internal/boundarylog/*_test.go`). See
 `codetracer-specs/Recording-Backends/WASM-Instrumentation-Layer.md` for the
 model these exercise.
 
+## The rule these files live under
+
+Everything here is a **captured vector of a producer this repo does not
+build**. That is the only reason a recording is committed anywhere in this
+workspace.
+
+The sibling `codetracer` repo deleted its committed recordings: it *owns*
+the browser recording pipeline, so a committed recording of it was a cache
+of the code under test, and its tests kept passing about a recorder that
+had been replaced. Its tests now record when they run
+(`codetracer/scripts/materialize-recording.sh`).
+
+This repo is on the other side of that boundary. It is the replayer. The
+pipeline that makes these recordings — `ct-instrument`, the `record-web`
+daemon, headless Chromium — lives in two siblings, and `go test ./...` must
+not need either. Producing them here is not available; generating them with
+`internal/boundarylog`'s own `recordingBuilder` would replace the browser
+with this repo's model of it, which would gut
+`TestVerifyCrossModalityParity` (it would compare wazero against a Go
+re-implementation of four Rust modules) and empty out
+`nan_payload_test.go`'s bit-pattern assertions (they would show only that
+the builder writes what it was told). So they stay.
+
+**What changed is that the capture is now checked.** The sibling's
+`wasm-parity-corpus/regenerate.sh` used to end by copying each fresh
+recording straight into this directory. That made the two repos agree by
+construction, and the agreement then held after the producer moved, because
+the last sync had frozen it — the same defect the committed recordings had,
+in cross-repo form. That step is gone. In its place:
+
+```
+just verify-vectors     # scripts/verify-vectors-against-producer.sh
+```
+
+records the same demos from the sibling's current tree and compares what
+the two recordings *mean* — every recovered crossing, its kind, name,
+index, depth, argument and result values, and the `MarkersIdentifyImports`
+format witness. Not bytes: `trace_metadata.json` carries the absolute
+directory the run happened in, so byte equality is unachievable and a check
+that demanded it would be switched off within a week. The comparison lives
+in `internal/boundarylog/vector_freshness_crossrepo_test.go` behind the
+`crossrepo` build tag, so `just test` stays standalone.
+
+**Never hand-edit a file under this directory, and never copy one in.** If
+`just verify-vectors` fails, the producer changed; re-capture deliberately
+and read the diff, because it is telling you something about the replayer
+you maintain.
+
+The single exception is `nan-payloads/legacy-encoding.ct`, which was made
+by a `ct-instrument` built before M52 and cannot be produced from any
+current tree. It is the one recording here that is committed for the
+reason a recording *should* be committed — it is evidence about a version
+that no longer exists — and it is deliberately excluded from
+`verify-vectors`. See `nan-payloads/README.md`.
+
 ## The demo recording — a real browser session
 
 | file | what it is |
@@ -14,16 +69,22 @@ model these exercise.
 | `balance_calc.wasm.manifest.json` | The `ct-instrument` sidecar manifest for it. |
 | `balance_calc.rs` | The module's Rust source, for reading alongside the assertions. |
 
-These come from the cross-process origin demo in the `codetracer` repo:
+These were captured from the cross-process origin demo in the `codetracer`
+repo. The demo's sources are still there; its recordings are not committed
+any more, so the left-hand column below is what
+`codetracer/scripts/materialize-recording.sh cross-process-three-trace`
+produces:
 
 ```
+<recording dir>/frontend-wasm.ct/                      -> frontend-wasm.ct/
 codetracer/src/db-backend/tests/fixtures/cross_process/account-balance-with-wasm/
-    frontend-wasm.ct/                                  -> frontend-wasm.ct/
     frontend/balance_calc.wasm.manifest.json           -> balance_calc.wasm.manifest.json
     wasm-src/target/wasm32-unknown-unknown/debug/balance_calc.wasm
                                                        -> balance_calc.wasm
     wasm-src/lib.rs                                    -> balance_calc.rs
 ```
+
+`just verify-vectors` is what keeps `frontend-wasm.ct/` an accurate capture.
 
 `frontend-wasm.ct/` is the output of the real pipeline end to end: the
 instrumented module ran in a browser under
@@ -53,8 +114,9 @@ mentions neither `__codetracer` nor `__ct_emit_call`.
 
 The `dev` (not `release`) profile matters: release LTO discards the
 per-unit DWARF line programs, and a module built that way materialises no
-source lines at all (spec §12). Regenerate both with
-`regenerate.sh` in the fixture directory named above.
+source lines at all (spec §12). Re-capture both from the sibling's
+`regenerate.sh` (or from what `materialize-recording.sh` leaves in its
+cache) when `just verify-vectors` says the producer has moved.
 
 ## Synthetic modules
 

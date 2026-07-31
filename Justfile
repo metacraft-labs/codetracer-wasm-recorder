@@ -94,6 +94,23 @@ nix-build:
 # Run cross-repo integration tests against sibling codetracer repo
 cross-test *ARGS:
     bash scripts/run-cross-repo-tests.sh {{ ARGS }}
+
+# Do the committed boundary-log vectors still describe the producer?
+#
+# The recordings under `cmd/wazero/testdata/boundary-log/` are captured
+# output of a pipeline living in the sibling repos — this repo replays
+# recordings, it does not make them — so they are committed rather than
+# produced, and `just test` needs no sibling. What used to be missing is
+# anything that noticed when the capture stopped being true: the sibling's
+# parity-corpus regenerator simply *copied* fresh recordings in, so the two
+# repos agreed by construction and kept agreeing after the producer moved.
+#
+# This records the same demos from the sibling's current tree and compares
+# what the recordings mean — every crossing, its values, and the format
+# witness. Needs a `codetracer` checkout (or `CODETRACER_ROOT`); it fails
+# rather than skipping when it cannot run.
+verify-vectors:
+    bash scripts/verify-vectors-against-producer.sh
 # --- M13: Packaging UX Standardization ---
 # These recipes implement Repo-Requirements.md §2.8. The OS-packaged
 # recorders share a uniform packaging surface: `bump-version` rewrites

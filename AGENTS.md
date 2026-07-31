@@ -260,8 +260,22 @@ each reported rather than guessed at:
   `TestTheSpeculativeStrictCheckLeavesNoTrace` and end to end by the mixed
   recording, where a spurious cursor advance would eat the crossing the next
   call needs.
-* Floats lose NaN payloads on the browser path (JS `Number`), which spec §7 flags
-  as a divergence risk. `host_runtime.js` documents the same limit.
+* **Floats used to lose NaN payloads on the browser path; M52 closed that.**
+  The hooks took a WASM float, which the WebAssembly JS API hands JavaScript as
+  a `Number` with a NaN's payload left implementation-defined — and
+  `JSON.stringify` then rendered any NaN `null` and `-0` as `0`. Spec §7 makes a
+  payload mismatch a divergence, so such a recording was not a faithful
+  re-execution input.
+
+  The instrumented module now reinterprets a boundary float to its integer bit
+  pattern *before* the hook fires (`__ct_emit_f32_bits(slot, i32)` /
+  `__ct_emit_f64_bits(slot, i64)`), so nothing crosses into JavaScript that a
+  `Number` could damage, and `browser_session.js` records the bits as
+  `f32:0x<8 hex>` / `f64:0x<16 hex>` under the `Float` value kind.
+  `values.go::decode` reads that spelling and **also** still reads the pre-M52
+  decimal, because a recording is an artefact users hold — see
+  `cmd/wazero/nan_payload_test.go`, which drives both a post- and a pre-M52
+  browser recording of the same module.
 * `boundary_state.json` (spec §3.3 / §3.4) **is** produced as of M44, by
   `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` plus
   `codetracer/src/backend-manager/src/browser_stream_host.rs`; the schema and

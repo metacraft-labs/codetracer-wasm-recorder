@@ -212,11 +212,28 @@ func (r rawValue) String() string {
 //
 // Both `Int` and `Raw` are therefore accepted for the integer types.
 //
-// KNOWN LOSS (spec §7): the browser path carries floats as JSON numbers, so
-// a NaN *payload* does not survive the recording. `codetracer-wasm-
-// instrumenter/recorder-runtime/host_runtime.js` documents the same limit.
-// Replay cannot recover what was never recorded; it compares whatever the
-// recording does carry.
+// Floats have TWO accepted spellings, and both must stay accepted (M52):
+//
+//   - `f32:0x<8 hex>` / `f64:0x<16 hex>` — the value's exact IEEE-754 bit
+//     pattern. This is what a browser records today. The instrumented
+//     module reinterprets the float to an integer before the hook fires,
+//     so nothing crosses into JS that a `Number` could damage, and
+//     `browser_session.js` writes the bits out as a width-tagged hex
+//     string.
+//   - a plain decimal — the pre-M52 spelling, in which the value reached
+//     JS as a `Number`. Recordings in that spelling are artefacts users
+//     hold (two are committed in this repo and in `codetracer`), so they
+//     are still decoded, with the loss they were recorded with: the
+//     WebAssembly JS API leaves a NaN's payload implementation-defined
+//     across the `Number` conversion, `JSON.stringify` renders a NaN
+//     `null` and `-0` as `0`. Nothing here can recover what the producer
+//     did not record; what it can do is not reject the recording for its
+//     age.
+//
+// The two are told apart by the payload's own shape, not by a flag: the
+// width tag makes the new spelling unambiguous against any decimal, and
+// against the *other* float width, so a `f64:` payload in an `f32` slot is
+// an error rather than a silent truncation.
 func (r rawValue) decode(t ScalarType) (Value, error) {
 	switch t {
 	case TypeI32, TypeI64:
@@ -253,14 +270,25 @@ func (r rawValue) decode(t ScalarType) (Value, error) {
 				"recorded value %s cannot be read as %s: expected a ValueRecord "+
 					"of kind Float", r, t)
 		}
-		f, err := strconv.ParseFloat(strings.TrimSpace(r.Text), 64)
+		text := strings.TrimSpace(r.Text)
+
+		// The M52 spelling first: an exact bit pattern needs no
+		// interpretation and cannot be confused with a decimal.
+		if bits, ok, err := parseFloatBits(text, t); err != nil {
+			return Value{}, err
+		} else if ok {
+			return Value{Type: t, Bits: bits}, nil
+		}
+
+		f, err := strconv.ParseFloat(text, 64)
 		if err != nil {
 			return Value{}, fmt.Errorf("recorded value %s is not a valid %s float: %w", r, t, err)
 		}
 		if t == TypeF32 {
 			// f32 -> f64 -> f32 is exact for every finite f32 and both
-			// infinities, so the browser's widening to a JS Number is
-			// lossless here. NaN payloads are the documented exception.
+			// infinities, so the pre-M52 widening to a JS Number is
+			// lossless here. NaN payloads and the sign of -0.0 are the
+			// documented exceptions of that spelling.
 			return Value{Type: t, Bits: uint64(math.Float32bits(float32(f)))}, nil
 		}
 		return Value{Type: t, Bits: math.Float64bits(f)}, nil
@@ -298,4 +326,54 @@ func formatValues(vs []Value) string {
 		parts[i] = v.String()
 	}
 	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+// floatBitsPrefix is the width tag the M52 float spelling carries, keyed
+// by the type it may appear in.
+var floatBitsPrefix = map[ScalarType]struct {
+	prefix   string
+	nibbles  int
+	typeName string
+}{
+	TypeF32: {"f32:0x", 8, "f32"},
+	TypeF64: {"f64:0x", 16, "f64"},
+}
+
+// parseFloatBits recognises the M52 exact-bits float spelling and decodes
+// it. It reports `(bits, true, nil)` on a match, `(0, false, nil)` when
+// `text` is not in that spelling at all (so the caller falls back to the
+// pre-M52 decimal), and an error when it *is* in that spelling but
+// malformed or of the wrong width.
+//
+// A wrong-width payload is an error rather than a coercion on purpose: a
+// `f64:` payload arriving in an `f32` slot means the recording and the
+// boundary signature disagree about the type, which spec §6 classes as a
+// missing capture, and truncating it would silently invent a value.
+func parseFloatBits(text string, t ScalarType) (uint64, bool, error) {
+	spec, ok := floatBitsPrefix[t]
+	if !ok {
+		return 0, false, nil
+	}
+	// Not the exact-bits spelling at all — not an error, just the older
+	// encoding.
+	if !strings.HasPrefix(text, "f32:0x") && !strings.HasPrefix(text, "f64:0x") {
+		return 0, false, nil
+	}
+	if !strings.HasPrefix(text, spec.prefix) {
+		return 0, false, fmt.Errorf(
+			"recorded float %q declares a different width than the boundary "+
+				"signature, which says %s: the recording and the module "+
+				"disagree about this slot's type (spec §6)", text, spec.typeName)
+	}
+	digits := text[len(spec.prefix):]
+	if len(digits) != spec.nibbles {
+		return 0, false, fmt.Errorf(
+			"recorded float %q is not a %d-digit %s bit pattern", text,
+			spec.nibbles, spec.typeName)
+	}
+	bits, err := strconv.ParseUint(digits, 16, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("recorded float %q is not a valid bit pattern: %w", text, err)
+	}
+	return bits, true, nil
 }

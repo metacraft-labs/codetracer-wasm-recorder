@@ -146,3 +146,105 @@ func TestSignatureRendering(t *testing.T) {
 		Params: []ScalarType{TypeI32, TypeF64}, Results: []ScalarType{TypeI64}}))
 	require.False(t, s.Equal(Signature{Params: []ScalarType{TypeI32}, Results: []ScalarType{TypeI64}}))
 }
+
+// ===========================================================================
+// M52 — the exact-bits float encoding, and the encoding it replaced
+// ===========================================================================
+
+// TestDecodeExactFloatBits pins the M52 spelling: a boundary float is
+// recorded as its IEEE-754 bit pattern, width-tagged, so a NaN payload
+// and the sign of a zero survive the browser path.
+//
+// The values are the ones the JS `Number` path could not carry.  A
+// signalling NaN's payload is lost to the WebAssembly JS API's
+// implementation-defined NaN conversion; a NaN of any kind is then lost
+// outright to `JSON.stringify`, which renders it `null`; and `-0`
+// renders as `0`.  Spec §7 makes a payload mismatch a divergence, so all
+// three were replay-breaking.
+func TestDecodeExactFloatBits(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		typ  ScalarType
+		bits uint64
+	}{
+		// f32 signalling NaN — the quiet bit is clear, so any quieting
+		// or f32->f64->f32 round trip changes it.
+		{"f32 signalling NaN", "f32:0x7f800001", TypeF32, 0x7f800001},
+		// f64 quiet NaN carrying a payload.
+		{"f64 payload NaN", "f64:0x7ff80000deadbeef", TypeF64, 0x7ff80000deadbeef},
+		{"f32 negative zero", "f32:0x80000000", TypeF32, 0x80000000},
+		{"f64 negative zero", "f64:0x8000000000000000", TypeF64, 0x8000000000000000},
+		{"f32 positive zero", "f32:0x00000000", TypeF32, 0},
+		{"f64 positive infinity", "f64:0x7ff0000000000000", TypeF64, 0x7ff0000000000000},
+		{"f64 negative infinity", "f64:0xfff0000000000000", TypeF64, 0xfff0000000000000},
+		// An ordinary finite value uses the same spelling — the
+		// encoding is uniform, not a special case for NaNs.
+		{"f32 finite", "f32:0x3fc00000", TypeF32, 0x3fc00000},
+		{"f64 finite", "f64:0x3ff8000000000000", TypeF64, 0x3ff8000000000000},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := rawValue{"Float", tc.text}.decode(tc.typ)
+			require.NoError(t, err)
+			require.Equal(t, tc.typ, v.Type)
+			// Compared on bits, never with ==: two NaNs are never equal
+			// under float comparison, and -0.0 == +0.0 is true, so an
+			// == assertion here would pass on values that are wrong.
+			require.Equal(t, tc.bits, v.Bits)
+		})
+	}
+}
+
+// TestDecodeExactFloatBitsRejectsAWidthMismatch pins that the width tag
+// is checked rather than trusted.  A payload declaring the other width
+// means the recording and the boundary signature disagree about the
+// slot's type, which spec §6 classes as a missing capture; truncating or
+// widening it would invent a value.
+func TestDecodeExactFloatBitsRejectsAWidthMismatch(t *testing.T) {
+	_, err := rawValue{"Float", "f64:0x7ff80000deadbeef"}.decode(TypeF32)
+	require.Error(t, err, "an f64 bit pattern must not be read into an f32 slot")
+
+	_, err = rawValue{"Float", "f32:0x7f800001"}.decode(TypeF64)
+	require.Error(t, err, "an f32 bit pattern must not be read into an f64 slot")
+
+	_, err = rawValue{"Float", "f32:0x7f8"}.decode(TypeF32)
+	require.Error(t, err, "a short bit pattern must be rejected, not zero-extended")
+
+	_, err = rawValue{"Float", "f32:0xnothex01"}.decode(TypeF32)
+	require.Error(t, err)
+}
+
+// TestDecodePreM52FloatRecordingsStillReplay is the back-compat half of
+// M52 and the reason the encoding is self-describing rather than flagged.
+//
+// Boundary recordings are artefacts users hold — two are committed in
+// this repo (`cmd/wazero/testdata/boundary-log/frontend-wasm.ct`) and two
+// more in `codetracer` — and every one of them predates M52, so every
+// float in them is a plain decimal.  They must keep decoding, with
+// exactly the fidelity they were recorded with: no more (the producer did
+// not record a payload, so none can be recovered) and no less.
+func TestDecodePreM52FloatRecordingsStillReplay(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		typ  ScalarType
+		bits uint64
+	}{
+		{"finite f64", "1.5", TypeF64, math.Float64bits(1.5)},
+		{"finite f32", "1.5", TypeF32, uint64(math.Float32bits(1.5))},
+		{"negative f64", "-0.25", TypeF64, math.Float64bits(-0.25)},
+		{"infinity", "Infinity", TypeF64, math.Float64bits(math.Inf(1))},
+		{"negative infinity", "-Infinity", TypeF64, math.Float64bits(math.Inf(-1))},
+		// A decimal that happens to start with an `f`-looking prefix is
+		// not confusable: the new spelling is anchored and width-tagged.
+		{"integral f64", "620", TypeF64, math.Float64bits(620)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := rawValue{"Float", tc.text}.decode(tc.typ)
+			require.NoError(t, err)
+			require.Equal(t, tc.bits, v.Bits)
+		})
+	}
+}

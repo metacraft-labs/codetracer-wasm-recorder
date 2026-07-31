@@ -280,7 +280,19 @@ each reported rather than guessed at:
   `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` plus
   `codetracer/src/backend-manager/src/browser_stream_host.rs`; the schema and
   the host write the producer refuses to record rather than mis-anchor is
-  documented in `hoststate.go`. (M44 had two refusals; M39 resolved the second
+  documented in `hoststate.go`.
+
+  **As of M44b the same two records also ride in the event stream**, as
+  `Event` records under `boundary_id: "wasm-host-state"`, and the sidecar is a
+  *rendering* of them rather than the only copy. That is what lets
+  `--boundary-stream` serve a module whose linear memory is imported: the
+  sidecar cannot exist when a streaming consumer starts, because §3.3 is only
+  known at the first exported call and `write_host_state` is itself what
+  spawns the consumer. `assembler.pushEvent` folds them, so both drivers read
+  one implementation; `LoadRecording` cross-checks the two carriers and
+  **refuses a recording where they disagree** rather than picking one. A
+  recording with only a sidecar — every one made before M44b, including the
+  committed `ledger-settle.ct` — still replays exactly as it did. (M44 had two refusals; M39 resolved the second
   — a host write made while servicing a `() -> ()` import now has a crossing to
   anchor to, and is recorded.) The end-to-end fixture is
   `codetracer/src/db-backend/tests/fixtures/wasm-memory-calldata/`, whose
@@ -343,9 +355,12 @@ Four things are load-bearing:
 
 The headline correctness property is
 `TestSnapshotMaterialisationIsByteIdentical` in
-`internal/boundarylog/seek_equivalence_test.go`: materialising a range via the
-nearest preceding snapshot produces a `.ct` byte-identical to materialising the
-same range by linear replay from the start. **Do not weaken it.** A snapshot
+`internal/boundarylog/seek_equivalence_test.go`, and its state-carrying twin
+`TestSeekEquivalenceOverAStateCarryingModule` in
+`internal/boundarylog/state_carrying_equivalence_test.go` (M45): materialising
+a range via the nearest preceding snapshot produces a `.ct` byte-identical to
+materialising the same range by linear replay from the start. **Do not weaken
+either.** A snapshot
 that returns different bytes than the replay it replaces is far worse than the
 slow path.
 
@@ -484,6 +499,17 @@ Four things are load-bearing:
   until a caller-supplied channel says the producer stopped. `--boundary-stream
   <file>` without `--stream-done` is **refused**, because guessing wrong hangs
   forever in one direction and truncates the recording in the other.
+* **Instantiation is deferred, but only when it has to be** (M44b). A module
+  importing a memory nothing has described yet cannot be instantiated until the
+  §3.3 record arrives, which is inside the first call group — so
+  `StreamingReplay` waits for that group before calling `prepare`. Every other
+  recording instantiates before a byte is read, and that is not tidiness:
+  `TestSnapshotsAreEmittedWhileTheStreamIsStillArriving` reads timing off the
+  producer's own progress and requires snapshot 0 to exist before the first
+  chunk's write returns, which a blanket deferral breaks. The predicate is
+  `replayer.undescribedImportedMemory` — `checkImportedMemories`' question
+  without its verdict, factored out so a streaming replay cannot come to accept
+  what the batch driver refuses.
 * **Backpressure is structural.** `NextGroup` reads only when the driver needs
   another call, so a producer writing into a pipe blocks rather than queueing.
   The tests read the timing off that: an `io.Pipe` write completes only once the
@@ -560,15 +586,26 @@ Two traps:
   `TestSliceIsIndependentlyMaterialisable` and
   `TestSnapshotMaterialisationIsByteIdentical` both still pass.
 
-  **The two fixtures cover different halves and neither covers both.**
-  `grow_mem.wat` carries no DWARF, so its replay emits *nothing* — measured,
-  its `steps.dat`, `types.dat` and `events.dat` are all zero bytes in both the
-  slice and the linear container. So the byte-identity comparisons over
-  `grow_mem` are comparing empty traces and pin only the container scaffolding;
-  trace-content identity is established on `balance_calc`, whose export is pure,
-  and *state* identity on `grow_mem`. A single fixture that is both
-  state-carrying and DWARF-bearing would close this, and is M38b's fourth
-  deliverable.
+  **Those two fixtures cover different halves and neither covers both;
+  `tick_ledger` covers both (M45).** `grow_mem.wat` carries no DWARF, so its
+  replay emits *nothing* — measured, its `steps.dat`, `types.dat` and
+  `events.dat` are all zero bytes in both the slice and the linear container.
+  So the byte-identity comparisons over `grow_mem` compare empty traces and
+  pin only the container scaffolding; trace-content identity was established
+  on `balance_calc`, whose export is pure, and *state* identity on `grow_mem`.
+
+  `testdata/boundary-log/parity-corpus/tick_ledger/` closes that — M38b's
+  fourth deliverable: a real browser recording of 24 exported calls whose
+  answers are a function of accumulated state, compiled from Rust with
+  `-C debuginfo=2` so the same replay that must reproduce the state also emits
+  ~2000 source-level steps. `internal/boundarylog/state_carrying_equivalence_test.go`
+  runs seek byte-identity at points 1/5/12/23, slice-trace equality at
+  `--slice-every 8`, and the negative direction — a resume that restores
+  nothing is a `DivergenceError` at every point. Each comparison also asserts
+  the containers carry non-empty trace streams, which is the assertion whose
+  absence let every `grow_mem` comparison pass on two empty documents. **Add
+  new correctness properties there, not to the `balance_calc`/`grow_mem`
+  pair.**
 
 ### Boundary-log replay vs. Stylus replay — why they stay separate
 

@@ -55,6 +55,16 @@ type assembler struct {
 	// marker arrived, i.e. that this recording's producer spells the two
 	// edges apart (M39). See `Recording.MarkersIdentifyImports`.
 	sawImportMarker bool
+
+	// hostState accumulates the spec §3.3 / §3.4 records the stream
+	// carries (M44b), or stays nil for a recording that carries none.
+	//
+	// It lives here, in the shared reconstruction, for the same reason
+	// the crossings do: `reconstructCrossings` and `StreamReader` are two
+	// loops over one `assembler`, so the batch and streaming drivers
+	// cannot disagree about what a recording says without the disagreement
+	// being visible in this one place.
+	hostState *HostState
 }
 
 func newAssembler() *assembler { return &assembler{} }
@@ -259,6 +269,22 @@ func (a *assembler) push(ev *traceEvent) error {
 func (a *assembler) pushEvent(ev *traceEvent) error {
 	if err := a.closeRun(); err != nil {
 		return err
+	}
+	// A host-state record (M44b) is not boundary structure: it describes
+	// the state a crossing starts from or what the host did during one.
+	// It is folded into the accumulating `HostState` and contributes no
+	// crossing, so it must be recognised before the realm-marker parse
+	// rather than after — `parseRealmMarker` would return ok=false for it
+	// and the record would be silently dropped.
+	if hs, ok, err := parseHostStateMarker(*ev.Event); err != nil {
+		return err
+	} else if ok {
+		folded, err := foldHostStateMarker(a.hostState, hs)
+		if err != nil {
+			return err
+		}
+		a.hostState = folded
+		return nil
 	}
 	m, ok := parseRealmMarker(*ev.Event)
 	if !ok || m.kind != CrossingImport {

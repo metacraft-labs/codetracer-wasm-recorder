@@ -501,3 +501,19 @@ func (r *followReader) Read(p []byte) (int, error) {
 }
 
 func (r *followReader) Close() error { return r.f.Close() }
+
+// HostState returns the spec §3.3 / §3.4 state the stream has carried so
+// far, or nil if it has carried none (M44b).
+//
+// It is a live pointer into the reader's assembler, not a copy: a §3.4
+// mutation that arrives later is appended to the very object a caller
+// already holds. That is what lets `StreamingReplay` hand it to the
+// replayer once, at instantiation, and have every later mutation reach
+// `applyMutations` without any further plumbing — the replayer re-reads
+// `Recording.HostState` on every import call.
+//
+// It reports only what has ARRIVED. Before the first call group is
+// complete that is usually nil, which is why `StreamingReplay` defers
+// instantiation until then: the §3.3 record is the last thing the
+// producer sends before the first `Call`.
+func (s *StreamReader) HostState() *HostState { return s.asm.hostState }

@@ -253,12 +253,23 @@ func LoadRecording(path string) (*Recording, error) {
 		return nil, fmt.Errorf("decoding %s: %w", filepath.Join(dir, "trace.json"), err)
 	}
 
-	crossings, marked, err := reconstructCrossings(events)
+	crossings, marked, streamed, err := reconstructCrossings(events)
 	if err != nil {
 		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", dir, err)
 	}
 	rec.Crossings = crossings
 	rec.MarkersIdentifyImports = marked
+
+	// M44b: a recording made by a current producer carries its spec §3.3 /
+	// §3.4 state twice — in the event stream and, rendered from it, in the
+	// `boundary_state.json` sidecar `LoadRecordingMetadata` already read.
+	// They must agree; one carrier alone is also fine, and is what an
+	// older recording and a still-growing one respectively look like.
+	state, err := reconcileHostState(rec.HostState, streamed)
+	if err != nil {
+		return nil, fmt.Errorf("reading host state from %s: %w", dir, err)
+	}
+	rec.HostState = state
 	return rec, nil
 }
 
@@ -406,19 +417,20 @@ type openCrossing struct {
 }
 
 // reconstructCrossings recovers every crossing from a whole `trace.json`,
-// and reports whether the recording's realm markers name the import edge
-// (see `Recording.MarkersIdentifyImports`).
-func reconstructCrossings(events []traceEvent) ([]Crossing, bool, error) {
+// reports whether the recording's realm markers name the import edge (see
+// `Recording.MarkersIdentifyImports`), and returns the spec §3.3 / §3.4
+// state the event stream carried, or nil if it carried none (M44b).
+func reconstructCrossings(events []traceEvent) ([]Crossing, bool, *HostState, error) {
 	a := newAssembler()
 	for i := range events {
 		if err := a.push(&events[i]); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 	}
 	if err := a.finish(); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
-	return a.crossings, a.sawImportMarker, nil
+	return a.crossings, a.sawImportMarker, a.hostState, nil
 }
 
 // parseBindingName splits `browser_session.js`'s `boundaryBindingName`

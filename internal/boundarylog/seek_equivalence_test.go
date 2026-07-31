@@ -290,7 +290,19 @@ func TestReadsAContainerWrittenByTheNimWriter(t *testing.T) {
 // `containerPath`. It returns the number of snapshots taken.
 func deriveSnapshots(t *testing.T, ctDir, containerPath string, inline bool) int {
 	t.Helper()
-	h := newHarness(t, ctDir)
+	return deriveSnapshotsFor(t, balanceCalcWasm, ctDir, containerPath, inline)
+}
+
+// deriveSnapshotsFor is `deriveSnapshots` for an arbitrary module, the way
+// `newHarnessFor` is `newHarness` for one. It exists so the state-carrying
+// fixture in `state_carrying_equivalence_test.go` derives its snapshots
+// through exactly the same code path as `balance_calc` does, rather than
+// through a second copy of it.
+func deriveSnapshotsFor(
+	t *testing.T, wasmPath, ctDir, containerPath string, inline bool,
+) int {
+	t.Helper()
+	h := newHarnessFor(t, wasmPath, ctDir)
 	points, err := wasmsnapshot.QuiescentPoints(h.rec)
 	require.NoError(t, err)
 

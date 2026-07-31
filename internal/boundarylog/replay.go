@@ -603,30 +603,53 @@ func signatureOf(def api.FunctionDefinition) (Signature, error) {
 // counterpart. A missing imported global therefore surfaces as wazero's own
 // instantiation error, which does name the missing export.
 func (r *replayer) checkImportedMemories() error {
+	module, name, ok := r.undescribedImportedMemory()
+	if ok {
+		return fmt.Errorf(
+			"the module imports memory %s.%s, but the boundary recording carries "+
+				"no initial contents for it. An imported memory's initial contents "+
+				"are host-supplied state the recording must capture (spec §3.3); "+
+				"replaying against a zeroed memory would diverge later, at a point "+
+				"unrelated to the cause, so it is refused (spec §8). Expected a %q "+
+				"sidecar in the recording declaring it",
+			module, name, HostStateFileName)
+	}
+	return nil
+}
+
+// undescribedImportedMemory reports the first memory the module imports
+// that the recording's host state does not describe.
+//
+// It is `checkImportedMemories`' question without its verdict, and it
+// exists because the STREAMING driver has to ask it at a moment when "not
+// yet" and "not at all" are different answers: while a recording is being
+// produced, the spec §3.3 record arrives in the stream immediately before
+// the first exported call, so a memory undescribed at startup may be
+// described by the time the first call group is complete. `StreamingReplay`
+// uses this to decide whether it must defer instantiation, and then lets
+// `checkImportedMemories` reach the verdict once the answer is final.
+//
+// Keeping the two in one place is the point: a second copy of the
+// membership test could drift, and the drift would show up as a streaming
+// replay accepting a recording the batch driver refuses.
+func (r *replayer) undescribedImportedMemory() (module, name string, ok bool) {
 	state := r.opts.Recording.HostState
 	for _, def := range r.opts.Compiled.ImportedMemories() {
-		module, name, _ := def.Import()
+		m, n, _ := def.Import()
 		found := false
 		if state != nil {
-			for _, m := range state.Initial.Memories {
-				if m.Module == module && m.Name == name {
+			for _, have := range state.Initial.Memories {
+				if have.Module == m && have.Name == n {
 					found = true
 					break
 				}
 			}
 		}
 		if !found {
-			return fmt.Errorf(
-				"the module imports memory %s.%s, but the boundary recording carries "+
-					"no initial contents for it. An imported memory's initial contents "+
-					"are host-supplied state the recording must capture (spec §3.3); "+
-					"replaying against a zeroed memory would diverge later, at a point "+
-					"unrelated to the cause, so it is refused (spec §8). Expected a %q "+
-					"sidecar in the recording declaring it",
-				module, name, HostStateFileName)
+			return m, n, true
 		}
 	}
-	return nil
+	return "", "", false
 }
 
 // stubModulePrefix namespaces the internal host modules the Go stubs are

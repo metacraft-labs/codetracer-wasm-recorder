@@ -92,16 +92,70 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 		opts: opts, providers: map[string]api.Module{},
 		deferValuelessImports: true,
 	}
-	guest, err := r.prepare(ctx)
-	if err != nil {
-		return out, err
+
+	// M44b: instantiation is deferred **only when it has to be**.
+	//
+	// `prepare` builds the provider modules the spec §3.3 initial state
+	// describes, instantiates the guest against them and writes the initial
+	// memory contents in. All of that needs the §3.3 record, and on a stream
+	// the §3.3 record has not arrived: the producer sends it immediately
+	// before the first exported call, which is after the daemon opened the
+	// stream and spawned this consumer. Instantiating here is what made the
+	// streaming path refuse every module whose linear memory is imported —
+	// every Stylus contract and every `wasm-bindgen` glue layer.
+	//
+	// So instantiation can be deferred to the first `NextGroup`. By the time
+	// a call group is complete, every record before that group's first
+	// `Call` has been folded into the reader's accumulating host state, and
+	// §3.3 is by construction one of them. `prepareOnce` below runs exactly
+	// once and runs before anything is executed, so quiescent point 0 still
+	// describes a freshly instantiated module that has run no recorded call.
+	//
+	// The deferral is taken only for a module that actually needs it — one
+	// importing a memory nothing has described yet. For every other
+	// recording, instantiation and quiescent point 0 still happen before a
+	// single byte is read, which is not merely tidier: the timing property
+	// `TestSnapshotsAreEmittedWhileTheStreamIsStillArriving` reads off the
+	// producer's own progress requires snapshot 0 to exist before the first
+	// chunk's write returns, and a blanket deferral would break it for
+	// every module including the ones that never needed it.
+	var guest api.Module
+	point := 0
+	prepareOnce := func() error {
+		if guest != nil {
+			return nil
+		}
+		// Whatever the stream has carried so far IS the §3.3 state. A
+		// recording may also have a sidecar — a finished one being streamed
+		// from a file does — and the two must agree.
+		state, err := reconcileHostState(rec.HostState, src.HostState())
+		if err != nil {
+			return fmt.Errorf("boundary streaming replay: %w", err)
+		}
+		rec.HostState = state
+		// `opts` was copied into `r` by value, so the replayer holds its own
+		// pointer to the recording — the same one — and re-reads
+		// `r.opts.Recording.HostState` on every import call. Assigning here
+		// is therefore what makes both §3.3 and every later §3.4 mutation
+		// visible to it.
+		g, err := r.prepare(ctx)
+		if err != nil {
+			return err
+		}
+		guest = g
+		// Quiescent point 0: the freshly instantiated module, before any
+		// recorded call. This is where a slice opens and where the first
+		// snapshot is taken.
+		return r.atQuiescentPoint(point, guest)
 	}
 
-	// Quiescent point 0: the freshly instantiated module, before any recorded
-	// call. This is where a slice opens and where the first snapshot is taken.
-	point := 0
-	if err := r.atQuiescentPoint(point, guest); err != nil {
-		return out, err
+	// The eager path: unless the module imports a memory the recording has
+	// not described, nothing about instantiation depends on what the stream
+	// will carry, so it happens now exactly as it always did.
+	if _, _, deferred := r.undescribedImportedMemory(); !deferred {
+		if err := prepareOnce(); err != nil {
+			return out, err
+		}
 	}
 
 	for {
@@ -116,6 +170,10 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 				out.Truncation = t
 				break
 			}
+			return out, err
+		}
+
+		if err := prepareOnce(); err != nil {
 			return out, err
 		}
 
@@ -134,6 +192,14 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 		if err := r.atQuiescentPoint(point, guest); err != nil {
 			return out, err
 		}
+	}
+
+	// An empty or wholly truncated stream still has to leave behind the
+	// same artefacts a zero-call replay always did: an instantiated module
+	// and quiescent point 0. `prepareOnce` is idempotent, so this is the
+	// only place that matters.
+	if err := prepareOnce(); err != nil {
+		return out, err
 	}
 
 	out.Result = r.result

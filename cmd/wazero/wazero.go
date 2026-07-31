@@ -222,6 +222,54 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&stylusTracePath, "stylus", "",
 		"Imports the EVM hook functions and mocks their IO according the result of debug_traceTransaction in the path provided.")
 
+	// Boundary-log replay (WASM-Instrumentation-Layer.md §6).  A browser
+	// WASM recording is a *log of host interactions*, not a trace; the
+	// full step-level trace is materialised offline by re-executing the
+	// original module here, replaying the recorded host results in place
+	// of the real host.  See internal/boundarylog for the model and the
+	// input format.
+	var boundaryLogPath string
+	flags.StringVar(&boundaryLogPath, "boundary-log", "",
+		"Re-executes the module against a recorded boundary log, replaying the "+
+			"recorded host results in place of a live host, and materialises a "+
+			"CTFS trace.  The argument is the `<program>.ct` directory the "+
+			"CodeTracer backend-manager wrote for a browser WASM session (or its "+
+			"trace.json).  Pass the ORIGINAL, uninstrumented .wasm.")
+
+	// Streaming boundary-log replay (WASM-Replay-Snapshots-And-Slices.md §2).
+	// The recording is consumed as it arrives and re-executed in lockstep, so
+	// snapshots and slices exist by the time the page stops rather than being
+	// derived in a pass afterwards.
+	var boundaryStreamPath string
+	flags.StringVar(&boundaryStreamPath, "boundary-stream", "",
+		"Consumes the --boundary-log recording as it is still being produced, "+
+			"re-executing in lockstep.  `-` reads the recording's trace.json from "+
+			"stdin, which is what a daemon-side tee provides and where closing the "+
+			"pipe ends the stream; a path follows a file the producer is appending "+
+			"to and then needs --stream-done.  The --boundary-log argument still "+
+			"supplies the recording's metadata and host state.")
+
+	var streamDonePath string
+	flags.StringVar(&streamDonePath, "stream-done", "",
+		"With --boundary-stream <file>, the `marker` file whose appearance means "+
+			"the producer has finished writing.  A file has no end of stream, so "+
+			"without this there is no way to tell a recording still in progress from "+
+			"one that is over.")
+
+	var boundaryManifestPath string
+	flags.StringVar(&boundaryManifestPath, "boundary-manifest", "",
+		"Path to the `ct-instrument` sidecar manifest for --boundary-log.  "+
+			"Defaults to `<wasm>.manifest.json` when that exists.  The manifest's "+
+			"boundary signatures are cross-checked against the module's own type "+
+			"section; a disagreement is a hard error.")
+
+	// Replay snapshots (WASM-Replay-Snapshots-And-Slices.md).  Deriving them
+	// and seeking with them is the commercial half of the build split (§9);
+	// the flags are declared in both variants so an open build can say so
+	// rather than appear not to know the flag.  See snapshots_common.go.
+	var snapshots snapshotOptions
+	snapshots.register(flags)
+
 	// Convention compliance follow-up — 2026-05-08 (Recorder-CLI-Conventions.md
 	// §3 / §4 / §5):
 	//
@@ -389,6 +437,48 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		recorder = tracewriter.NewCtfsTraceWriter()
 	}
 
+	// Boundary-log replay is a self-contained execution mode: it drives the
+	// recorded exported calls itself rather than running `_start`, and
+	// supplies every import from the recording rather than from WASI or a
+	// live host.  It therefore short-circuits the WASI detection and the
+	// ordinary instantiate-and-run path below.
+	if boundaryLogPath != "" {
+		if stylusTracePath != "" {
+			fmt.Fprintln(stdErr, "--boundary-log and --stylus are mutually exclusive: "+
+				"each supplies the module's imports from a different recording")
+			return 1
+		}
+		return doBoundaryLogReplay(ctx, boundaryReplayRequest{
+			runtime:      rt,
+			compiled:     guest,
+			moduleConfig: conf,
+			recorder:     recorder,
+			outDir:       outDir,
+			traceName:    wasmFile,
+			wasmPath:     wasmPath,
+			logPath:      boundaryLogPath,
+			streamPath:   boundaryStreamPath,
+			streamDone:   streamDonePath,
+			stdin:        os.Stdin,
+			manifestPath: boundaryManifestPath,
+			snapshots:    snapshots,
+		}, stdOut, stdErr)
+	}
+
+	if boundaryStreamPath != "" || streamDonePath != "" {
+		fmt.Fprintln(stdErr, "--boundary-stream and --stream-done apply to "+
+			"--boundary-log replay only: they say how the recording arrives, and "+
+			"nothing else consumes a boundary recording")
+		return 1
+	}
+
+	if snapshots.requested() {
+		fmt.Fprintln(stdErr, "the snapshot flags apply to --boundary-log replay only: "+
+			"snapshots are derived by re-executing a boundary recording, never captured "+
+			"from a live run")
+		return 1
+	}
+
 	var stylusState *stylus.StylusTrace
 	if stylusTracePath != "" {
 		stylusState, err = stylus.Instantiate(ctx, rt, stylusTracePath, recorder)
@@ -439,23 +529,41 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	if stylusTracePath != "" {
+		// Every branch below used to report to stderr and fall through to
+		// `return 0`, so a Stylus run that read no argument, trapped in the
+		// entrypoint, or returned a value the EVM trace disagrees with still
+		// looked successful to a CI job, a shell `&&`, or a wrapping tool.
+		// A diagnostic nobody's exit status can see is not a failure report.
+		// Any of them now makes the run non-zero — after the trace has been
+		// flushed, so the partial recording is still there to debug.
+		stylusFailed := false
+
 		arg, err := stylusState.GetEntrypointArg()
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)
+			stylusFailed = true
 		}
 
 		res, err := module.ExportedFunction("user_entrypoint").Call(ctx, arg)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error executing stylus entrypoint: %v\n", err)
+			stylusFailed = true
 		}
 
 		retval, err := stylusState.GetReturnedValue()
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus user returned result: %v\n", err)
+			stylusFailed = true
 		}
 
 		if len(res) != 1 || res[0] != retval {
 			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
+			stylusFailed = true
+		}
+
+		if stylusFailed {
+			produceTrace(outDir, wasmFile, recorder)
+			return 1
 		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.
@@ -619,6 +727,21 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  skips recording entirely.  Use `ct print` from codetracer-trace-format-nim")
 	fmt.Fprintln(stdErr, "  to convert the bundle to a human-readable JSON.  The `wazero` binary name")
 	fmt.Fprintln(stdErr, "  is the one documented exception to the codetracer-<lang>-recorder pattern.")
+	fmt.Fprintln(stdErr)
+	fmt.Fprintln(stdErr, "  Pass `--boundary-log <path>` to materialise a trace from a browser WASM")
+	fmt.Fprintln(stdErr, "  boundary recording by re-executing the ORIGINAL, uninstrumented module")
+	fmt.Fprintln(stdErr, "  against it (WASM-Instrumentation-Layer.md §6).")
+	fmt.Fprintln(stdErr)
+	if snapshotsAvailable {
+		fmt.Fprintln(stdErr, "  This build derives replay snapshots (--snapshots) and can materialise a")
+		fmt.Fprintln(stdErr, "  sub-range of a recording without re-executing everything before it")
+		fmt.Fprintln(stdErr, "  (--seek-from / --seek-to, WASM-Replay-Snapshots-And-Slices.md).")
+	} else {
+		fmt.Fprintln(stdErr, "  This build replays and materialises every recording completely and")
+		fmt.Fprintln(stdErr, "  correctly, including one whose `.ct` already carries snapshot namespaces,")
+		fmt.Fprintln(stdErr, "  which it reads and ignores.  It does not derive snapshots or seek with")
+		fmt.Fprintln(stdErr, "  them, so reaching a point in the middle costs a linear replay.")
+	}
 }
 
 func printCompileUsage(stdErr io.Writer, flags *flag.FlagSet) {

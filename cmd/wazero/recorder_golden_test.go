@@ -532,10 +532,24 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 		"paths[0] should end with control_flow.rs; got %q", doc.Paths[0])
 
 	// ----- exact counts ---------------------------------------------------
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	require.Equal(t, 142, doc.Counts["steps"], "counts.steps")
 	// `main` now surfaces as a 4th completed call.  The Nim trace
 	// writer's `close()` drains any unclosed PendingCalls (LIFO) so
@@ -548,7 +562,7 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim::close.
 	require.Equal(t, 4, doc.Counts["calls"], "counts.calls")
 	require.Equal(t, 0, doc.Counts["io_events"], "counts.io_events")
-	require.Equal(t, 281, doc.Counts["values"], "counts.values")
+	require.Equal(t, 142, doc.Counts["values"], "counts.values")
 	require.Equal(t, 4, doc.Counts["functions"], "counts.functions")
 	require.Equal(t, 1, doc.Counts["paths"], "counts.paths")
 	require.Equal(t, 11, doc.Counts["varnames"], "counts.varnames")
@@ -563,9 +577,9 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// 4 call_entry + 4 call_exit = `main` now appears in both
 	// streams thanks to the writer's close-time PendingCall drain.
 	require.Equal(t, map[string]int{
-		"step": 281, "call_entry": 4, "call_exit": 4,
+		"step": 142, "call_entry": 4, "call_exit": 4,
 	}, kinds, "event-kind histogram")
-	require.Equal(t, 289, len(events), "events length")
+	require.Equal(t, 150, len(events), "events length")
 
 	// ----- call entry sequence -------------------------------------------
 	// `main` is now the first entry — it is opened at module entry
@@ -638,40 +652,53 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 // commit; future recorder changes that drift from it MUST update
 // this table consciously.
 func controlFlowExpectedVars() []expectVarStep {
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).  Most prior
-	// entries split into adjacent column-refined sub-steps; the list grew
-	// from 242 to 489 entries.  Generated literally from the recorder
-	// output — regenerate with the same procedure if the recorder's
-	// per-step variable surfacing changes again.
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	return []expectVarStep{
 		{Line: 11, Varname: "n", Kind: "Int", I: 7},
+		{Line: 12, Varname: "n", Kind: "Int", I: 7},
 		{Line: 13, Varname: "n", Kind: "Int", I: 7},
 		{Line: 12, Varname: "n", Kind: "Int", I: 7},
 		{Line: 19, Varname: "n", Kind: "Int", I: 7},
-		{Line: 47, Varname: "n", Kind: "Int", I: 7},
+		{Line: 47, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 48, Varname: "sign", Kind: "Int", I: 1},
-		{Line: 22, Varname: "sign", Kind: "Int", I: 1},
+		{Line: 48, Varname: "xs", Kind: "Raw"},
 		{Line: 22, Varname: "xs", Kind: "Raw"},
-		{Line: 22, Varname: "xs", Kind: "Raw"},
+		{Line: 23, Varname: "xs", Kind: "Raw"},
+		{Line: 24, Varname: "total", Kind: "Int", I: 0},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 0},
+		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 0},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 0},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 0},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		{Line: 24, Varname: "total", Kind: "Int", I: 0},
+		{Line: 24, Varname: "total", Kind: "Int", I: 1},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
-		{Line: 24, Varname: "x", Kind: "Raw"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 1},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
@@ -681,14 +708,14 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 1},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 1},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		{Line: 24, Varname: "total", Kind: "Int", I: 1},
+		{Line: 24, Varname: "total", Kind: "Int", I: 3},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
-		{Line: 24, Varname: "x", Kind: "Raw"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 3},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
@@ -698,14 +725,14 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 3},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 3},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		{Line: 24, Varname: "total", Kind: "Int", I: 3},
+		{Line: 24, Varname: "total", Kind: "Int", I: 6},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
-		{Line: 24, Varname: "x", Kind: "Raw"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 6},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
@@ -715,36 +742,37 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 6},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
+		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
 		{Line: 25, Varname: "total", Kind: "Int", I: 6},
 		{Line: 25, Varname: "iter", Kind: "Struct"},
 		{Line: 25, Varname: "x", Kind: "Raw"},
 		{Line: 25, Varname: "xs", Kind: "Raw"},
-		{Line: 24, Varname: "total", Kind: "Int", I: 6},
+		{Line: 24, Varname: "total", Kind: "Int", I: 10},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
-		{Line: 24, Varname: "x", Kind: "Raw"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 24, Varname: "total", Kind: "Int", I: 10},
 		{Line: 24, Varname: "iter", Kind: "Struct"},
 		{Line: 24, Varname: "xs", Kind: "Raw"},
 		{Line: 27, Varname: "total", Kind: "Int", I: 10},
-		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "xs", Kind: "Raw"},
-		{Line: 28, Varname: "total", Kind: "Int", I: 10},
 		{Line: 28, Varname: "xs", Kind: "Raw"},
+		{Line: 49, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 49, Varname: "xs", Kind: "Raw"},
-		{Line: 31, Varname: "sign", Kind: "Int", I: 1},
-		{Line: 31, Varname: "xs", Kind: "Raw"},
-		{Line: 31, Varname: "sum_val", Kind: "Int", I: 10},
+		{Line: 49, Varname: "sum_val", Kind: "Int", I: 10},
 		{Line: 31, Varname: "n", Kind: "Int", I: 4},
+		{Line: 32, Varname: "n", Kind: "Int", I: 4},
+		{Line: 33, Varname: "total", Kind: "Int", I: 0},
 		{Line: 33, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 0},
+		{Line: 34, Varname: "i", Kind: "Int", I: 0},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 35, Varname: "total", Kind: "Int", I: 0},
 		{Line: 35, Varname: "i", Kind: "Int", I: 0},
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
@@ -768,7 +796,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
-		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 0},
@@ -787,8 +815,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "j", Kind: "Int", I: 1},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 0},
-		{Line: 34, Varname: "i", Kind: "Int", I: 0},
-		{Line: 34, Varname: "j", Kind: "Int", I: 1},
+		{Line: 34, Varname: "i", Kind: "Int", I: 1},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 0},
 		{Line: 34, Varname: "i", Kind: "Int", I: 1},
@@ -798,6 +825,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
@@ -821,7 +849,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
-		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 0},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
@@ -843,13 +871,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 1},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 0},
+		{Line: 38, Varname: "total", Kind: "Int", I: 1},
 		{Line: 38, Varname: "i", Kind: "Int", I: 1},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
-		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 1},
@@ -868,8 +896,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "j", Kind: "Int", I: 2},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 1},
-		{Line: 34, Varname: "i", Kind: "Int", I: 1},
-		{Line: 34, Varname: "j", Kind: "Int", I: 2},
+		{Line: 34, Varname: "i", Kind: "Int", I: 2},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 1},
 		{Line: 34, Varname: "i", Kind: "Int", I: 2},
@@ -879,6 +906,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
@@ -902,7 +930,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
-		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 1},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
@@ -924,13 +952,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 2},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 1},
+		{Line: 38, Varname: "total", Kind: "Int", I: 2},
 		{Line: 38, Varname: "i", Kind: "Int", I: 2},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 2},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
-		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 2},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
@@ -952,13 +980,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 2},
 		{Line: 37, Varname: "j", Kind: "Int", I: 2},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 2},
+		{Line: 38, Varname: "total", Kind: "Int", I: 4},
 		{Line: 38, Varname: "i", Kind: "Int", I: 2},
 		{Line: 38, Varname: "j", Kind: "Int", I: 2},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
-		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 2},
@@ -977,8 +1005,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "j", Kind: "Int", I: 3},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 4},
-		{Line: 34, Varname: "i", Kind: "Int", I: 2},
-		{Line: 34, Varname: "j", Kind: "Int", I: 3},
+		{Line: 34, Varname: "i", Kind: "Int", I: 3},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 4},
 		{Line: 34, Varname: "i", Kind: "Int", I: 3},
@@ -988,6 +1015,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 35, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 0},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
@@ -1011,7 +1039,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
-		{Line: 36, Varname: "j", Kind: "Int", I: 0},
+		{Line: 36, Varname: "j", Kind: "Int", I: 1},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 4},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
@@ -1033,13 +1061,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 1},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 4},
+		{Line: 38, Varname: "total", Kind: "Int", I: 5},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 1},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 5},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
-		{Line: 36, Varname: "j", Kind: "Int", I: 1},
+		{Line: 36, Varname: "j", Kind: "Int", I: 2},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 5},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
@@ -1061,13 +1089,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 2},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 5},
+		{Line: 38, Varname: "total", Kind: "Int", I: 7},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 2},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 7},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
-		{Line: 36, Varname: "j", Kind: "Int", I: 2},
+		{Line: 36, Varname: "j", Kind: "Int", I: 3},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 7},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
@@ -1089,13 +1117,13 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 37, Varname: "i", Kind: "Int", I: 3},
 		{Line: 37, Varname: "j", Kind: "Int", I: 3},
 		{Line: 37, Varname: "n", Kind: "Int", I: 4},
-		{Line: 38, Varname: "total", Kind: "Int", I: 7},
+		{Line: 38, Varname: "total", Kind: "Int", I: 10},
 		{Line: 38, Varname: "i", Kind: "Int", I: 3},
 		{Line: 38, Varname: "j", Kind: "Int", I: 3},
 		{Line: 38, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 10},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
-		{Line: 36, Varname: "j", Kind: "Int", I: 3},
+		{Line: 36, Varname: "j", Kind: "Int", I: 4},
 		{Line: 36, Varname: "n", Kind: "Int", I: 4},
 		{Line: 36, Varname: "total", Kind: "Int", I: 10},
 		{Line: 36, Varname: "i", Kind: "Int", I: 3},
@@ -1114,8 +1142,7 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 40, Varname: "j", Kind: "Int", I: 4},
 		{Line: 40, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 10},
-		{Line: 34, Varname: "i", Kind: "Int", I: 3},
-		{Line: 34, Varname: "j", Kind: "Int", I: 4},
+		{Line: 34, Varname: "i", Kind: "Int", I: 4},
 		{Line: 34, Varname: "n", Kind: "Int", I: 4},
 		{Line: 34, Varname: "total", Kind: "Int", I: 10},
 		{Line: 34, Varname: "i", Kind: "Int", I: 4},
@@ -1123,14 +1150,16 @@ func controlFlowExpectedVars() []expectVarStep {
 		{Line: 42, Varname: "total", Kind: "Int", I: 10},
 		{Line: 42, Varname: "i", Kind: "Int", I: 4},
 		{Line: 42, Varname: "n", Kind: "Int", I: 4},
-		{Line: 43, Varname: "total", Kind: "Int", I: 10},
-		{Line: 43, Varname: "i", Kind: "Int", I: 4},
 		{Line: 43, Varname: "n", Kind: "Int", I: 4},
-		{Line: 50, Varname: "n", Kind: "Int", I: 4},
+		{Line: 50, Varname: "sign", Kind: "Int", I: 1},
+		{Line: 50, Varname: "xs", Kind: "Raw"},
+		{Line: 50, Varname: "sum_val", Kind: "Int", I: 10},
+		{Line: 50, Varname: "nested_val", Kind: "Int", I: 10},
 		{Line: 51, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 51, Varname: "xs", Kind: "Raw"},
 		{Line: 51, Varname: "sum_val", Kind: "Int", I: 10},
 		{Line: 51, Varname: "nested_val", Kind: "Int", I: 10},
+		{Line: 51, Varname: "final_result", Kind: "Int", I: 21},
 		{Line: 51, Varname: "sign", Kind: "Int", I: 1},
 		{Line: 51, Varname: "xs", Kind: "Raw"},
 		{Line: 51, Varname: "sum_val", Kind: "Int", I: 10},
@@ -1156,10 +1185,24 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	require.True(t, strings.HasSuffix(doc.Paths[0], "nested_calls.rs"))
 
 	// Counts.
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	require.Equal(t, 49, doc.Counts["steps"])
 	// 8 = 3 chain (level1/2/3) + 5 recursive factorial frames.  The
 	// 9th is `main` itself — the wasm recorder leaves the outermost
@@ -1185,7 +1228,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 90, "call_entry": 9, "call_exit": 9,
+		"step": 49, "call_entry": 9, "call_exit": 9,
 	}, kinds, "event-kind histogram")
 
 	// Call-entry sequence: `main` is opened first (at module
@@ -1235,64 +1278,77 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 
 	// Step-by-step variable values (every step pinned).
 	got := collectVars(t, events)
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).  The variable
-	// observation list is regenerated literally from the recorder output;
-	// most prior entries split into adjacent column-refined sub-steps and
-	// some leftover-scope variables surface on lines that previously
-	// collapsed onto a single is_stmt row.
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	want2 := []expectVarStep{
 		{Line: 18, Varname: "x", Kind: "Int", I: 5},
+		{Line: 19, Varname: "x", Kind: "Int", I: 5},
 		{Line: 12, Varname: "x", Kind: "Int", I: 5},
-		{Line: 12, Varname: "x", Kind: "Int", I: 5},
+		{Line: 13, Varname: "x", Kind: "Int", I: 5},
 		{Line: 7, Varname: "x", Kind: "Int", I: 5},
-		{Line: 7, Varname: "x", Kind: "Int", I: 5},
+		{Line: 8, Varname: "x", Kind: "Int", I: 5},
 		{Line: 9, Varname: "x", Kind: "Int", I: 5},
+		{Line: 14, Varname: "v", Kind: "Int", I: 6},
 		{Line: 14, Varname: "x", Kind: "Int", I: 5},
-		{Line: 15, Varname: "v", Kind: "Int", I: 6},
 		{Line: 15, Varname: "x", Kind: "Int", I: 5},
+		{Line: 20, Varname: "v", Kind: "Int", I: 12},
 		{Line: 20, Varname: "x", Kind: "Int", I: 5},
-		{Line: 21, Varname: "v", Kind: "Int", I: 12},
 		{Line: 21, Varname: "x", Kind: "Int", I: 5},
-		{Line: 34, Varname: "x", Kind: "Int", I: 5},
-		{Line: 24, Varname: "chain", Kind: "Int", I: 22},
+		{Line: 34, Varname: "chain", Kind: "Int", I: 22},
 		{Line: 24, Varname: "n", Kind: "Int", I: 5},
+		{Line: 25, Varname: "n", Kind: "Int", I: 5},
 		{Line: 28, Varname: "n", Kind: "Int", I: 5},
 		{Line: 28, Varname: "n", Kind: "Int", I: 5},
-		{Line: 24, Varname: "n", Kind: "Int", I: 5},
 		{Line: 24, Varname: "n", Kind: "Int", I: 4},
+		{Line: 25, Varname: "n", Kind: "Int", I: 4},
 		{Line: 28, Varname: "n", Kind: "Int", I: 4},
 		{Line: 28, Varname: "n", Kind: "Int", I: 4},
-		{Line: 24, Varname: "n", Kind: "Int", I: 4},
 		{Line: 24, Varname: "n", Kind: "Int", I: 3},
+		{Line: 25, Varname: "n", Kind: "Int", I: 3},
 		{Line: 28, Varname: "n", Kind: "Int", I: 3},
 		{Line: 28, Varname: "n", Kind: "Int", I: 3},
-		{Line: 24, Varname: "n", Kind: "Int", I: 3},
 		{Line: 24, Varname: "n", Kind: "Int", I: 2},
+		{Line: 25, Varname: "n", Kind: "Int", I: 2},
 		{Line: 28, Varname: "n", Kind: "Int", I: 2},
 		{Line: 28, Varname: "n", Kind: "Int", I: 2},
-		{Line: 24, Varname: "n", Kind: "Int", I: 2},
 		{Line: 24, Varname: "n", Kind: "Int", I: 1},
+		{Line: 25, Varname: "n", Kind: "Int", I: 1},
 		{Line: 26, Varname: "n", Kind: "Int", I: 1},
 		{Line: 25, Varname: "n", Kind: "Int", I: 1},
 		{Line: 30, Varname: "n", Kind: "Int", I: 1},
-		{Line: 28, Varname: "n", Kind: "Int", I: 1},
+		{Line: 28, Varname: "n", Kind: "Int", I: 2},
 		{Line: 25, Varname: "n", Kind: "Int", I: 2},
 		{Line: 30, Varname: "n", Kind: "Int", I: 2},
-		{Line: 28, Varname: "n", Kind: "Int", I: 2},
+		{Line: 28, Varname: "n", Kind: "Int", I: 3},
 		{Line: 25, Varname: "n", Kind: "Int", I: 3},
 		{Line: 30, Varname: "n", Kind: "Int", I: 3},
-		{Line: 28, Varname: "n", Kind: "Int", I: 3},
+		{Line: 28, Varname: "n", Kind: "Int", I: 4},
 		{Line: 25, Varname: "n", Kind: "Int", I: 4},
 		{Line: 30, Varname: "n", Kind: "Int", I: 4},
-		{Line: 28, Varname: "n", Kind: "Int", I: 4},
+		{Line: 28, Varname: "n", Kind: "Int", I: 5},
 		{Line: 25, Varname: "n", Kind: "Int", I: 5},
 		{Line: 30, Varname: "n", Kind: "Int", I: 5},
-		{Line: 35, Varname: "n", Kind: "Int", I: 5},
+		{Line: 35, Varname: "chain", Kind: "Int", I: 22},
+		{Line: 35, Varname: "fact5", Kind: "Int", I: 120},
 		{Line: 36, Varname: "chain", Kind: "Int", I: 22},
 		{Line: 36, Varname: "fact5", Kind: "Int", I: 120},
+		{Line: 36, Varname: "total", Kind: "Int", I: 142},
 		{Line: 36, Varname: "chain", Kind: "Int", I: 22},
 		{Line: 36, Varname: "fact5", Kind: "Int", I: 120},
 		{Line: 36, Varname: "total", Kind: "Int", I: 142},
@@ -1323,10 +1379,24 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	require.Equal(t, 1, len(doc.Paths))
 	require.True(t, strings.HasSuffix(doc.Paths[0], "collections.rs"))
 
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	require.Equal(t, 43, doc.Counts["steps"])
 	// The 3rd call is `main` — the wasm recorder leaves the
 	// outermost `main` frame open at end-of-execution and the Nim
@@ -1347,7 +1417,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 84, "call_entry": 3, "call_exit": 3,
+		"step": 43, "call_entry": 3, "call_exit": 3,
 	}, kinds, "event-kind histogram")
 
 	// `main` is opened first at module entry; the writer flushes
@@ -1381,23 +1451,33 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	// notes already attached).  `pair`, `v` (Vec) surface as Raw;
 	// `map` and `pt` surface as Struct with no field payload.
 	//
-	// Re-pinned after M-wasm DWARF indexer fix: column-refinement rows
-	// now produce step events per column position
-	// (internal/wasmdebug/dwarf_indexing.go:699 widened the row-insertion
-	// guard to also accept column-only refinement rows).  Multi-statement
-	// lines split into adjacent column-refined sub-steps so the list grew
-	// from 49 to 121 entries.
+	// Re-pinned on 2026-07-31 (M40).  Two changes moved these numbers,
+	// neither of them a change in what the recorder observes:
+	//
+	//  1. codetracer-trace-format-nim 8a6ee4d folded `register_step` +
+	//     `register_delta_column` into ONE wire event.  Before it, every
+	//     column-bearing step produced two (an empty line step followed by
+	//     a `sekDeltaColumn` carrying the values), which is why `counts.steps`
+	//     and the `events[]` step histogram used to disagree; ct-print
+	//     94f774b then stopped rendering the nudges in `events[]` at all.
+	//     The event histogram therefore drops to what `counts.steps`
+	//     always said, and the last step of each frame picks up the
+	//     locals that used to be stranded on the empty half of the pair.
+	//  2. The recorder stopped emitting columns the wire encoding cannot
+	//     address — see `addressableColumn` in
+	//     internal/engine/interpreter/interpreter.go.  These fixtures'
+	//     sources are not on disk at the path their DWARF names, so they
+	//     carry no per-line table and now record no columns at all,
+	//     instead of columns that decoded into out-of-range line numbers.
 	got := collectVars(t, events)
 	want := []expectVarStep{
-		// make_vec body
+		{Line: 18, Varname: "v", Kind: "Raw"},
 		{Line: 19, Varname: "v", Kind: "Raw"},
 		{Line: 20, Varname: "v", Kind: "Raw"},
 		{Line: 21, Varname: "v", Kind: "Raw"},
-		{Line: 22, Varname: "v", Kind: "Raw"},
-		// sum_vec body
+		{Line: 35, Varname: "v", Kind: "Raw"},
 		{Line: 25, Varname: "v", Kind: "Raw"},
-		{Line: 25, Varname: "v", Kind: "Raw"},
-		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 26, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 0},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 0},
@@ -1405,16 +1485,19 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 27, Varname: "s", Kind: "Int", I: 0},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
+		{Line: 27, Varname: "s", Kind: "Int", I: 0},
+		{Line: 27, Varname: "iter", Kind: "Struct"},
+		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 0},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 0},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
-		{Line: 27, Varname: "s", Kind: "Int", I: 0},
+		{Line: 27, Varname: "s", Kind: "Int", I: 10},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
-		{Line: 27, Varname: "x", Kind: "Raw"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 10},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
@@ -1424,14 +1507,14 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 10},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 10},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
-		{Line: 27, Varname: "s", Kind: "Int", I: 10},
+		{Line: 27, Varname: "s", Kind: "Int", I: 30},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
-		{Line: 27, Varname: "x", Kind: "Raw"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 30},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
@@ -1441,28 +1524,26 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 30},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
+		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
 		{Line: 28, Varname: "s", Kind: "Int", I: 30},
 		{Line: 28, Varname: "iter", Kind: "Struct"},
 		{Line: 28, Varname: "x", Kind: "Raw"},
 		{Line: 28, Varname: "v", Kind: "Raw"},
-		{Line: 27, Varname: "s", Kind: "Int", I: 30},
+		{Line: 27, Varname: "s", Kind: "Int", I: 60},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
-		{Line: 27, Varname: "x", Kind: "Raw"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 27, Varname: "s", Kind: "Int", I: 60},
 		{Line: 27, Varname: "iter", Kind: "Struct"},
 		{Line: 27, Varname: "v", Kind: "Raw"},
 		{Line: 30, Varname: "s", Kind: "Int", I: 60},
-		{Line: 30, Varname: "iter", Kind: "Struct"},
 		{Line: 30, Varname: "v", Kind: "Raw"},
-		{Line: 31, Varname: "s", Kind: "Int", I: 60},
 		{Line: 31, Varname: "v", Kind: "Raw"},
-		// main after sum_vec
 		{Line: 37, Varname: "v", Kind: "Raw"},
-		// HashMap setup
+		{Line: 37, Varname: "total", Kind: "Int", I: 60},
 		{Line: 38, Varname: "v", Kind: "Raw"},
 		{Line: 38, Varname: "total", Kind: "Int", I: 60},
+		{Line: 38, Varname: "map", Kind: "Struct"},
 		{Line: 39, Varname: "v", Kind: "Raw"},
 		{Line: 39, Varname: "total", Kind: "Int", I: 60},
 		{Line: 39, Varname: "map", Kind: "Struct"},
@@ -1475,21 +1556,25 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 42, Varname: "v", Kind: "Raw"},
 		{Line: 42, Varname: "total", Kind: "Int", I: 60},
 		{Line: 42, Varname: "map", Kind: "Struct"},
+		{Line: 42, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 43, Varname: "v", Kind: "Raw"},
 		{Line: 43, Varname: "total", Kind: "Int", I: 60},
 		{Line: 43, Varname: "map", Kind: "Struct"},
 		{Line: 43, Varname: "map_len", Kind: "Int", I: 2},
+		{Line: 43, Varname: "pt", Kind: "Struct"},
 		{Line: 45, Varname: "v", Kind: "Raw"},
 		{Line: 45, Varname: "total", Kind: "Int", I: 60},
 		{Line: 45, Varname: "map", Kind: "Struct"},
 		{Line: 45, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 45, Varname: "pt", Kind: "Struct"},
+		{Line: 45, Varname: "pt_sum", Kind: "Int", I: 7},
 		{Line: 46, Varname: "v", Kind: "Raw"},
 		{Line: 46, Varname: "total", Kind: "Int", I: 60},
 		{Line: 46, Varname: "map", Kind: "Struct"},
 		{Line: 46, Varname: "map_len", Kind: "Int", I: 2},
 		{Line: 46, Varname: "pt", Kind: "Struct"},
 		{Line: 46, Varname: "pt_sum", Kind: "Int", I: 7},
+		{Line: 46, Varname: "pair", Kind: "Raw"},
 		{Line: 48, Varname: "v", Kind: "Raw"},
 		{Line: 48, Varname: "total", Kind: "Int", I: 60},
 		{Line: 48, Varname: "map", Kind: "Struct"},
@@ -1497,6 +1582,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 48, Varname: "pt", Kind: "Struct"},
 		{Line: 48, Varname: "pt_sum", Kind: "Int", I: 7},
 		{Line: 48, Varname: "pair", Kind: "Raw"},
+		{Line: 48, Varname: "pair_sum", Kind: "Int", I: 300},
 		{Line: 49, Varname: "v", Kind: "Raw"},
 		{Line: 49, Varname: "total", Kind: "Int", I: 60},
 		{Line: 49, Varname: "map", Kind: "Struct"},
@@ -1505,6 +1591,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		{Line: 49, Varname: "pt_sum", Kind: "Int", I: 7},
 		{Line: 49, Varname: "pair", Kind: "Raw"},
 		{Line: 49, Varname: "pair_sum", Kind: "Int", I: 300},
+		{Line: 49, Varname: "final_result", Kind: "Int", I: 369},
 		{Line: 49, Varname: "v", Kind: "Raw"},
 		{Line: 49, Varname: "total", Kind: "Int", I: 60},
 		{Line: 49, Varname: "map", Kind: "Struct"},
@@ -1635,77 +1722,101 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 
 // TestRecorderColumnAwareSteps verifies the wasm recorder cooperates
 // with the column-aware step stream introduced in the trace format's
-// P6.3 / P6.4 milestones.  The acceptance criterion has two parts:
+// P6.3 / P6.4 milestones.  The acceptance criterion has three parts:
 //
 //  1. `meta.dat` bit 4 (`FLAG_HAS_COLUMN_AWARE_STEPS`) MUST be set on
 //     every produced `.ct` container so downstream readers know to
 //     surface columns to the user.  Verified through `ct-print --full`'s
 //     `metadata.flags.has_column_aware_steps`.
 //
-//  2. At least one step event in the trace must carry a non-default
-//     column (i.e. a column ≥ 2).  This proves the recorder is actually
-//     writing `DeltaColumn` events derived from DWARF column data — not
-//     just flipping the metadata flag while emitting line-only steps.
-//     DWARF emits a non-zero column for every Rust source line (the
-//     column where the leading token starts, typically after
-//     indentation), so the existing recorder-golden Rust fixtures
-//     already surface multiple columns >= 2 once the recorder threads
-//     the DWARF column through.
+//  2. At least one step event must carry a column ≥ 2 — proof the
+//     recorder is threading real DWARF column data through, not just
+//     flipping the metadata flag while emitting line-only steps.
+//
+//  3. At least one COLUMN-ONLY transition surfaces: two consecutive
+//     steps on the same path and the same line whose columns differ.
+//     That is the behaviour column-aware navigation exists for — a
+//     multi-statement source line becoming several navigable steps —
+//     and it cannot be produced by a recorder that drops columns.
+//
+// **This test used to assert (3) by counting `step_kind ==
+// "sekDeltaColumn"` events, and that evidence no longer exists.**  Two
+// deliberate changes in codetracer-trace-format-nim removed it:
+// `8a6ee4d` made the FFI writer fold `register_step` +
+// `register_delta_column` into a single wire event (the pair used to
+// emit an empty line step plus a `sekDeltaColumn` carrying the values,
+// which stranded locals on the empty half and broke line-granular
+// step-over), and `94f774b` made `ct-print --full` stop rendering
+// column nudges in `events[]` so its step entries match `counts.steps`.
+// A standalone `sekDeltaColumn` is therefore unreachable through this
+// path by design.  The `column` field is the stronger replacement: it
+// is the decoded position a user would navigate to, not an encoding
+// detail, and asserting a same-line column *change* is strictly more
+// than "one nudge event exists" was.
+//
+// The fixture moved from `nested_calls` to `column_aware` for the same
+// reason its sibling test uses it: `column_aware.rs` line 17 packs
+// three statements onto one line, which is what makes a column-only
+// transition observable at all.  Note the shared precondition — the
+// reader can only decode a column when the module's source is on disk
+// at the path its DWARF names, because the column axis is a byte offset
+// resolved through `paths.dat` Layout A.  See
+// TestRecorderColumnAwareMultipleStatementsPerLine, which carries the
+// same dependency.
 //
 // Mirrors the JS recorder's `tests/integration/column-aware.test.ts`,
 // the EVM recorder's `tests/test_column_aware.rs`, the Solana recorder's
 // `tests/test_column_aware_steps.rs`, and the Cairo recorder's
 // `tests/test_column_aware.rs` "multiple statements on one line each
 // record distinct columns" fixtures.
-//
-// The "distinct columns on one source line" assertion that the sibling
-// recorders make on hand-crafted multi-statement fixtures is tracked as
-// FU-Mwasm-tests: it depends on a `wasm32-wasip1`-capable build of a
-// fixture like `column_aware.rs` (checked in alongside the existing
-// `control_flow.wasm` / `nested_calls.wasm` blobs) which this dev shell
-// cannot reproduce without internet (`rustup target add wasm32-wasip1`).
 func TestRecorderColumnAwareSteps(t *testing.T) {
-	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenNestedCalls, "nested_calls")
+	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
 
 	// ----- meta.dat bit 4: FLAG_HAS_COLUMN_AWARE_STEPS ------------------
 	require.True(t, doc.Metadata.Flags.HasColumnAwareSteps,
 		"trace metadata must advertise has_column_aware_steps=true; got %+v",
 		doc.Metadata.Flags)
 
-	// ----- at least one sekDeltaColumn step actually surfaces ----------
-	//
-	// The wire-level `step_kind` of a column-aware event surfaces as
-	// `sekDeltaColumn` when the recorder advanced *only* the column
-	// (same line, new statement) and as `sekAbsoluteStep` /
-	// `sekDeltaStep` when the line moved.  Observing at least one
-	// `sekDeltaColumn` event proves the interpreter's
-	// RegisterStepWithColumn call site (interpreter.go ~line 924) is
-	// actually feeding the DWARF column through to the writer — without
-	// the column threading the writer would never produce a column-only
-	// step transition because every step would also be a line transition.
-	//
-	// Note: the JSON-decoded `column` field that the EVM / Solana /
-	// Cairo sibling tests assert on requires the source file to be on
-	// disk at the DWARF-embedded path so the reader can compute per-line
-	// byte counts; the wasm fixture is pre-built and embeds its build-
-	// time path, so the column value itself is not always resolvable in
-	// the test sandbox.  The step-kind assertion is the back-compat
-	// equivalent — it's resolved purely from the on-wire encoding.
 	events := decodeEvents(t, doc)
-	var deltaColumnCount int
+
+	// ----- (2) a real, non-default column reaches the reader ------------
+	var maxColumn int64
 	for _, ev := range events {
-		if ev.Kind == "step" && ev.StepKind == "sekDeltaColumn" {
-			deltaColumnCount++
+		if ev.Kind == "step" && ev.Column > maxColumn {
+			maxColumn = ev.Column
 		}
 	}
-	require.True(t, deltaColumnCount > 0,
-		"expected at least one step with step_kind=sekDeltaColumn "+
-			"(column-only transition) — the recorder is failing to "+
-			"layer DeltaColumn events onto its step stream.  Check the "+
-			"interpreter's RegisterStepWithColumn call site (interpreter.go "+
-			"~line 924) and the writer's ctfsEventStep replay path "+
-			"(ctfs_writer.go).  Observed step-kind histogram across "+
-			"%d events.", len(events))
+	require.True(t, maxColumn >= 2,
+		"expected at least one step with a column >= 2; the highest column "+
+			"observed across %d events was %d.  Either the interpreter's "+
+			"RegisterStepWithColumn call site is not feeding DWARF columns "+
+			"to the writer, or `addressableColumn` rejected every one of "+
+			"them because the fixture's source is not readable at the path "+
+			"its DWARF names (paths.dat Layout A is what makes a column "+
+			"decodable).", len(events), maxColumn)
+
+	// ----- (3) a column-only transition: same line, different column ----
+	var columnOnlyTransitions int
+	var prev *goldenEvent
+	for i := range events {
+		ev := events[i]
+		if ev.Kind != "step" {
+			continue
+		}
+		if prev != nil && prev.PathID == ev.PathID && prev.Line == ev.Line &&
+			prev.Column != ev.Column {
+			columnOnlyTransitions++
+		}
+		e := ev
+		prev = &e
+	}
+	require.True(t, columnOnlyTransitions > 0,
+		"expected at least one column-only step transition (two consecutive "+
+			"steps on the same path and line with different columns) — that "+
+			"is the whole point of column-aware navigation, and "+
+			"column_aware.rs line 17 packs three statements onto one line "+
+			"precisely so one is observable.  Observed 0 across %d events.",
+		len(events))
 }
 
 // TestRecorderColumnAwareMultipleStatementsPerLine is the FU-Mwasm-tests

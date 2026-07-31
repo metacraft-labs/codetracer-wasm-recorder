@@ -168,6 +168,31 @@ type (
 // The wazero specific limitations described at RATIONALE.md.
 const maximumFunctionTypes = 1 << 27
 
+// SetRecorder points a live module at a different trace recorder, or at none.
+//
+// `Record` and `TypesIndex` are one thing in two fields: `TypesIndex` memoises
+// which DWARF type names have already been announced to the recorder, so that
+// `variable_readers.go` calls `RegisterTypeWithNewId` exactly once per type.
+// The two are created together in `Runtime.InstantiateModuleWithRecord`, and
+// they have to be *replaced* together too — a recorder swapped in mid-instance
+// with the memo left behind would never be told about any type the previous
+// recorder had already seen, and would then write value records whose type ids
+// index a `types.dat` that does not contain them.
+//
+// That case is not hypothetical: it is exactly what producing a recording as a
+// sequence of slices does (`WASM-Replay-Snapshots-And-Slices.md` §7), where one
+// module instance writes into a fresh trace per slice. Swapping the field
+// directly is still correct where the module has never had a recorder — a
+// range materialisation attaches one at its start point — but going through
+// this method is correct in both cases.
+//
+// The recorder may only be changed at a quiescent point, where the WASM stack
+// is empty: a recorder's own call-depth bookkeeping has to start from one.
+func (m *ModuleInstance) SetRecorder(rec tracewriter.TraceRecorder) {
+	m.Record = rec
+	m.TypesIndex = make(map[string]tracetypes.TypeId)
+}
+
 // GetFunctionTypeID is used by emscripten.
 func (m *ModuleInstance) GetFunctionTypeID(t *FunctionType) FunctionTypeID {
 	id, err := m.s.GetFunctionTypeID(t)

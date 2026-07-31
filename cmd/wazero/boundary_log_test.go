@@ -180,18 +180,22 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 			lines = append(lines, ev.Line)
 		}
 	}
-	// 72/73/74 are compute_balance's three statements; 57-58 and 62-63 are
-	// the two helpers' bodies and closing braces (61 and 66).
+	// 72/73/74 are compute_balance's three statements, 75 its closing brace;
+	// 57-58 and 62-63 are the two helpers' bodies, 59 and 64 their closing
+	// braces.
 	//
-	// RECORDER OBSERVATION (pre-existing, not introduced by M37): the final
-	// step of `compute_balance` lands on line 3368, well past the end of a
-	// 76-line file. It comes from a DWARF row the indexer maps for the
-	// function epilogue and is present identically in a direct wazero
-	// recording of the same module — TestVerifyCrossModalityParity compares
-	// the two traces event-for-event and would fail if the boundary-log
-	// path produced it and the direct path did not. Pinned literally here
-	// so a fix (or a regression) shows up.
-	require.Equal(t, []int64{72, 57, 58, 61, 73, 62, 63, 66, 74, 3368}, lines,
+	// This sequence used to read `{72, 57, 58, 61, 73, 62, 63, 66, 74, 3368}`
+	// — every closing brace displaced by two lines and the last one landing
+	// on line 3368 of a 75-line file, a step no user could navigate to. Both
+	// came from the recorder emitting a column the column-aware wire encoding
+	// cannot address: DWARF reports a one-byte `}` line's epilogue at column
+	// 2, the writer folds `column - 1` into the step's byte offset, and that
+	// offset is the first offset of the *next* line — or, on the file's last
+	// line, past the end of the per-line table, where the reader surfaces the
+	// raw byte offset as a line number. 3368 is exactly the file's 3443 bytes
+	// less its 75 newlines. See `addressableColumn` in
+	// internal/engine/interpreter/interpreter.go.
+	require.Equal(t, []int64{72, 57, 58, 59, 73, 62, 63, 64, 74, 75}, lines,
 		"step lines, in trace order")
 
 	// ----- the recorded arguments really drove the replay ----------------

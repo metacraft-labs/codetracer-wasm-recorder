@@ -128,13 +128,20 @@ type callEngine struct {
 	// stackiterator for Listeners to walk frames and stack.
 	stackIterator stackIterator
 
-	// registeredPaths caches the set of source paths that have already
-	// been forwarded to the recorder through `RegisterPathWithLineLengths`
-	// so we don't re-read every source file on every step.  See
-	// `registerSourcePathIfNew` for the call site.  The recorder
-	// performs its own dedup-by-name as a defence in depth, but the
-	// engine-local cache also avoids the os.ReadFile syscall cost.
-	registeredPaths map[string]struct{}
+	// registeredPaths caches, per source path already forwarded to the
+	// recorder through `RegisterPathWithLineLengths`, that path's
+	// per-line addressable-column table, so we don't re-read every
+	// source file on every step.  See `registerSourcePathIfNew` for the
+	// call site.  The recorder performs its own dedup-by-name as a
+	// defence in depth, but the engine-local cache also avoids the
+	// os.ReadFile syscall cost.
+	//
+	// The cached table is not only a dedup key: `addressableColumn`
+	// consults it before every column-bearing step, because a column
+	// the table cannot address is not representable in the trace (see
+	// that function's comment).  A `nil` entry means "path registered,
+	// no per-line data available".
+	registeredPaths map[string][]uint32
 }
 
 func (e *moduleEngine) newCallEngine(compiled *function) *callEngine {
@@ -764,16 +771,21 @@ func readSourceLineLengths(fileName string) []uint32 {
 	if err != nil {
 		return nil
 	}
-	// Split on \n; each chunk's length (after stripping a trailing \r
-	// from CRLF endings) is the count of in-line bytes.  Files without
-	// a trailing newline still report a final entry — the trace writer
-	// tolerates either layout.
+	// Split on \n; each chunk's length is the count of in-line bytes.
+	// A CRLF terminator's `\r` IS counted, because the table is a byte
+	// map of the file: the reader turns a step's byte offset back into
+	// a (line, column) pair by prefix-summing these entries, so an
+	// entry that under-counts its line's bytes shifts every position
+	// after it.  This matches the cross-recorder convention — see
+	// `codetracer-cairo-recorder/src/source_map.rs`'s
+	// `test_line_lengths_crlf_counts_cr` and the Solana recorder's
+	// `read_line_lengths_for_path`, which this helper is ported from.
+	//
+	// Files without a trailing newline still report a final entry —
+	// the trace writer tolerates either layout.
 	lines := strings.Split(string(data), "\n")
 	out := make([]uint32, 0, len(lines))
 	for _, ln := range lines {
-		if strings.HasSuffix(ln, "\r") {
-			ln = ln[:len(ln)-1]
-		}
 		out = append(out, uint32(len(ln)))
 	}
 	return out
@@ -785,18 +797,68 @@ func readSourceLineLengths(fileName string) []uint32 {
 // recorder's own `pathsWithLineLengths` set, but checking the engine-local
 // cache up front avoids the os.ReadFile cost on every step.  See
 // FU-Column-Aware-Nav-Wasm for the wire-level contract.
-func (ce *callEngine) registerSourcePathIfNew(m *wasm.ModuleInstance, fileName string) {
+func (ce *callEngine) registerSourcePathIfNew(m *wasm.ModuleInstance, fileName string) []uint32 {
 	if m.Record == nil || fileName == "" {
-		return
+		return nil
 	}
 	if ce.registeredPaths == nil {
-		ce.registeredPaths = make(map[string]struct{})
+		ce.registeredPaths = make(map[string][]uint32)
 	}
-	if _, seen := ce.registeredPaths[fileName]; seen {
-		return
+	if lengths, seen := ce.registeredPaths[fileName]; seen {
+		return lengths
 	}
-	ce.registeredPaths[fileName] = struct{}{}
-	m.Record.RegisterPathWithLineLengths(fileName, readSourceLineLengths(fileName))
+	lengths := readSourceLineLengths(fileName)
+	ce.registeredPaths[fileName] = lengths
+	m.Record.RegisterPathWithLineLengths(fileName, lengths)
+	return lengths
+}
+
+// addressableColumn maps a DWARF column onto the column axis the trace
+// format can actually address for `line`, returning `0` when no column
+// may be emitted at all.
+//
+// The column-aware wire encoding is a *byte offset* into the source
+// file: `paths.dat` Layout A carries each line's addressable column
+// count, the writer folds `column - 1` into the step's
+// `global_position_index`, and the reader inverts that with a binary
+// search over the per-line prefix sums.  The inversion is only defined
+// for columns the table can address, and two kinds of column break it:
+//
+//   - A column on a path with no per-line table (the source file is not
+//     on disk at the path DWARF baked in — the common case for a
+//     pre-built fixture or a module built on another machine).  There
+//     is nothing to invert against, so the reader surfaces the raw
+//     global index *as the line number*.
+//   - A column one past the end of its line.  DWARF routinely emits
+//     these: a function epilogue's `}` on a one-byte line is reported
+//     at column 2.  Its byte offset is the first offset of the *next*
+//     line, so the reader resolves it to the following line — and on
+//     the file's last line it lands outside the table entirely, where
+//     the reader again surfaces the raw byte offset as a line.  That is
+//     the "step past the end of the file" a user cannot navigate to.
+//
+// Both are recorder-side errors: an unaddressable position must not be
+// emitted. Rather than drop the column outright we clamp it to the last
+// addressable column of its line, which for the epilogue case points at
+// the closing brace itself — a real, displayable position.
+func addressableColumn(lineLengths []uint32, line int64, column int64) int64 {
+	if column <= 0 || line <= 0 {
+		return 0
+	}
+	// No per-line table: the reader has no way back from a byte offset
+	// to a (line, column) pair, so the column must not be encoded.
+	if int(line) > len(lineLengths) {
+		return 0
+	}
+	limit := int64(lineLengths[line-1])
+	if limit <= 0 {
+		// An empty line addresses no column.
+		return 0
+	}
+	if column > limit {
+		return limit
+	}
+	return column
 }
 
 func isUserRustSourcePath(fileName string) bool {
@@ -994,15 +1056,17 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							// counts on first encounter so the column-
 							// aware reader can decode `DeltaColumn`
 							// events back into (line, column) pairs.
-							ce.registerSourcePathIfNew(m, currLine.FileName)
+							lineLengths := ce.registerSourcePathIfNew(m, currLine.FileName)
 
 							// Emit the step with column data when DWARF
-							// surfaced a non-zero column (DWARF column 0
-							// means "no column").  Falling back to a
+							// surfaced a column the trace format can
+							// address (DWARF column 0 means "no column";
+							// see `addressableColumn` for the other two
+							// cases we refuse).  Falling back to a
 							// column-less step on missing data preserves
 							// back-compat with line-only navigation.
-							if currLine.Column > 0 {
-								col := tracetypes.Line(currLine.Column)
+							if c := addressableColumn(lineLengths, currLine.Line, currLine.Column); c > 0 {
+								col := tracetypes.Line(c)
 								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), &col)
 							} else {
 								m.Record.RegisterStepWithColumn(currLine.FileName, tracetypes.Line(currLine.Line), nil)

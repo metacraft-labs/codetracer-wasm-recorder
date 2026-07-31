@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/tetratelabs/wazero/tracewriter"
 )
 
 type evmEvent struct {
@@ -70,9 +68,11 @@ type StylusTrace struct {
 
 	// errorRecord receives EventKindError special events when an EVM-trace /
 	// wasm-execution mismatch panics out of a Stylus host hook.  Populated by
-	// exportSylusFunctions; nil when the recorder is disabled or trace export
-	// is off.  See CTFS audit section 1.60.
-	errorRecord tracewriter.TraceRecorder
+	// exportSylusFunctions.  It is an `eventSink`, not a bare
+	// `tracewriter.TraceRecorder`, so the zero value (recorder disabled, or
+	// trace export off) is *usable* and silently discards rather than
+	// dereferencing nil.  See CTFS audit section 1.60.
+	errorRecord eventSink
 }
 
 func (st *StylusTrace) nextEvent(event string) (evmEvent, error) {

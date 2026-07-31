@@ -35,12 +35,10 @@ func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 			func(ctx context.Context, m api.Module, stack []uint64) {
 				event, err := trace.nextEvent(name)
 				if err != nil {
-					if record != nil {
-						record.RegisterRecordEvent(
-							tracetypes.EventKindError,
-							"stylus_trace_mismatch",
-							fmt.Sprintf("hook %q: %v", name, err))
-					}
+					record.RegisterRecordEvent(
+						tracetypes.EventKindError,
+						"stylus_trace_mismatch",
+						fmt.Sprintf("hook %q: %v", name, err))
 					panic(fmt.Sprint(err))
 				}
 				// Convert downstream panics from fn (e.g. wasm memory access
@@ -49,12 +47,10 @@ func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 				// container records the failure point.
 				defer func() {
 					if r := recover(); r != nil {
-						if record != nil {
-							record.RegisterRecordEvent(
-								tracetypes.EventKindError,
-								"stylus_host_panic",
-								fmt.Sprintf("hook %q: %v", name, r))
-						}
+						record.RegisterRecordEvent(
+							tracetypes.EventKindError,
+							"stylus_host_panic",
+							fmt.Sprintf("hook %q: %v", name, r))
 						panic(r)
 					}
 				}()
@@ -64,10 +60,39 @@ func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 		).Export(name)
 }
 
-func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+// eventSink is the whole of the recorder surface `internal/stylus`
+// needs: a place to put EVM special events.  It exists so the package
+// tolerates a nil recorder *throughout* rather than at the handful of
+// call sites someone remembered to guard.
+//
+// `wazero run --stylus <trace> <module>` with no `--out-dir` (and no
+// `CODETRACER_WASM_RECORDER_OUT_DIR`) configures no recorder at all, so
+// `doRun` hands `stylus.Instantiate` a nil `tracewriter.TraceRecorder`.
+// Every one of the 34 host hooks below then called a method on it.  The
+// resulting nil dereference happened inside a wasm host call, where
+// wazero's own recover turns it into a trap — so the process printed a
+// Go stack trace, carried on to report a bogus "mismatched return
+// result", and exited 0.  Recording is an *option*; running a Stylus
+// module without it must simply not record.
+type eventSink struct {
+	rec tracewriter.TraceRecorder
+}
+
+// RegisterRecordEvent forwards to the recorder when there is one and is
+// a no-op otherwise.  Same name and signature as the recorder method it
+// stands in for, so the hook bodies read unchanged.
+func (s eventSink) RegisterRecordEvent(kind tracetypes.RecordEventKind, metadata, content string) {
+	if s.rec == nil {
+		return
+	}
+	s.rec.RegisterRecordEvent(kind, metadata, content)
+}
+
+func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, recorder tracewriter.TraceRecorder) wazero.HostModuleBuilder {
 	// Hand the recorder to the trace state so exportFunc can route panic /
 	// trace-mismatch failures through register_special_event(Error, ...).
 	// See exportFunc's docstring (CTFS audit, section 1.60) for context.
+	record := eventSink{rec: recorder}
 	trace.errorRecord = record
 	result := mb
 	result = exportReadArgs(result, trace, record)
@@ -111,7 +136,7 @@ func exportSylusFunctions(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 // TODO: what happens when gas or ink runs out
 // TODO: add record logs for events
 
-func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "read_args",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -123,7 +148,7 @@ func exportReadArgs(mb wazero.HostModuleBuilder, trace *StylusTrace, record trac
 		})
 }
 
-func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "write_result",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -136,7 +161,7 @@ func exportWriteResult(mb wazero.HostModuleBuilder, trace *StylusTrace, record t
 		})
 }
 
-func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "read_return_data",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -150,7 +175,7 @@ func exportReadReturnData(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		})
 }
 
-func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "create2",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -172,7 +197,7 @@ func exportCreate2(mb wazero.HostModuleBuilder, trace *StylusTrace, record trace
 		})
 }
 
-func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "create1",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -192,7 +217,7 @@ func exportCreate1(mb wazero.HostModuleBuilder, trace *StylusTrace, record trace
 		})
 }
 
-func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "account_balance",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -207,7 +232,7 @@ func exportAccountBalance(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		})
 }
 
-func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "account_code",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -224,7 +249,7 @@ func exportAccountCode(mb wazero.HostModuleBuilder, trace *StylusTrace, record t
 		})
 }
 
-func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "account_code_size",
 		[]api.ValueType{api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -240,7 +265,7 @@ func exportAccountCodeSize(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		})
 }
 
-func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "account_codehash",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -255,7 +280,7 @@ func exportAccountCodehash(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		})
 }
 
-func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "return_data_size",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -267,7 +292,7 @@ func exportReturnDataSize(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		})
 }
 
-func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "contract_address",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -279,7 +304,7 @@ func exportContractAddress(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		})
 }
 
-func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "msg_reentrant",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -291,7 +316,7 @@ func exportMsgReentrant(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 		})
 }
 
-func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "msg_sender",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -303,7 +328,7 @@ func exportMsgSender(mb wazero.HostModuleBuilder, trace *StylusTrace, record tra
 		})
 }
 
-func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "msg_value",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -315,7 +340,7 @@ func exportMsgValue(mb wazero.HostModuleBuilder, trace *StylusTrace, record trac
 		})
 }
 
-func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "tx_ink_price",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI32},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -327,7 +352,7 @@ func exportTxInkPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record tr
 		})
 }
 
-func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "tx_gas_price",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -339,7 +364,7 @@ func exportTxGasPrice(mb wazero.HostModuleBuilder, trace *StylusTrace, record tr
 		})
 }
 
-func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "tx_origin",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -351,7 +376,7 @@ func exportTxOrigin(mb wazero.HostModuleBuilder, trace *StylusTrace, record trac
 		})
 }
 
-func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "native_keccak256",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -367,7 +392,7 @@ func exportNativeKeccak256(mb wazero.HostModuleBuilder, trace *StylusTrace, reco
 		})
 }
 
-func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "storage_cache_bytes32",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -384,7 +409,7 @@ func exportStorageCacheBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, 
 		})
 }
 
-func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "storage_load_bytes32",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -399,7 +424,7 @@ func exportStorageLoadBytes32(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 		})
 }
 
-func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "storage_flush_cache",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -410,7 +435,7 @@ func exportStorageFlushCache(mb wazero.HostModuleBuilder, trace *StylusTrace, re
 		})
 }
 
-func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "emit_log",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -425,7 +450,7 @@ func exportEmitLog(mb wazero.HostModuleBuilder, trace *StylusTrace, record trace
 		})
 }
 
-func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "call_contract",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -447,7 +472,7 @@ func exportCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 		})
 }
 
-func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "delegate_call_contract",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -467,7 +492,7 @@ func exportDelegateCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace,
 		})
 }
 
-func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "static_call_contract",
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32},
@@ -487,7 +512,7 @@ func exportStaticCallContract(mb wazero.HostModuleBuilder, trace *StylusTrace, r
 		})
 }
 
-func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "block_basefee",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -499,7 +524,7 @@ func exportBlockBasefee(mb wazero.HostModuleBuilder, trace *StylusTrace, record 
 		})
 }
 
-func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "chainid",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -511,7 +536,7 @@ func exportChainid(mb wazero.HostModuleBuilder, trace *StylusTrace, record trace
 		})
 }
 
-func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "block_coinbase",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -523,7 +548,7 @@ func exportBlockCoinbase(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 		})
 }
 
-func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "block_gas_limit",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -535,7 +560,7 @@ func exportBlockGasLimit(mb wazero.HostModuleBuilder, trace *StylusTrace, record
 		})
 }
 
-func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "block_number",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -547,7 +572,7 @@ func exportBlockNumber(mb wazero.HostModuleBuilder, trace *StylusTrace, record t
 		})
 }
 
-func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "block_timestamp",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -559,7 +584,7 @@ func exportBlockTimestamp(mb wazero.HostModuleBuilder, trace *StylusTrace, recor
 		})
 }
 
-func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "pay_for_memory_grow",
 		[]api.ValueType{api.ValueTypeI32}, []api.ValueType{},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -570,7 +595,7 @@ func exportPayForMemoryGrow(mb wazero.HostModuleBuilder, trace *StylusTrace, rec
 		})
 }
 
-func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "evm_gas_left",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {
@@ -582,7 +607,7 @@ func exportEvmGasLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record tr
 		})
 }
 
-func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record tracewriter.TraceRecorder) wazero.HostModuleBuilder {
+func exportEvmInkLeft(mb wazero.HostModuleBuilder, trace *StylusTrace, record eventSink) wazero.HostModuleBuilder {
 	return exportFunc(mb, trace, "evm_ink_left",
 		[]api.ValueType{}, []api.ValueType{api.ValueTypeI64},
 		func(m api.Module, stack []uint64, event evmEvent) {

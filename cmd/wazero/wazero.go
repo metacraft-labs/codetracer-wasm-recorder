@@ -529,23 +529,41 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	}
 
 	if stylusTracePath != "" {
+		// Every branch below used to report to stderr and fall through to
+		// `return 0`, so a Stylus run that read no argument, trapped in the
+		// entrypoint, or returned a value the EVM trace disagrees with still
+		// looked successful to a CI job, a shell `&&`, or a wrapping tool.
+		// A diagnostic nobody's exit status can see is not a failure report.
+		// Any of them now makes the run non-zero — after the trace has been
+		// flushed, so the partial recording is still there to debug.
+		stylusFailed := false
+
 		arg, err := stylusState.GetEntrypointArg()
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus entrypoint argument: %v\n", err)
+			stylusFailed = true
 		}
 
 		res, err := module.ExportedFunction("user_entrypoint").Call(ctx, arg)
 		if err != nil {
 			fmt.Fprintf(stdErr, "error executing stylus entrypoint: %v\n", err)
+			stylusFailed = true
 		}
 
 		retval, err := stylusState.GetReturnedValue()
 		if err != nil {
 			fmt.Fprintf(stdErr, "error reading stylus user returned result: %v\n", err)
+			stylusFailed = true
 		}
 
 		if len(res) != 1 || res[0] != retval {
 			fmt.Fprintf(stdErr, "error mismatched return result in trace and execution\n")
+			stylusFailed = true
+		}
+
+		if stylusFailed {
+			produceTrace(outDir, wasmFile, recorder)
+			return 1
 		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.

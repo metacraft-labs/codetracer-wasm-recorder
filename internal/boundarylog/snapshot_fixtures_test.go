@@ -94,7 +94,7 @@ func BuildComputeBalanceRecording(t *testing.T, dir string, args [][2]int32) str
 		userID, amount := a[0], a[1]
 		result := userID*10 + amount*2
 		b.export("compute_balance", 1,
-			"/home/zahary/m/js-support/codetracer/src/db-backend/tests/fixtures/cross_process/account-balance-with-wasm/wasm-src/lib.rs",
+			"/src/lib.rs",
 			71,
 			[]jsValue{jsInt(userID), jsInt(amount)},
 			[]jsValue{jsInt(result)}, nil)
@@ -187,7 +187,7 @@ func BuildTamperedComputeBalanceRecording(
 			result = badResult
 		}
 		b.export("compute_balance", 1,
-			"/home/zahary/m/js-support/codetracer/src/db-backend/tests/fixtures/cross_process/account-balance-with-wasm/wasm-src/lib.rs",
+			"/src/lib.rs",
 			71,
 			[]jsValue{jsInt(userID), jsInt(amount)},
 			[]jsValue{jsInt(result)}, nil)

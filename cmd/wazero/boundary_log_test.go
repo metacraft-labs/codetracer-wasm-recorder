@@ -356,6 +356,19 @@ func TestVerifyCrossModalityParity(t *testing.T) {
 	require.Equal(t, docB.Functions, docA.Functions, "function tables differ")
 	require.Equal(t, docB.Varnames, docA.Varnames, "variable-name tables differ")
 	require.Equal(t, docB.Counts, docA.Counts, "counts differ")
+	// The type table, by CONTENT — `counts["types"]` above is not a
+	// substitute for it.
+	//
+	// The recorder's known way of getting types wrong preserves their
+	// number: a recorder swapped onto a live `ModuleInstance` without its
+	// `TypesIndex` produced slices "declaring `i64` where linear replay
+	// declared `u32`, every other stream byte-identical" (AGENTS.md, "Two
+	// traps" under Slices). One `i64` for one `u32` leaves `counts["types"]`
+	// at exactly what it was, so a count comparison — which is all this
+	// test had — would have watched that regression go by. What reaches the
+	// debugger is the NAME behind each `type_id`, so that is what parity
+	// has to be stated over.
+	require.Equal(t, docB.Types, docA.Types, "type tables differ")
 	require.Equal(t, docB.Metadata.Flags, docA.Metadata.Flags, "meta.dat flags differ")
 
 	require.Equal(t, len(docB.Events), len(docA.Events), "event counts differ")
@@ -370,6 +383,22 @@ func TestVerifyCrossModalityParity(t *testing.T) {
 	// vacuously. Assert the traces are substantial.
 	require.True(t, docA.Counts["steps"] > 0, "trace A has no steps")
 	require.True(t, docA.Counts["calls"] >= 3, "trace A should carry all three frames")
+	// Same argument, applied to the two comparisons added above: an empty
+	// `types` array or an empty `flags` object would make each of them a
+	// comparison of nothing against nothing, and both would pass.
+	// `compute_balance` and its two helpers are all `u32`-typed, so the
+	// table is exactly one entry deep — small, but it is the whole of what
+	// the module's DWARF describes, and zero would mean the type stream
+	// never reached the reader.
+	require.True(t, len(docA.Types) > 0,
+		"trace A carries no types, so the type-table comparison above compared "+
+			"two empty tables and proved nothing; counts.types=%d",
+		docA.Counts["types"])
+	require.Equal(t, len(docA.Types), docA.Counts["types"],
+		"the decoded type table must hold one entry per counts.types")
+	require.True(t, len(docA.Metadata.Flags) > 0,
+		"trace A surfaced no meta.dat flags, so the flag comparison above "+
+			"compared two empty maps and proved nothing")
 }
 
 // ===========================================================================

@@ -77,16 +77,67 @@ type goldenDoc struct {
 		// under `metadata.flags`.  `has_column_aware_steps` is bit 4 and
 		// gates column-aware navigation; the wasm recorder sets it on
 		// every trace per FU-Column-Aware-Nav-Wasm.
-		Flags struct {
-			HasColumnAwareSteps     bool `json:"has_column_aware_steps"`
-			HasAlternateSourceViews bool `json:"has_alternate_source_views"`
-		} `json:"flags"`
+		//
+		// It is a MAP rather than a struct of named booleans, and that is
+		// deliberate.  `codetracer_ct_print.nim` emits nine keys today
+		// (`has_column_aware_steps`, `has_alternate_source_views`,
+		// `supports_column_breakpoints`, `supports_column_motions`,
+		// `has_call_stream`, `has_step_stream`, `has_value_stream`,
+		// `has_io_event_stream`, `has_interning_tables`) and this struct
+		// declared two of them — so `encoding/json` silently dropped the
+		// other seven and every comparison of `Metadata.Flags` was a
+		// comparison of two ninths of the flag word.  A map cannot drift
+		// that way: whatever the reader gains a flag for lands here and is
+		// compared, without anyone having to remember to widen a struct.
+		//
+		// The price of a map is that a mistyped key reads as `false`
+		// instead of failing to compile.  `goldenFlags.get` buys that back
+		// by failing the test when the key is absent from the document.
+		Flags goldenFlags `json:"flags"`
 	} `json:"metadata"`
-	Paths     []string          `json:"paths"`
-	Functions []string          `json:"functions"`
-	Varnames  []string          `json:"varnames"`
-	Counts    map[string]int    `json:"counts"`
-	Events    []json.RawMessage `json:"events"`
+	Paths     []string `json:"paths"`
+	Functions []string `json:"functions"`
+	Varnames  []string `json:"varnames"`
+	// Types is the trace's type table, in the writer's assignment order:
+	// the resolved DWARF type name behind every `type_id` an event refers
+	// to (`["u32", "struct Slot", "[3]struct Slot", …]`).
+	//
+	// Comparing it MATTERS and comparing `counts["types"]` instead does
+	// not.  The recorder's known failure mode here is count-preserving by
+	// construction: swapping one recorder for another on a live
+	// `ModuleInstance` without carrying its `TypesIndex` over produced
+	// slices "declaring `i64` where linear replay declared `u32`, every
+	// other stream byte-identical" (see AGENTS.md, "Two traps" under
+	// Slices).  Same number of types, different types — invisible to a
+	// count, and the difference between a debugger that renders a value
+	// correctly and one that renders it as a wrong-width integer.
+	Types  []string          `json:"types"`
+	Counts map[string]int    `json:"counts"`
+	Events []json.RawMessage `json:"events"`
+}
+
+// goldenFlags is the decoded `metadata.flags` object: every meta.dat flag
+// bit `ct-print --full` surfaces, under the reader's own spelling.
+//
+// Decoding into a map rather than into named fields is what makes the flag
+// comparison total — see the comment on `goldenDoc.Metadata.Flags`.
+type goldenFlags map[string]bool
+
+// get returns the named flag, failing loudly when the document carries no
+// such key.
+//
+// This is the guard that makes the map as safe as the named-field struct
+// it replaced: a typo, or a flag the reader stopped emitting, surfaces as
+// an explicit "no such flag" failure rather than as a silent `false` that
+// happens to satisfy a `require.False`.
+func (f goldenFlags) get(t *testing.T, name string) bool {
+	t.Helper()
+	v, ok := f[name]
+	require.True(t, ok,
+		"`ct-print --full` emitted no `metadata.flags.%s`; the reader's flag "+
+			"set has changed and this assertion is naming a flag that no "+
+			"longer exists.  flags present: %v", name, f)
+	return v
 }
 
 // goldenEvent carries every field surfaced by `--full`'s event
@@ -1773,7 +1824,7 @@ func TestRecorderColumnAwareSteps(t *testing.T) {
 	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
 
 	// ----- meta.dat bit 4: FLAG_HAS_COLUMN_AWARE_STEPS ------------------
-	require.True(t, doc.Metadata.Flags.HasColumnAwareSteps,
+	require.True(t, doc.Metadata.Flags.get(t, "has_column_aware_steps"),
 		"trace metadata must advertise has_column_aware_steps=true; got %+v",
 		doc.Metadata.Flags)
 
@@ -1843,7 +1894,7 @@ func TestRecorderColumnAwareSteps(t *testing.T) {
 func TestRecorderColumnAwareMultipleStatementsPerLine(t *testing.T) {
 	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
 
-	require.True(t, doc.Metadata.Flags.HasColumnAwareSteps,
+	require.True(t, doc.Metadata.Flags.get(t, "has_column_aware_steps"),
 		"trace metadata must advertise has_column_aware_steps=true; got %+v",
 		doc.Metadata.Flags)
 

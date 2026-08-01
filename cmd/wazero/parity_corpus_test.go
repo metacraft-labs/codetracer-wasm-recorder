@@ -384,6 +384,20 @@ func TestVerifyParityOverTheWholeCorpus(t *testing.T) {
 			require.Equal(t, docB.Functions, docA.Functions, "%s: function tables differ", m.name)
 			require.Equal(t, docB.Varnames, docA.Varnames, "%s: variable-name tables differ", m.name)
 			require.Equal(t, docB.Counts, docA.Counts, "%s: counts differ", m.name)
+			// The type table, by CONTENT. `counts["types"]` above cannot
+			// stand in for it: the recorder's known type defect is
+			// count-preserving by construction — a recorder swapped onto a
+			// live `ModuleInstance` without its `TypesIndex` produced
+			// slices "declaring `i64` where linear replay declared `u32`,
+			// every other stream byte-identical" (AGENTS.md, "Two traps"
+			// under Slices). Trading one type name for another of the same
+			// arity leaves every count untouched, so only a comparison of
+			// the names themselves can see it. This corpus is where it
+			// matters most: `vault_apply` and `pair_stats` carry compound
+			// types (structs, a result tuple) whose spelling is precisely
+			// what a lost `TypesIndex` would garble.
+			require.Equal(t, docB.Types, docA.Types,
+				"%s: type tables differ", m.name)
 			require.Equal(t, docB.Metadata.Flags, docA.Metadata.Flags,
 				"%s: meta.dat flags differ", m.name)
 
@@ -402,6 +416,24 @@ func TestVerifyParityOverTheWholeCorpus(t *testing.T) {
 			require.True(t, docA.Counts["steps"] > 0, "%s: trace A has no steps", m.name)
 			require.True(t, docA.Counts["calls"] >= len(m.calls),
 				"%s: trace A should carry at least one frame per exported call", m.name)
+			// The same argument for the two comparisons added above: an
+			// empty `types` array or an empty `flags` object would make
+			// each of them a comparison of nothing against nothing. Every
+			// corpus module is compiled with `-C debuginfo=2` precisely so
+			// its DWARF describes interior structure, so an empty type
+			// table here means the type stream never reached the reader —
+			// the `grow_mem` failure (`types.dat` measured zero bytes)
+			// wearing the shape of a passing parity check.
+			require.True(t, len(docA.Types) > 0,
+				"%s: trace A carries no types, so the type-table comparison above "+
+					"compared two empty tables and proved nothing; counts.types=%d",
+				m.name, docA.Counts["types"])
+			require.Equal(t, len(docA.Types), docA.Counts["types"],
+				"%s: the decoded type table must hold one entry per counts.types",
+				m.name)
+			require.True(t, len(docA.Metadata.Flags) > 0,
+				"%s: trace A surfaced no meta.dat flags, so the flag comparison "+
+					"above compared two empty maps and proved nothing", m.name)
 		})
 	}
 }

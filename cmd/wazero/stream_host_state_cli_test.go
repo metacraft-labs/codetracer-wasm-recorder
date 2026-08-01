@@ -101,6 +101,21 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 	require.Equal(t, want.Functions, got.Functions, "function tables differ")
 	require.Equal(t, want.Varnames, got.Varnames, "variable-name tables differ")
 	require.Equal(t, want.Counts, got.Counts, "counts differ")
+	// The type table, by CONTENT, and the meta.dat flags — neither of
+	// which `counts` above covers.
+	//
+	// `counts["types"]` is not a proxy for the first: the recorder's known
+	// type defect is count-preserving. A recorder swapped onto a live
+	// `ModuleInstance` without its `TypesIndex` produced containers
+	// "declaring `i64` where linear replay declared `u32`, every other
+	// stream byte-identical" (AGENTS.md, "Two traps" under Slices), and the
+	// streaming driver is exactly a second driver over one recorder — the
+	// place where such a divergence between two ways of producing the same
+	// trace would appear. `vault_apply` reaches the guest's state through
+	// an imported memory the host stages, so its type table is the richest
+	// in the corpus and the most worth pinning by name.
+	require.Equal(t, want.Types, got.Types, "type tables differ")
+	require.Equal(t, want.Metadata.Flags, got.Metadata.Flags, "meta.dat flags differ")
 	require.Equal(t, len(want.Events), len(got.Events), "event counts differ")
 	for i := range want.Events {
 		require.Equal(t, string(want.Events[i]), string(got.Events[i]),
@@ -109,6 +124,15 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 	require.True(t, got.Counts["steps"] > 0,
 		"the streamed trace must carry real DWARF-driven steps, or the "+
 			"comparison above is between two empty documents")
+	// The same non-vacuity argument, for the two comparisons added above.
+	require.True(t, len(got.Types) > 0,
+		"the streamed trace carries no types, so the type-table comparison "+
+			"above compared two empty tables; counts.types=%d", got.Counts["types"])
+	require.Equal(t, len(got.Types), got.Counts["types"],
+		"the decoded type table must hold one entry per counts.types")
+	require.True(t, len(got.Metadata.Flags) > 0,
+		"the streamed trace surfaced no meta.dat flags, so the flag "+
+			"comparison above compared two empty maps")
 }
 
 // TestBoundaryStreamStillRefusesAModuleWhoseStateNeverArrives is the

@@ -393,7 +393,7 @@ the namespaces it does not use — a hard, tested invariant, not a convention
 (`TestOpenBuildToleratesSnapshotNamespaces`, which also checks the container
 through `ct-print`, an independent CTFS implementation).
 
-#### Two format notes worth knowing before you touch this
+#### Format notes worth knowing before you touch this
 
 * **`wcp.entry.lay` / `wcp.entry.mem` are spelled `wcpentry.lay` /
   `wcpentry.mem`.** Base40 packs exactly twelve characters into the u64
@@ -418,6 +418,55 @@ through `ct-print`, an independent CTFS implementation).
   `lookupDataBlock` for the writer. **A round-trip test through this package
   alone cannot catch a mistake here**, because it writes and reads with the
   same convention; that is why those two tests exist.
+* **`wcppages.ns` is a real `NSB1` namespace B-tree — it did not used to be.**
+  It carried a `WPG1` flat sorted table, because `CTFS-Binary-Format.md` §10
+  specified the 61-byte namespace header and the leaf entry descriptors but
+  not the byte layout of B-tree **interior** nodes, so a wire-compatible
+  namespace could not be written from the spec. That gap is closed: §10's
+  "Key Lookup: B-Tree Index" now gives the node layout, the copy-up separator
+  rule and the one-pass bulk-load recipe, and `internal/wasmsnapshot/nsb1.go`
+  implements them. The stream is Leaf Type B with sub-blocks skipped
+  (`flags = 0b11`, D = 16, order = 170); a leaf descriptor is
+  `[payload_offset u64][payload_len u64]`, an **absolute** offset into the same
+  stream, pointing at the CAS spec §5.4 `NamespaceEntry`
+  `[full_hash 16][page_size u32][reserved u32][page bytes]`. Three things are
+  easy to get wrong here:
+  * **A separator is a subtree minimum, not an exclusive upper bound.** An
+    internal node whose key equals the search key sends the walk into the child
+    to its **right**. Get it backwards and you lose exactly the keys that are
+    separators — 1 key in 170, which a small fixture will not show you.
+  * **The page-alignment padding goes before the payload, not after it.** The
+    Nim builders pad at the end; this one pads between the page image and the
+    payload region, so the stream ends flush with the last page's last byte.
+    Padding at the end would leave the stream's tail outside the reach of the
+    per-page hash check, which is the format's only integrity check.
+  * **`NSB1` has no version field**, so `SnapshotFormatVersion` rides in a
+    `WCPV` record at byte 64 of page 0 — inside the header page, past the
+    61-byte header, where every namespace reader ignores it. That is what keeps
+    an unrecognised snapshot revision an `*UnsupportedVersionError` ("seeking
+    unavailable") rather than a corrupt-stream error.
+
+  **Two independent readers hold the writer to §10**, for the same reason
+  `internal/ctfs` needs two: a round-trip through this package cannot catch a
+  layout mistake. `internal/wasmsnapshot/nsb1_crossread_test.go` transcribes
+  `cow_btree.nim`'s `loadCowBTree` / `lookupFrom` literally — keep it diffable
+  against that source — and `nsb1_nim_crossread_test.go` shells out to the
+  **production** Nim reader through `codetracer-trace-format-nim`'s
+  `tests/check_nsb1_namespace.nim`. The second skips, loudly, when the sibling
+  checkout or `direnv` is absent; never make a failure go away by arranging for
+  the skip.
+
+  **Sizing:** a B-tree image is bigger than the flat table was, by one 4096-byte
+  header page, one 4096-byte leaf per 170 pages plus the interior levels above
+  them, and up to 4095 bytes of padding — less 16 bytes per page, since a
+  24-byte CAS entry header replaced a 40-byte table row. Measured against the
+  old encoding: **+12 232 B at 1 page (+18.6%), +12 112 B at 4 (+4.6%),
+  +16 560 B at 200 (+0.13%), +26 480 B at 2000 (+0.02%)**, and an empty store
+  is 4096 B instead of 16 B. The overhead is a fixed cost against a 64 KiB
+  payload unit, so it vanishes at any real memory size. `PerTraceCache.Bytes()`
+  — what `--slice-bytes` / `SlicePolicy.TargetBytes` measures — still counts
+  page **content** only, deliberately: it is a knob over how much memory a
+  slice accumulates, not over its index overhead.
 
 ### Streaming replay — `--boundary-stream`, `--stream-done`
 

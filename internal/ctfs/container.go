@@ -31,13 +31,15 @@
 //   - **Single writer, container quiescent.** The container must not be open
 //     for writing elsewhere. The trace writer has already closed it by the
 //     time snapshots are attached.
-//   - **No namespace B-tree.** The `NSB1` namespace machinery of
-//     `CTFS-Binary-Format.md` §8 is *not* implemented: that document specifies
-//     the 61-byte namespace header and the leaf entry descriptors, but not the
-//     byte layout of B-tree interior nodes, so a faithful implementation
-//     cannot be written from the spec alone. See `internal/wasmsnapshot`'s
-//     `pagestore.go` for how the per-trace page store is stored instead, and
-//     for the explicit statement of what that costs.
+//   - **No namespace B-tree in this package.** The `NSB1` namespace machinery
+//     of `CTFS-Binary-Format.md` §10 is not implemented here: this package
+//     stores and retrieves whole internal files, and indexes nothing by key.
+//     That is a scope choice rather than a gap in the specification — §10's
+//     "Key Lookup: B-Tree Index" now gives the interior-node layout as well as
+//     the 61-byte header and the leaf descriptors, and
+//     `internal/wasmsnapshot`'s `nsb1.go` writes and reads a real one for the
+//     `wcppages.ns` per-trace page store. That namespace travels through this
+//     package as opaque bytes, exactly like every other stream.
 //   - **No compression.** The container layer is compression-agnostic
 //     (`ctfs-container.md` §1: "Compression is not in the header"); the
 //     streams written here are stored raw and self-describe as such.

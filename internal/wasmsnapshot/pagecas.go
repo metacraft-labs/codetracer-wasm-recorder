@@ -101,10 +101,18 @@ func (c *PerTraceCache) Describe() string { return "per-trace cache (wcppages.ns
 // Len reports how many distinct pages the tier holds.
 func (c *PerTraceCache) Len() int { return len(c.pages) }
 
-// Bytes reports the total page content held, which is what the tier
-// contributes to a container's `wcppages.ns` stream. It is the dominant term
-// in a slice's snapshot payload, so `SlicePolicy.TargetBytes` is measured
-// against it.
+// Bytes reports the total page *content* held, which is the dominant term in
+// what the tier contributes to a container's `wcppages.ns` stream, and the
+// term `SlicePolicy.TargetBytes` is measured against.
+//
+// It is a lower bound on the stream, not its size. `encodePageStore` writes a
+// real `NSB1` namespace, so the stream also carries one 4096-byte header page,
+// the B-tree's own pages (one 4096-byte leaf per 170 pages, plus the interior
+// levels above them), a 24-byte CAS entry header per page, and up to 4095
+// bytes of alignment padding. At a 64 KiB page that overhead is ~0.05% and it
+// is deliberately not folded in here: `TargetBytes` is a knob over how much
+// *memory content* a slice accumulates, and mixing index overhead into it
+// would make the same policy mean different things at different key counts.
 func (c *PerTraceCache) Bytes() int64 {
 	var n int64
 	for _, p := range c.pages {
@@ -505,124 +513,355 @@ func writePages(out []byte, at uint64, hashes []xxh3.Uint128, cacheID uint64, ti
 // `wcppages.ns` — the per-trace page store
 // ---------------------------------------------------------------------------
 
-// pageStoreMagic identifies the per-trace page store's on-disk image.
+// # `wcppages.ns` IS an `NSB1` namespace B-tree
 //
-// # Why this is not an `NSB1` B-tree
+// The stream is a real CTFS namespace page image, written and read against
+// `codetracer-specs/Trace-Files/CTFS-Binary-Format.md` §10 ("Namespaces"),
+// subsection "Key Lookup: B-Tree Index" — which specifies the 61-byte `NSB1`
+// header, the leaf entry descriptors **and** the B-tree interior-node layout.
+// `nsb1.go` holds the writer and the reader; this file only decides what goes
+// into the tree.
 //
-// `CTFS-Binary-Format.md` §8 specifies the namespace's 61-byte `NSB1` header
-// and its leaf entry descriptors, but **not** the byte layout of B-tree
-// interior nodes, so a wire-compatible namespace cannot be written from the
-// specification alone — it would have to be reverse-engineered from
-// `codetracer-trace-format-nim`'s `cow_btree.nim`, which is outside this
-// repository.
+// (An earlier revision of this file carried a `WPG1` flat sorted table and a
+// comment explaining that a wire-compatible namespace could not be written
+// because the spec did not describe interior nodes. It does now, so the
+// workaround is gone: any CTFS namespace reader can traverse this stream, and
+// two independent ones are held to it — a literal transcription of
+// `cow_btree.nim`'s reader in `nsb1_crossread_test.go`, and the production Nim
+// `loadCowBTree` itself, shelled out to in `nsb1_nim_crossread_test.go`.)
 //
-// Rather than emit something shaped like a namespace that no CTFS reader can
-// actually traverse, the store carries its own magic. An `NSB1` reader handed
-// this stream fails immediately on the magic check — a legible refusal — where
-// a fabricated B-tree would fail somewhere deep in a node walk, or worse,
-// return a wrong page. The stream keeps the `wcppages.ns` name because that is
-// the name the snapshot spec §6 assigns the per-trace tier and because the
-// data is otherwise exactly what a namespace would hold: 64-bit keys (CAS spec
-// §5.4's low-64 truncation) mapping to `(full_hash, page_size, page_bytes)`
-// entries.
-var pageStoreMagic = [4]byte{'W', 'P', 'G', '1'}
-
+// # What is in it
+//
+// The key is CAS spec §5.4's low-64 truncation of the page's xxh3-128 hash.
+// The value is the §5.4 `NamespaceEntry`:
+//
+//	full_hash:  u8[16]      the whole xxh3-128, so a truncated-key collision
+//	                        is detected rather than silently served
+//	page_size:  u32 LE
+//	reserved:   u32 LE = 0
+//	page_bytes: u8[page_size]
+//
+// Following the convention `codetracer-trace-format-nim`'s
+// `linehits_builder.nim` and `memwrites_builder.nim` already use for a
+// self-contained namespace image — a namespace B-tree treats descriptors as
+// opaque bytes, so a value larger than a descriptor has to live somewhere the
+// descriptor points at — the namespace is Leaf Type B with sub-blocks skipped
+// (`flags = 0b11`, D = 16, order = 170) and each leaf descriptor is
+//
+//	[payload_offset u64 LE][payload_len u64 LE]
+//
+// an **absolute** byte offset into this same stream, pointing past the end of
+// the page image at the entry's payload.
+//
+// The stream is zero-padded to a multiple of 4096, as the Nim builders do and
+// as `loadCowBTree` requires ("image not page-aligned"). It differs from them
+// in *where* the padding goes: after the page image and **before** the payload
+// region, rather than at the end. That is deliberate. Padding at the end means
+// the stream's last bytes belong to no record, so the per-page hash check —
+// which is the only integrity check this format has — cannot see them, and a
+// flipped byte there is invisible. With the padding in front, the payload ends
+// exactly at the end of the stream and the last byte of the stream is the last
+// byte of a real page, covered by that page's `full_hash`. The descriptors are
+// absolute offsets, so the payload region is free to start wherever it likes.
+//
+// # Collisions
+//
+// §5.4 says a lookup that finds a key whose `full_hash` differs is "not
+// present". That rule would lose a page whose truncated key collides with
+// another's, and the per-trace tier is the trace's self-sufficiency guarantee
+// (§5.1) — a page it drops is a page no cold-cache replay can find. So the
+// payload of one key is a *chain* of one or more `NamespaceEntry` records,
+// each self-delimiting through its own `page_size`, and the reader picks the
+// record whose `full_hash` matches. With one page per key — every real case at
+// this scale, where §5.4 puts the 64-bit collision probability at ~3% for 10M
+// entries and a WASM per-trace tier holds thousands — the payload is byte for
+// byte a single §5.4 `NamespaceEntry`, so a reader implementing §5.4 literally
+// reads exactly what §5.4 describes and reaches §5.4's verdict.
 const (
-	pageStoreHeaderSize = 16
-	pageStoreEntrySize  = 40
+	// pageRecordHeaderSize is `full_hash` + `page_size` + `reserved`.
+	pageRecordHeaderSize = 24
+	// pageStoreDescSize is the Type B entry descriptor width.
+	pageStoreDescSize = nsDescSizeTypeB
+	// pageStoreFlags is `NamespaceHeader.flags`: Leaf Type B, sub-blocks
+	// skipped. Sub-block allocation is optional per §10 ("appropriate for
+	// `threads.ns` where every entry is large") and a 64 KiB page is never a
+	// sub-block candidate.
+	pageStoreFlags = nsFlagLeafTypeB | nsFlagSkipSubBlocks
 )
 
-// encodePageStore serialises the per-trace tier.
+// # Carrying `SnapshotFormatVersion` through a format that has no version field
 //
-// Entries are sorted by the truncated 64-bit key, so a reader can binary-search
-// them — the O(log n) keyed lookup a namespace B-tree provides, without the
-// B-tree. The full 128-bit hash is stored alongside each entry exactly as CAS
-// spec §5.4 requires, so a truncated-key collision is *detected* rather than
-// silently served.
+// `NSB1`'s 4-byte magic is its only version/identity field: §10 says so
+// outright, and the container header carries the *container* format version,
+// not a stream's. The `wcp.*` streams have their own revision
+// (`SnapshotFormatVersion`), and an unrecognised one must keep producing an
+// `*UnsupportedVersionError` so `Load` downgrades to "seeking unavailable"
+// rather than "recording unreadable" (snapshot spec §6 — the behaviour
+// `TestUnknownVersionIsADiagnosticNotAnError` pins on the sibling `wcp.idx`
+// stream and `TestAnUnknownPageStoreVersionIsADiagnostic` pins here).
+//
+// It is carried in a sidecar record inside **page 0**, at byte 64 — after the
+// 61-byte `NamespaceHeader` and before the end of a page that §10 reserves
+// wholly for the header and never uses as a node. Nothing in the namespace
+// format reads those bytes: the Nim `loadCowBTree` and the Rust
+// `CowNamespaceReader` both decode the 61 bytes and ignore the rest of page 0,
+// which is why the real-Nim cross-read proof passes over an image carrying
+// this record. The alternatives were worse — a version in every payload record
+// repeats itself once per page and says nothing about an *empty* store, and a
+// trailer after the payload has no fixed address to be found at.
+var pageStoreSidecarMagic = [4]byte{'W', 'C', 'P', 'V'}
+
+const (
+	pageStoreSidecarOffset = 64
+	// Layout, all little-endian:
+	//   [64..68)  magic "WCPV"
+	//   [68..70)  version    u16  — SnapshotFormatVersion
+	//   [70..72)  reserved   u16  = 0
+	//   [72..76)  page_size  u32  — the CAS page size this store addresses
+	//   [76..80)  key_count  u32  — number of namespace keys, cross-checked
+	//                               against the traversal
+	pageStoreSidecarSize = 16
+)
+
+// truncatedKey is CAS spec §5.4's namespace key: the low 64 bits of the
+// xxh3-128 page hash.
+func truncatedKey(h xxh3.Uint128) uint64 { return h.Lo }
+
+// encodePageStore serialises the per-trace tier as an `NSB1` namespace.
 func encodePageStore(c *PerTraceCache) []byte {
-	type entry struct {
-		key  uint64
-		hash xxh3.Uint128
-	}
-	entries := make([]entry, 0, len(c.pages))
-	for h := range c.pages {
-		entries = append(entries, entry{key: h.Lo, hash: h})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].key != entries[j].key {
-			return entries[i].key < entries[j].key
-		}
-		return entries[i].hash.Hi < entries[j].hash.Hi
-	})
-
-	head := make([]byte, pageStoreHeaderSize+len(entries)*pageStoreEntrySize)
-	copy(head, pageStoreMagic[:])
-	binary.LittleEndian.PutUint16(head[4:], SnapshotFormatVersion)
-	binary.LittleEndian.PutUint16(head[6:], 0)
-	binary.LittleEndian.PutUint32(head[8:], PageSize)
-	binary.LittleEndian.PutUint32(head[12:], uint32(len(entries)))
-
-	var data []byte
-	for i, e := range entries {
-		off := pageStoreHeaderSize + i*pageStoreEntrySize
-		page := c.pages[e.hash]
-		binary.LittleEndian.PutUint64(head[off:], e.key)
-		hb := e.hash.Bytes()
-		copy(head[off+8:], hb[:])
-		binary.LittleEndian.PutUint32(head[off+24:], uint32(len(page)))
-		binary.LittleEndian.PutUint32(head[off+28:], 0)
-		binary.LittleEndian.PutUint64(head[off+32:], uint64(len(head)+len(data)))
-		data = append(data, page...)
-	}
-	return append(head, data...)
+	return encodePageStoreKeyed(c, truncatedKey)
 }
 
-// decodePageStore is the inverse of encodePageStore. Every entry's bytes are
+// encodePageStoreKeyed is `encodePageStore` with the §5.4 truncation injected,
+// so a test can force the truncated-key collisions real xxh3-128 hashes will
+// not produce at this scale. Production always passes `truncatedKey`.
+func encodePageStoreKeyed(c *PerTraceCache, keyOf func(xxh3.Uint128) uint64) []byte {
+	// Group the pages by namespace key. A key holds more than one page only
+	// under a truncation collision.
+	byKey := map[uint64][]xxh3.Uint128{}
+	for h := range c.pages {
+		byKey[keyOf(h)] = append(byKey[keyOf(h)], h)
+	}
+	keys := make([]uint64, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for _, chain := range byKey {
+		// A deterministic chain order keeps the stream reproducible; Go's map
+		// iteration is not.
+		sort.Slice(chain, func(i, j int) bool {
+			if chain[i].Hi != chain[j].Hi {
+				return chain[i].Hi < chain[j].Hi
+			}
+			return chain[i].Lo < chain[j].Lo
+		})
+	}
+
+	// Two-pass sizing, the shape `linehits_builder.nim`'s `buildCowImage` uses:
+	// the descriptors are absolute offsets into the finished stream, so the
+	// page image has to be sized before they can be computed. Building the
+	// tree once over the same keys with zero descriptors gives that size
+	// exactly — a bulk-loaded tree's page count is a function of the key count
+	// alone, so the sizing tree and the final tree have identical shapes.
+	zero := make([]byte, pageStoreDescSize)
+	sizing := make([]nsEntry, len(keys))
+	for i, k := range keys {
+		sizing[i] = nsEntry{key: k, desc: zero}
+	}
+	sizingImage, err := nsBulkLoad(sizing, pageStoreDescSize, pageStoreFlags)
+	if err != nil {
+		// Unreachable: `keys` is sorted and deduplicated by construction and
+		// every descriptor is `pageStoreDescSize` bytes. Reaching it means this
+		// function is wrong, and writing a namespace no reader can traverse is
+		// worse than failing loudly at derivation time.
+		panic(fmt.Sprintf("wasmsnapshot: sizing the wcppages.ns namespace: %v", err))
+	}
+	// The page-alignment padding goes between the page image and the payload,
+	// so the payload ends flush with the end of the stream; see the header
+	// comment for why that placement is load-bearing.
+	payloadBytes := 0
+	for _, chain := range byKey {
+		for _, h := range chain {
+			payloadBytes += pageRecordHeaderSize + len(c.pages[h])
+		}
+	}
+	pad := (nsPageSize - payloadBytes%nsPageSize) % nsPageSize
+	payloadBase := uint64(len(sizingImage) + pad)
+
+	payload := make([]byte, 0, payloadBytes)
+	final := make([]nsEntry, len(keys))
+	for i, k := range keys {
+		start := payloadBase + uint64(len(payload))
+		for _, h := range byKey[k] {
+			payload = appendPageRecord(payload, h, c.pages[h])
+		}
+		desc := make([]byte, pageStoreDescSize)
+		binary.LittleEndian.PutUint64(desc[0:], start)
+		binary.LittleEndian.PutUint64(desc[8:], payloadBase+uint64(len(payload))-start)
+		final[i] = nsEntry{key: k, desc: desc}
+	}
+	image, err := nsBulkLoad(final, pageStoreDescSize, pageStoreFlags)
+	if err != nil {
+		panic(fmt.Sprintf("wasmsnapshot: building the wcppages.ns namespace: %v", err))
+	}
+	if uint64(len(image)+pad) != payloadBase || len(payload) != payloadBytes {
+		panic(fmt.Sprintf(
+			"wasmsnapshot: the wcppages.ns sizing pass predicted a %d-byte payload at "+
+				"offset %d but the final pass produced %d bytes at %d; the descriptors "+
+				"would point at the wrong offsets",
+			payloadBytes, payloadBase, len(payload), len(image)+pad))
+	}
+
+	writePageStoreSidecar(image, len(keys))
+	image = append(image, make([]byte, pad)...)
+	return append(image, payload...)
+}
+
+// appendPageRecord appends one CAS spec §5.4 `NamespaceEntry`.
+func appendPageRecord(dst []byte, h xxh3.Uint128, page []byte) []byte {
+	hb := h.Bytes()
+	dst = append(dst, hb[:]...)
+	var sizes [8]byte
+	binary.LittleEndian.PutUint32(sizes[0:], uint32(len(page)))
+	binary.LittleEndian.PutUint32(sizes[4:], 0) // reserved
+	dst = append(dst, sizes[:]...)
+	return append(dst, page...)
+}
+
+// writePageStoreSidecar stamps the stream-version record into page 0's unused
+// tail. See the comment on `pageStoreSidecarMagic` for why it lives there.
+func writePageStoreSidecar(image []byte, keyCount int) {
+	s := image[pageStoreSidecarOffset:]
+	copy(s, pageStoreSidecarMagic[:])
+	binary.LittleEndian.PutUint16(s[4:], SnapshotFormatVersion)
+	binary.LittleEndian.PutUint16(s[6:], 0)
+	binary.LittleEndian.PutUint32(s[8:], PageSize)
+	binary.LittleEndian.PutUint32(s[12:], uint32(keyCount))
+}
+
+// decodePageStore is the inverse of encodePageStore. Every page's bytes are
 // re-hashed: a page store that has been corrupted must fail here, not deliver
-// wrong content into a replayed memory.
+// wrong content into a replay.
 func decodePageStore(raw []byte) (*PerTraceCache, error) {
+	return decodePageStoreKeyed(raw, truncatedKey)
+}
+
+// decodePageStoreKeyed is `decodePageStore` with the §5.4 truncation injected;
+// see `encodePageStoreKeyed`.
+func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTraceCache, error) {
 	c := NewPerTraceCache()
+	// An absent stream is an empty tier, not a broken one.
 	if len(raw) == 0 {
 		return c, nil
 	}
-	if len(raw) < pageStoreHeaderSize {
-		return nil, fmt.Errorf("wasmsnapshot: wcppages.ns is %d bytes, too short for its header", len(raw))
-	}
-	if [4]byte(raw[0:4]) != pageStoreMagic {
+	if len(raw) < nsPageSize {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns does not carry the %q magic", string(pageStoreMagic[:]))
+			"wasmsnapshot: wcppages.ns is %d bytes, too short for its %d-byte "+
+				"NSB1 header page", len(raw), nsPageSize)
 	}
-	if v := binary.LittleEndian.Uint16(raw[4:]); v != SnapshotFormatVersion {
-		return nil, &UnsupportedVersionError{Stream: "wcppages.ns", Version: v}
+	// The magic is checked first so a stream that is not a namespace at all
+	// says exactly that; the version gate then runs before any structural
+	// interpretation, so a stream this build does not understand degrades to
+	// "seeking unavailable" instead of being reported as corrupt.
+	if [4]byte(raw[0:4]) != nsMagic {
+		return nil, fmt.Errorf(
+			"wasmsnapshot: wcppages.ns does not carry the %q magic", string(nsMagic[:]))
 	}
-	if ps := binary.LittleEndian.Uint32(raw[8:]); ps != PageSize {
+	s := raw[pageStoreSidecarOffset : pageStoreSidecarOffset+pageStoreSidecarSize]
+	if [4]byte(s[0:4]) != pageStoreSidecarMagic {
+		return nil, fmt.Errorf(
+			"wasmsnapshot: wcppages.ns is an NSB1 namespace but carries no %q version "+
+				"record; this build cannot tell which revision of the CAS entry "+
+				"encoding its payloads use", string(pageStoreSidecarMagic[:]))
+	}
+	if v := binary.LittleEndian.Uint16(s[4:]); v != SnapshotFormatVersion {
+		return nil, &UnsupportedVersionError{Stream: NamespacePages, Version: v}
+	}
+	if ps := binary.LittleEndian.Uint32(s[8:]); ps != PageSize {
 		return nil, fmt.Errorf(
 			"wasmsnapshot: wcppages.ns uses a %d-byte page; this build addresses %d-byte pages",
 			ps, PageSize)
 	}
-	n := int(binary.LittleEndian.Uint32(raw[12:]))
-	if pageStoreHeaderSize+n*pageStoreEntrySize > len(raw) {
-		return nil, fmt.Errorf("wasmsnapshot: wcppages.ns declares %d entries but is truncated", n)
+	wantKeys := int(binary.LittleEndian.Uint32(s[12:]))
+
+	if flags := raw[nsOffFlags]; flags&nsFlagLeafTypeB == 0 {
+		return nil, fmt.Errorf(
+			"wasmsnapshot: wcppages.ns declares namespace flags %#02x, i.e. Leaf Type A "+
+				"(8-byte descriptors); the page store is written as Leaf Type B", flags)
 	}
-	for i := 0; i < n; i++ {
-		off := pageStoreHeaderSize + i*pageStoreEntrySize
-		var hb [16]byte
-		copy(hb[:], raw[off+8:off+24])
-		h := xxh3.Uint128FromBytes(hb)
-		size := int(binary.LittleEndian.Uint32(raw[off+24:]))
-		start := binary.LittleEndian.Uint64(raw[off+32:])
-		end := start + uint64(size)
-		if end > uint64(len(raw)) {
-			return nil, fmt.Errorf("wasmsnapshot: wcppages.ns entry %d points past the end of the stream", i)
-		}
-		page := raw[start:end]
-		if HashPage(page) != h {
+
+	entries, err := nsCollect(raw, pageStoreDescSize)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) != wantKeys {
+		return nil, fmt.Errorf(
+			"wasmsnapshot: wcppages.ns declares %d namespace key(s) but its B-tree "+
+				"holds %d", wantKeys, len(entries))
+	}
+
+	for _, e := range entries {
+		start := binary.LittleEndian.Uint64(e.desc[0:])
+		length := binary.LittleEndian.Uint64(e.desc[8:])
+		end := start + length
+		if end < start || end > uint64(len(raw)) {
 			return nil, fmt.Errorf(
-				"wasmsnapshot: wcppages.ns entry %d does not hash to its own key; the "+
-					"page store is corrupt and would deliver wrong bytes into a replay", i)
+				"wasmsnapshot: wcppages.ns entry %#x points at bytes [%d,%d) but the "+
+					"stream is %d bytes", e.key, start, end, len(raw))
 		}
-		if err := c.Insert(h, page); err != nil {
-			return nil, err
+		chain := raw[start:end]
+		// Walk the chain of §5.4 NamespaceEntry records under this key. One
+		// record is the universal case; more than one means a truncated-key
+		// collision.
+		n := 0
+		for len(chain) > 0 {
+			if len(chain) < pageRecordHeaderSize {
+				return nil, fmt.Errorf(
+					"wasmsnapshot: wcppages.ns entry %#x has %d trailing byte(s), too "+
+						"few for a %d-byte CAS entry header", e.key, len(chain),
+					pageRecordHeaderSize)
+			}
+			var hb [16]byte
+			copy(hb[:], chain[0:16])
+			h := xxh3.Uint128FromBytes(hb)
+			size := int(binary.LittleEndian.Uint32(chain[16:]))
+			if size != PageSize {
+				return nil, fmt.Errorf(
+					"wasmsnapshot: wcppages.ns entry %#x record %d declares a %d-byte "+
+						"page; this build addresses %d-byte pages", e.key, n, size, PageSize)
+			}
+			if len(chain)-pageRecordHeaderSize < size {
+				return nil, fmt.Errorf(
+					"wasmsnapshot: wcppages.ns entry %#x record %d wants %d byte(s) of "+
+						"page content but only %d remain", e.key, n, size,
+					len(chain)-pageRecordHeaderSize)
+			}
+			page := chain[pageRecordHeaderSize : pageRecordHeaderSize+size]
+			if HashPage(page) != h {
+				return nil, fmt.Errorf(
+					"wasmsnapshot: wcppages.ns entry %d does not hash to its own key; the "+
+						"page store is corrupt and would deliver wrong bytes into a replay", n)
+			}
+			// The full hash and the namespace key must agree, or a lookup by
+			// key could never reach this page. This is §5.4's structural guard
+			// read from the writer's side.
+			if keyOf(h) != e.key {
+				return nil, fmt.Errorf(
+					"wasmsnapshot: wcppages.ns entry %#x record %d carries a full hash "+
+						"whose namespace key is %#x; the page is filed under a key no "+
+						"lookup would reach", e.key, n, keyOf(h))
+			}
+			if err := c.Insert(h, page); err != nil {
+				return nil, err
+			}
+			chain = chain[pageRecordHeaderSize+size:]
+			n++
+		}
+		if n == 0 {
+			return nil, fmt.Errorf(
+				"wasmsnapshot: wcppages.ns entry %#x has an empty payload; a namespace "+
+					"key with no CAS entry under it cannot be resolved", e.key)
 		}
 	}
 	return c, nil

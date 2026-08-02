@@ -50,3 +50,12 @@ zig-out/
 /internal/integration_test/stdlibs/testdata
 /internal/integration_test/libsodium/testdata
 /wazero-snapshots
+
+# The recorder-golden wasm fixtures are compiled from the .rs beside
+# them, by the test run that uses them (see
+# cmd/wazero/recorder_golden_fixtures_test.go) and by
+# examples/recorder-golden/build.sh.  They are build output: checking
+# them in made 3.7 MB of binary whose correspondence to its 5 KB of
+# source nobody could verify.
+/cmd/wazero/testdata/recorder-golden/build/
+/examples/recorder-golden/*.wasm

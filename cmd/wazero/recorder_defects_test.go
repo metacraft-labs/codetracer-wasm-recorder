@@ -56,31 +56,28 @@ import (
 // The check is deliberately phrased over the *trace*, not over the
 // recorder's internals, because "a step the user cannot navigate to" is
 // a property of the artefact and any future encoding change has to keep
-// it true.  Every fixture whose Rust source is checked in beside its
-// `.wasm` is covered, plus the boundary-log demo, whose materialised
-// trace is where the defect was first observed.
+// it true.  Every recorder-golden fixture is covered — each compiled
+// from its checked-in `.rs` by the run itself, so the source the line
+// bounds are taken from is by construction the source the DWARF
+// describes — plus the boundary-log demo, whose materialised trace is
+// where the defect was first observed.
 func TestVerifyNoStepLandsOutsideItsSourceFile(t *testing.T) {
 	requireCtPrint(t)
 
 	type fixture struct {
 		name   string
-		wasm   []byte
 		source string // path to the .rs the trace's path_id must name
 	}
 	fixtures := []fixture{
-		{"control_flow", wasmRecorderGoldenControlFlow,
-			"testdata/recorder-golden/control_flow.rs"},
-		{"nested_calls", wasmRecorderGoldenNestedCalls,
-			"testdata/recorder-golden/nested_calls.rs"},
-		{"collections", wasmRecorderGoldenCollections,
-			"testdata/recorder-golden/collections.rs"},
-		{"column_aware", wasmRecorderGoldenColumnAware,
-			"testdata/recorder-golden/column_aware.rs"},
+		{"control_flow", "testdata/recorder-golden/control_flow.rs"},
+		{"nested_calls", "testdata/recorder-golden/nested_calls.rs"},
+		{"collections", "testdata/recorder-golden/collections.rs"},
+		{"column_aware", "testdata/recorder-golden/column_aware.rs"},
 	}
 
 	for _, f := range fixtures {
 		t.Run(f.name, func(t *testing.T) {
-			doc, _ := recordAndDumpFull(t, f.wasm, f.name)
+			doc, _ := recordAndDumpFull(t, f.name)
 			requireEveryStepInsideItsFile(t, doc, map[string]int{
 				filepath.Base(f.source): sourceLineCount(t, f.source),
 			})
@@ -94,7 +91,8 @@ func TestVerifyNoStepLandsOutsideItsSourceFile(t *testing.T) {
 	t.Run("panic_path", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		wasmPath := filepath.Join(tmpDir, "panic_path.wasm")
-		require.NoError(t, os.WriteFile(wasmPath, wasmRecorderGoldenPanicPath, 0o700))
+		noteGoldenToolchain(t)
+		require.NoError(t, os.WriteFile(wasmPath, goldenFixture(t, "panic_path"), 0o700))
 		outDir := filepath.Join(tmpDir, "traces")
 		runMain(t, "", []string{"run", "--out-dir=" + outDir, wasmPath})
 		doc := dumpFull(t, outDir)

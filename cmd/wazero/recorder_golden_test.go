@@ -18,11 +18,13 @@
 //     surface.
 //
 // Each test program lives at `testdata/recorder-golden/*.rs` and is
-// pre-built to `*.wasm` (debug build, DWARF preserved).  See
-// `testdata/recorder-golden/build.sh` for the toolchain invocation.
-// The .wasm files are checked in per the wasm-tracing branch
-// convention so the Go test suite does not depend on a working
-// rustc/wasm32-wasip1 toolchain.
+// compiled to wasm (debug build, DWARF preserved) by the test run
+// itself — see `recorder_golden_fixtures_test.go`, which owns the
+// toolchain invocation and the once-per-binary build cache.  The
+// `.wasm` are deliberately NOT checked in: a pre-built binary beside
+// its source is an unverifiable claim that the two match, and this
+// repo's dev shell now pins the `wasm32-wasip1` toolchain that
+// settles it.
 //
 // Recorder bugs uncovered by writing these tests are documented as
 // `// RECORDER BUG: ...` comments + `t.Skip(...)` calls per the
@@ -30,7 +32,6 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -40,25 +41,6 @@ import (
 
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
-
-// ---------------------------------------------------------------------------
-// Embedded fixtures
-// ---------------------------------------------------------------------------
-
-//go:embed testdata/recorder-golden/control_flow.wasm
-var wasmRecorderGoldenControlFlow []byte
-
-//go:embed testdata/recorder-golden/nested_calls.wasm
-var wasmRecorderGoldenNestedCalls []byte
-
-//go:embed testdata/recorder-golden/collections.wasm
-var wasmRecorderGoldenCollections []byte
-
-//go:embed testdata/recorder-golden/panic_path.wasm
-var wasmRecorderGoldenPanicPath []byte
-
-//go:embed testdata/recorder-golden/column_aware.wasm
-var wasmRecorderGoldenColumnAware []byte
 
 // ---------------------------------------------------------------------------
 // Decoded `ct-print --full` schema (subset used by the assertions)
@@ -192,8 +174,9 @@ type goldenValue struct {
 // Recording / decoding helpers
 // ---------------------------------------------------------------------------
 
-// recordAndDumpFull runs the wazero binary's record path against a
-// pre-built wasm fixture, then pipes the resulting `.ct` container
+// recordAndDumpFull compiles the named fixture (once per test binary;
+// see `recorder_golden_fixtures_test.go`), runs the wazero binary's
+// record path against it, then pipes the resulting `.ct` container
 // through `ct-print --full --strip-paths`.  Returns the decoded
 // document plus the absolute path of the wasm fixture (for path /
 // metadata assertions).
@@ -201,9 +184,10 @@ type goldenValue struct {
 // The function calls `t.Skip` (with a clear `SKIP:` diagnostic, per
 // `verify-cli-convention-no-silent-skip.sh`) when `ct-print` is
 // missing — the only audit-approved skip condition for golden tests.
-// Every other failure mode fails loudly so a regression in the
-// recorder, the writer, or `ct-print` itself surfaces immediately.
-func recordAndDumpFull(t *testing.T, fixture []byte, basename string) (*goldenDoc, string) {
+// A missing Rust toolchain is NOT such a condition: it fails.  Every
+// other failure mode fails loudly so a regression in the recorder,
+// the writer, or `ct-print` itself surfaces immediately.
+func recordAndDumpFull(t *testing.T, basename string) (*goldenDoc, string) {
 	t.Helper()
 
 	ctPrint := ctPrintPath(t)
@@ -212,6 +196,9 @@ func recordAndDumpFull(t *testing.T, fixture []byte, basename string) (*goldenDo
 			"metacraft workspace where codetracer-trace-format-nim is a sibling.",
 			ctPrint)
 	}
+
+	noteGoldenToolchain(t)
+	fixture := goldenFixture(t, basename)
 
 	tmpDir := t.TempDir()
 	wasmPath := filepath.Join(tmpDir, basename+".wasm")
@@ -565,7 +552,7 @@ func fmtIntPad(n, width int) string {
 // shape so a regression that fixes the filter (or breaks it
 // further) lights up immediately.
 func TestRecorderGoldenControlFlow(t *testing.T) {
-	doc, wasmPath := recordAndDumpFull(t, wasmRecorderGoldenControlFlow, "control_flow")
+	doc, wasmPath := recordAndDumpFull(t, "control_flow")
 
 	// ----- metadata.program ----------------------------------------------
 	require.True(t, strings.HasSuffix(doc.Metadata.Program, "control_flow.wasm"),
@@ -1223,7 +1210,7 @@ func controlFlowExpectedVars() []expectVarStep {
 // asserts on the call/return ordering for a 3-deep chain plus a
 // recursive factorial.
 func TestRecorderGoldenNestedCalls(t *testing.T) {
-	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenNestedCalls, "nested_calls")
+	doc, _ := recordAndDumpFull(t, "nested_calls")
 
 	require.True(t, strings.HasSuffix(doc.Metadata.Program, "nested_calls.wasm"),
 		"metadata.program; got %q", doc.Metadata.Program)
@@ -1419,7 +1406,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 // container variants, this table must be updated alongside the
 // recorder change.
 func TestRecorderGoldenCollections(t *testing.T) {
-	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenCollections, "collections")
+	doc, _ := recordAndDumpFull(t, "collections")
 
 	require.True(t, strings.HasSuffix(doc.Metadata.Program, "collections.wasm"),
 		"metadata.program; got %q", doc.Metadata.Program)
@@ -1680,9 +1667,11 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 			ctPrint)
 	}
 
+	noteGoldenToolchain(t)
+
 	tmpDir := t.TempDir()
 	wasmPath := filepath.Join(tmpDir, "panic_path.wasm")
-	require.NoError(t, os.WriteFile(wasmPath, wasmRecorderGoldenPanicPath, 0o700))
+	require.NoError(t, os.WriteFile(wasmPath, goldenFixture(t, "panic_path"), 0o700))
 
 	outDir := filepath.Join(tmpDir, "traces")
 	exitCode, _, _ := runMain(t, "",
@@ -1821,7 +1810,7 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 // `tests/test_column_aware.rs` "multiple statements on one line each
 // record distinct columns" fixtures.
 func TestRecorderColumnAwareSteps(t *testing.T) {
-	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
+	doc, _ := recordAndDumpFull(t, "column_aware")
 
 	// ----- meta.dat bit 4: FLAG_HAS_COLUMN_AWARE_STEPS ------------------
 	require.True(t, doc.Metadata.Flags.get(t, "has_column_aware_steps"),
@@ -1892,7 +1881,7 @@ func TestRecorderColumnAwareSteps(t *testing.T) {
 // source line into N distinct steps — is only observable on a fixture
 // authored to put N>1 statements on one line.
 func TestRecorderColumnAwareMultipleStatementsPerLine(t *testing.T) {
-	doc, _ := recordAndDumpFull(t, wasmRecorderGoldenColumnAware, "column_aware")
+	doc, _ := recordAndDumpFull(t, "column_aware")
 
 	require.True(t, doc.Metadata.Flags.get(t, "has_column_aware_steps"),
 		"trace metadata must advertise has_column_aware_steps=true; got %+v",
@@ -1942,29 +1931,32 @@ func TestRecorderColumnAwareMultipleStatementsPerLine(t *testing.T) {
 // Test-runner sanity (parallel of the existing testdata fixtures)
 // ===========================================================================
 
-// TestRecorderGoldenFixturesEmbedded asserts every fixture is
-// present and non-empty — a guard against a `go:embed` directive
-// going stale (e.g. someone deletes a `.wasm` from the repo without
-// updating the embed directives).
-func TestRecorderGoldenFixturesEmbedded(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		blob []byte
-	}{
-		{"control_flow.wasm", wasmRecorderGoldenControlFlow},
-		{"nested_calls.wasm", wasmRecorderGoldenNestedCalls},
-		{"collections.wasm", wasmRecorderGoldenCollections},
-		{"panic_path.wasm", wasmRecorderGoldenPanicPath},
-		{"column_aware.wasm", wasmRecorderGoldenColumnAware},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.True(t, len(tc.blob) > 0,
-				"fixture %s must be embedded and non-empty", tc.name)
-			// WASM magic: "\0asm".
-			require.True(t, len(tc.blob) >= 4 &&
-				tc.blob[0] == 0x00 && tc.blob[1] == 'a' &&
-				tc.blob[2] == 's' && tc.blob[3] == 'm',
-				"fixture %s lacks the WASM magic header", tc.name)
+// TestRecorderGoldenFixturesBuild asserts every fixture compiles and
+// is a real wasm module — the same presence/non-emptiness/magic guard
+// that used to protect the `go:embed` directives, now protecting the
+// build instead.  It is also the shortest way to reproduce the
+// fixtures by hand:
+//
+//	go test -run TestRecorderGoldenFixturesBuild ./cmd/wazero/
+//
+// Every `.rs` in the source directory must appear in
+// goldenFixtureNames, so a fixture added to the tree without being
+// wired up here cannot go unnoticed.
+func TestRecorderGoldenFixturesBuild(t *testing.T) {
+	sources, err := filepath.Glob(filepath.Join(goldenFixtureSrcDir, "*.rs"))
+	require.NoError(t, err)
+	require.Equal(t, len(goldenFixtureNames), len(sources),
+		"every %s/*.rs must be listed in goldenFixtureNames; found %v "+
+			"on disk against %v listed", goldenFixtureSrcDir, sources,
+		goldenFixtureNames)
+
+	for _, name := range goldenFixtureNames {
+		t.Run(name+".wasm", func(t *testing.T) {
+			// goldenFixture already fails on a missing toolchain, an
+			// unreadable output or a bad magic header, and returns the
+			// compiled bytes only when all three hold.
+			require.True(t, len(goldenFixture(t, name)) > 0,
+				"fixture %s must build to a non-empty module", name)
 		})
 	}
 }

@@ -19,10 +19,21 @@ and panics.
 - The **wasm recorder built** — `just build` from the repo root, or any
   `nix build` invocation that produces a recording-capable wazero
   binary (see the top-level [README](../README.md#building)).
-- For rebuilding the Rust sources in `recorder-golden/` from scratch:
-  a `rustc` with the `wasm32-wasip1` target installed. Compile with
-  full DWARF debug info preserved, otherwise the recorder has nothing
-  to map PC offsets back to:
+- **The `.wasm` built.** `recorder-golden/` ships Rust sources, not
+  binaries — a checked-in `.wasm` is an unverifiable claim that it
+  still matches the `.rs` beside it. Build them first:
+
+  ```bash
+  bash examples/recorder-golden/build.sh
+  ```
+
+  This needs a `rustc` with the `wasm32-wasip1` target. The repo's Nix
+  dev shell pins one, so inside `direnv exec . bash` (or `nix develop`)
+  it just works; outside Nix, `rustup target add wasm32-wasip1` first.
+
+  The script compiles each fixture with full DWARF debug info
+  preserved — that part is load-bearing, not a preference, because
+  without it the recorder has no line table to map PC offsets back to:
 
   ```bash
   rustc -g -C debuginfo=2 -C opt-level=0 \
@@ -31,8 +42,8 @@ and panics.
         -o column_aware.wasm column_aware.rs
   ```
 
-  `recorder-golden/build.sh` automates this for every fixture; install
-  the target via `rustup target add wasm32-wasip1` first.
+  The Go test suite does not use these copies; it compiles its own from
+  `cmd/wazero/testdata/recorder-golden/*.rs` as it runs.
 
 ## Two-step workflow: record, then replay
 

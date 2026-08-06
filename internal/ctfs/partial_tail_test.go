@@ -4,7 +4,9 @@ package ctfs
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -277,5 +279,249 @@ func TestACleanContainerReportsNoPartialTail(t *testing.T) {
 	}
 	if got := c.PartialTailBytes(); got != 0 {
 		t.Fatalf("a cleanly sealed container reports %d partial-tail bytes", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The cross-implementation half (M58).
+//
+// M57 made this reader accept a partial tail and left the *adjudicating* Nim
+// reader — `codetracer-trace-format-nim/tests/check_ctfs_container.nim`, which
+// `ffi_crossread_test.go` shells out to — still refusing it before reading
+// anything. So the two disagreed about the same file, one repo over from the
+// disagreement M57 closed. M58 made the checker accept, with the matching
+// bound in `readInternalFile`.
+//
+// A round trip inside one implementation proves nothing about that, so these
+// two tests hand the SAME bytes to both readers and compare the answers:
+// a partial-tail container must be read byte-exact by both, and a truncated
+// one must cost both readers exactly the stream that was lost and no other.
+//
+// Same skip discipline as `TestTheProductionNimReaderReadsAnFfiWrittenContainer`:
+// a cross-read can only run where both checkouts and both toolchains are
+// present, and it says out loud when it does not run. **Never make a failure
+// go away by arranging for the skip.**
+
+// nimChecker locates the sibling checkout and the direnv that supplies its
+// toolchain, skipping (loudly) when either is absent.
+func nimChecker(t *testing.T) (repo string, direnv string, home string) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo = filepath.Join(filepath.Dir(filepath.Dir(wd)), "..", "codetracer-trace-format-nim")
+	checker := filepath.Join(repo, "tests", "check_ctfs_container.nim")
+	if _, err := os.Stat(checker); err != nil {
+		t.Skipf("SKIP: the sibling codetracer-trace-format-nim checkout has no %s "+
+			"(looked in %s), so the cross-implementation half of the partial-tail "+
+			"agreement did not run. This package's own reader was still exercised.",
+			filepath.Base(checker), repo)
+	}
+	home, err = os.UserHomeDir()
+	if err != nil {
+		t.Skipf("SKIP: no home directory, so direnv cannot be run: %v", err)
+	}
+	if p := filepath.Join(home, ".nix-profile", "bin", "direnv"); fileExists(p) {
+		direnv = p
+	} else if p, err := exec.LookPath("direnv"); err == nil {
+		direnv = p
+	} else {
+		t.Skip("SKIP: direnv is not available, and the sibling repo's Nim toolchain " +
+			"is supplied by its own nix dev shell rather than by this one, so the " +
+			"production Nim reader cannot be built.")
+	}
+	return repo, direnv, home
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// runNimChecker drives the production Nim reader over `container` with a
+// manifest built from `present` (name -> exact expected bytes) and `absent`.
+// It returns the checker's combined output and whether it exited 0.
+func runNimChecker(t *testing.T, container string, present map[string][]byte, absent []string) (string, bool) {
+	t.Helper()
+	repo, direnv, home := nimChecker(t)
+
+	tmp := t.TempDir()
+	var manifest strings.Builder
+	for name, body := range present {
+		expectPath := filepath.Join(tmp, "expect-"+strings.ReplaceAll(name, "/", "_"))
+		if err := os.WriteFile(expectPath, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&manifest, "%s %s\n", name, expectPath)
+	}
+	for _, a := range absent {
+		fmt.Fprintf(&manifest, "!%s\n", a)
+	}
+	manifestPath := filepath.Join(tmp, "manifest.txt")
+	if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// `env -i` is deliberate: this repo's dev shell is on the environment and
+	// the sibling repo's is not, and letting the two mix is how a cross-read
+	// ends up proving something about the wrong toolchain.
+	args := []string{
+		"-i", "HOME=" + home, "PATH=/run/current-system/sw/bin:/usr/bin:/bin",
+		direnv, "exec", repo,
+		"nim", "c", "-r", "-d:release", "-p:src", "--hints:off",
+		"--nimcache:" + filepath.Join(tmp, "nimcache"),
+		"-o:" + filepath.Join(tmp, "check_ctfs_container"),
+		"tests/check_ctfs_container.nim", container, manifestPath,
+	}
+	cmd := exec.Command("env", args...)
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	t.Logf("env %s\n%s", strings.Join(args, " "), out)
+	if err != nil && !bytes.Contains(out, []byte("check_ctfs_container:")) {
+		t.Skipf("SKIP: could not run the sibling repo's Nim toolchain (%v), so the "+
+			"cross-implementation half did not run.\n%s", err, out)
+	}
+	return string(out), err == nil
+}
+
+// TestBothReadersAgreeAboutAPartialTail: the disagreement M58 closes. Before
+// it, the checker exited 1 with "not a whole number of 4096-byte blocks" on a
+// file this package's `Open` accepts.
+func TestBothReadersAgreeAboutAPartialTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "torn.ct")
+	if err := ctfsffi.Create(path, 4096); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Two streams, one of them past the level-1/level-2 mapping threshold, so
+	// the agreement covers the multi-level walk and not just a flat file.
+	want := map[string][]byte{
+		"meta.dat":     deterministicBytes(77, 9000),
+		"snapshot.mem": deterministicBytes(78, 4096*600),
+	}
+	if err := ctfsffi.Append(path, want); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	sealed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sealed)%4096 != 0 {
+		t.Fatalf("the sealed container is %d bytes, not a block multiple", len(sealed))
+	}
+	// A tail write that died part-way: a whole block plus a fragment.
+	if err := os.WriteFile(path, append(sealed, deterministicBytes(79, 4096+777)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// This package's reader.
+	c, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open refused a container with a partial tail: %v", err)
+	}
+	if got := c.PartialTailBytes(); got != 777 {
+		t.Fatalf("expected 777 bytes outside the last whole block, got %d", got)
+	}
+	for name, expect := range want {
+		got, err := c.ReadFile(name)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", name, err)
+		}
+		if !bytes.Equal(got, expect) {
+			t.Fatalf("%q differs at byte %d", name, commonPrefix(got, expect))
+		}
+	}
+
+	// The adjudicating Nim reader, on the same file, asserting the same bytes.
+	out, ok := runNimChecker(t, path, want, []string{"nothere.dat", "absent.ns"})
+	if !ok {
+		t.Fatalf("the production Nim reader refused a partial-tail container this "+
+			"package accepts — the two implementations disagree about the same "+
+			"bytes, which is what M58 exists to close:\n%s", out)
+	}
+	if !strings.Contains(out, "check_ctfs_container: OK") {
+		t.Fatalf("the Nim checker exited 0 without reporting a pass:\n%s", out)
+	}
+	// And it must say it saw the partial tail, or it could be passing against a
+	// file the fixture failed to damage.
+	if !strings.Contains(out, "777-byte partial tail") {
+		t.Errorf("the Nim checker did not report the 777-byte partial tail, so it "+
+			"may not have adjudicated the damaged file at all:\n%s", out)
+	}
+}
+
+// TestBothReadersLoseTheSameStreamOnATruncatedContainer is the other half, and
+// the one that keeps "accept the partial tail" from becoming "accept anything".
+// A truncated container has the same shape as a partial tail and cannot be told
+// apart from the bytes; both readers must refuse the stream whose blocks are
+// gone and keep the surviving one byte-exact.
+func TestBothReadersLoseTheSameStreamOnATruncatedContainer(t *testing.T) {
+	const bs = 4096
+	path := filepath.Join(t.TempDir(), "cut.ct")
+	if err := ctfsffi.Create(path, bs); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	survivor := deterministicBytes(11, 9000)
+	// A size whose last data block carries only 100 bytes, so the clamped read
+	// is short enough to be satisfiable out of a partial block.
+	const tailBytes = 100
+	lost := deterministicBytes(12, 3*bs+tailBytes)
+	if err := ctfsffi.Append(path, map[string][]byte{"meta.dat": survivor}); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	// A second, sealed append so `z.dat`'s blocks sit at the very end and the
+	// cut below cannot also damage `meta.dat`.
+	if err := ctfsffi.Append(path, map[string][]byte{"z.dat": lost}); err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+
+	full, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := len(full) - bs + tailBytes
+	if err := os.WriteFile(path, full[:cut], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// This package's reader: `meta.dat` byte-exact, `z.dat` an error.
+	c, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open refused the truncated container: %v", err)
+	}
+	got, err := c.ReadFile("meta.dat")
+	if err != nil {
+		t.Fatalf("the surviving stream became unreadable: %v", err)
+	}
+	if !bytes.Equal(got, survivor) {
+		t.Fatalf("the surviving stream came back changed at byte %d", commonPrefix(got, survivor))
+	}
+	if body, err := c.ReadFile("z.dat"); err == nil {
+		t.Fatalf("ReadFile returned %d bytes with no error for a stream whose "+
+			"blocks lie outside the container's whole blocks", len(body))
+	}
+
+	// The Nim reader must lose exactly the same stream…
+	out, ok := runNimChecker(t, path,
+		map[string][]byte{"meta.dat": survivor, "z.dat": lost},
+		[]string{"nothere.dat"})
+	if ok {
+		t.Fatalf("the Nim checker read z.dat back byte-exact from a container "+
+			"whose blocks for it are gone; the partial region was served as "+
+			"content:\n%s", out)
+	}
+	if !strings.Contains(out, "out of bounds") || !strings.Contains(out, "truncated") {
+		t.Errorf("the Nim reader's refusal does not name the truncation:\n%s", out)
+	}
+	if !strings.Contains(out, "z.dat") {
+		t.Errorf("the Nim reader did not name z.dat as the lost stream:\n%s", out)
+	}
+
+	// …and no other. Asked only about the survivor, it must pass.
+	out2, ok2 := runNimChecker(t, path,
+		map[string][]byte{"meta.dat": survivor}, []string{"nothere.dat"})
+	if !ok2 {
+		t.Fatalf("a truncation that lost z.dat also cost the Nim reader meta.dat, "+
+			"which this package still reads byte-exact:\n%s", out2)
 	}
 }

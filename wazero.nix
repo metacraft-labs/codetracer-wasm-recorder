@@ -34,7 +34,7 @@ pkgs.buildGoModule rec {
   ];
 
   # Point cgo at the Nim FFI's include and lib directories.  The Nim
-  # `buildLib` task drops `libcodetracer_trace_writer.a` next to the source
+  # `buildStaticLib` task drops `libcodetracer_trace_writer.a` next to the source
   # tree, so the upstream package should expose `${out}/lib` and
   # `${out}/include` mirroring those locations.
   preBuild = pkgs.lib.optionalString (codetracer-trace-format-nim != null) ''

@@ -418,7 +418,7 @@ convention compliance pass:
   exact-value assertions now run unconditionally.
 - The `nix develop` shell hook `scripts/detect-trace-format.sh` was
   rewritten to find the `codetracer-trace-format-nim` sibling, build
-  `libcodetracer_trace_writer.a` via `nimble buildLib` if missing, and
+  `libcodetracer_trace_writer.a` via `nimble buildStaticLib` if missing, and
   export `CGO_CFLAGS` / `CGO_LDFLAGS` plus `LD_LIBRARY_PATH` for both
   the Nim FFI and `libzstd`.  `wazero.nix` accepts a
   `codetracer-trace-format-nim` derivation (replacing the previous

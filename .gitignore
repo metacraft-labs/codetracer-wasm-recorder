@@ -59,3 +59,10 @@ zig-out/
 # source nobody could verify.
 /cmd/wazero/testdata/recorder-golden/build/
 /examples/recorder-golden/*.wasm
+
+# The rust_test fixture is compiled from test_code/rust_test.rs by the
+# test run that uses it (see cmd/wazero/rust_fixture_test.go), for the
+# same reason: the committed 1.8 MB binary had been built by a rustc
+# that exists on no machine here, and carried the building
+# contributor's home directory in its DWARF.
+/cmd/wazero/testdata/build/

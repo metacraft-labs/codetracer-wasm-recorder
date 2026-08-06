@@ -115,7 +115,21 @@ type Container struct {
 	// number of blocks.
 	nextFreeBlock uint64
 	fileSize      uint64
+	// partialTailBytes is the length modulo the block size: 0 for a cleanly
+	// sealed container, and non-zero for one whose last append died inside
+	// its tail write. Those bytes are unreferenced and are ignored on every
+	// read; see the long comment in Open.
+	partialTailBytes uint64
 }
+
+// PartialTailBytes reports how many trailing bytes fall outside the last whole
+// block — non-zero only for a container whose last append was interrupted
+// inside its tail write (`CTFS-Binary-Format.md` §5d).
+//
+// The container is fully readable either way; this exists so a caller that
+// wants to report or reclaim the waste can see it, and so tests can prove they
+// actually exercised the partial-tail case rather than a clean container.
+func (c *Container) PartialTailBytes() uint64 { return c.partialTailBytes }
 
 // Open reads a container's structure. The file is not held open.
 func Open(path string) (*Container, error) {
@@ -161,11 +175,46 @@ func Open(path string) (*Container, error) {
 	if c.blockSize == 0 || c.blockSize%8 != 0 || c.blockSize < headerSize {
 		return nil, fmt.Errorf("ctfs: %s declares an unusable block size of %d", path, c.blockSize)
 	}
-	if c.fileSize%c.blockSize != 0 {
-		return nil, fmt.Errorf(
-			"ctfs: %s is %d bytes, not a whole number of %d-byte blocks; it is "+
-				"truncated or still being written", path, c.fileSize, c.blockSize)
-	}
+	// A length that is not a whole number of blocks is what a crash *inside*
+	// an append's tail write leaves behind, and this reader accepts it.
+	//
+	// `CTFS-Binary-Format.md` §5d orders the append so that the new blocks are
+	// written and flushed first and block 0 — the only thing that makes them
+	// reachable — is rewritten last. So a file whose length is not a block
+	// multiple is one whose block 0 was never republished: it is the previous,
+	// complete container plus an unreferenced partial tail. Every entry in it
+	// points below the old end of file, and the spec's promise for that state
+	// is that it is "wasteful but perfectly readable".
+	//
+	// This used to be a hard refusal here, which made that promise false in
+	// this repo — the Nim reader read such a file correctly (it bounds every
+	// access against the actual byte count and derives no allocator state from
+	// the length) while `Open` rejected it outright. Two implementations of one
+	// format disagreeing about whether a state is valid is worse than either
+	// answer, and refusing is the answer that throws away readable data. M57
+	// made the two agree on accepting, and §5d now states it as a requirement
+	// on readers rather than leaving it an accident of the Nim implementation.
+	//
+	// Truncating rather than rounding up is what keeps that safe, but only
+	// because every one of the three paths that turns a block number into bytes
+	// refuses an index >= nextFreeBlock: `validateEntries` for an entry's
+	// mapping root, `readBlock` for the mapping blocks themselves, and
+	// `resolveDataBlock` for the data blocks. The incomplete final block is
+	// therefore unaddressable and an entry that somehow named it is rejected
+	// rather than served short.
+	//
+	// The data-block bound is not redundant with `readBlock`: `readEntry` reads
+	// content with a bare `ReadAt` and clamps the last block's slice to the
+	// entry's `Size`, so without it a short final block landing in the partial
+	// region would be read successfully and returned as content — turning a
+	// truncated file into wrong bytes rather than an error. See
+	// `TestNoDataBlockIsServedOutOfThePartialRegion`.
+	//
+	// The *append* keeps refusing this file, deliberately and per §5d: it
+	// recovers the allocator's state from the length, and a wrong
+	// `NextFreeBlock` overwrites live data. Reading and extending ask
+	// different questions of the same bytes.
+	c.partialTailBytes = c.fileSize % c.blockSize
 	c.nextFreeBlock = c.fileSize / c.blockSize
 
 	c.block0 = make([]byte, c.blockSize)
@@ -469,6 +518,28 @@ func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 	dataBlk := binary.LittleEndian.Uint64(blk[idx*8:])
 	if dataBlk == 0 {
 		return 0, fmt.Errorf("ctfs: %q has a null data block at index %d", name, blockIdx)
+	}
+	// Data blocks are bounded HERE rather than at the read, because `readEntry`
+	// reads them with a bare `ReadAt` and does not go through `readBlock`.
+	//
+	// This is what makes `Open`'s tolerance of a partial tail safe rather than
+	// merely convenient. `Open` floors `nextFreeBlock`, so the incomplete final
+	// block sits *outside* it while its bytes are still present on disk — and
+	// `readEntry` clamps the last block's slice to the entry's `Size`, so a
+	// short final read of those bytes would SUCCEED and be returned as content.
+	// Mapping blocks were never exposed to that (they go through `readBlock`,
+	// which already refuses `>= nextFreeBlock`); data blocks were, and the
+	// asymmetry is invisible until a container is actually truncated.
+	//
+	// `CTFS-Binary-Format.md` §5d states the guarantee this restores as a
+	// requirement — "the incomplete final block is then not addressable, so an
+	// entry that named it is refused rather than served short". A reader may
+	// ignore the partial tail; it may not serve it.
+	if dataBlk >= c.nextFreeBlock {
+		return 0, fmt.Errorf(
+			"ctfs: %q data block index %d points at container block %d, outside "+
+				"the container's %d whole blocks; %s is truncated",
+			name, blockIdx, dataBlk, c.nextFreeBlock, c.path)
 	}
 	return dataBlk, nil
 }

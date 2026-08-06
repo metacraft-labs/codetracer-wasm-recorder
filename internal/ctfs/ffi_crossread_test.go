@@ -341,10 +341,22 @@ func blockCountOf(t *testing.T, path string) int64 {
 }
 
 // TestAppendExtendsRatherThanRewrites: the append must only ever add blocks
-// past the end and rewrite block 0. This is what makes a crash mid-append
-// leave a readable container rather than an entry pointing at absent data,
-// and it is checked from the outside — the bytes between block 0 and the old
-// end of file must be identical afterwards.
+// past the end and rewrite block 0, checked from the outside — the bytes
+// between block 0 and the old end of file must be identical afterwards.
+//
+// This is a claim about **which** bytes change, not about **when**. It is
+// worth being precise, because the comment here used to claim the durability
+// property as well ("this is what makes a crash mid-append leave a readable
+// container") and it does not establish it: every assertion below compares two
+// quiescent snapshots, one before the call and one after it returns. Reverse
+// the two write phases in `container_append.nim` — block 0 first, tail second
+// — and the final bytes are identical, so this test still passes. That was
+// confirmed by actually applying the reversal (M57).
+//
+// The *ordering* is pinned separately, by abandoning an append between its two
+// phases: `codetracer-trace-format-nim/tests/test_container_append_ordering.nim`.
+// Spatial locality and write ordering are two properties, and each needs its
+// own test.
 func TestAppendExtendsRatherThanRewrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "extend.ct")
 	if err := ctfsffi.Create(path, crossBlockSize); err != nil {

@@ -45,16 +45,14 @@ var wasmCatTinygo []byte
 //go:embed testdata/exit_on_start_unstable.wasm
 var wasmWasiUnstable []byte
 
-// wasmRustTest is the canonical debug-built Rust fixture compiled to
-// `wasm32-wasip1` with full DWARF.  Source lives at
-// `test_code/rust_test.rs`; the program declares `add_3_and_4` (which
+// The canonical debug-built Rust fixture compiled to `wasm32-wasip1`
+// with full DWARF is no longer embedded here.  Its source lives at
+// `test_code/rust_test.rs` — the program declares `add_3_and_4` (which
 // returns 7) and `main`, plus three local let-bindings (`blq` = "abcd",
-// `x` = 3, `y` = 4) and one Sample struct.  Used by
-// `TestRecordedTraceViaCtPrintJson` to assert exact decoded values via
-// `ct-print --full --strip-paths`.
-//
-//go:embed testdata/rust_test.wasm
-var wasmRustTest []byte
+// `x` = 3, `y` = 4) and one Sample struct — and it is compiled during
+// the test run by `rustTestFixture` (see `rust_fixture_test.go`).  Used
+// by `TestRecordedTraceViaCtPrintJson` to assert exact decoded values
+// via `ct-print --full --strip-paths`.
 
 func TestMain(m *testing.M) {
 	cmd := exec.Command("go", "version")
@@ -908,9 +906,9 @@ func TestEnvDisabledSkipsRecording(t *testing.T) {
 // bundle through `ct print --full --strip-paths` from
 // codetracer-trace-format-nim and asserts on **exact decoded values**.
 //
-// The fixture is `test_code/rust_test.wasm`, which is the canonical
-// debug-built WASM shipped with the wasm recorder.  Source:
-// `test_code/rust_test.rs`.  The program is:
+// The fixture is compiled during this test run from
+// `test_code/rust_test.rs`, the canonical debug-built WASM program of
+// the wasm recorder (see `rust_fixture_test.go`).  The program is:
 //
 //	fn add_3_and_4() -> i32 {
 //	    let blq = "abcd";    // line 16
@@ -965,12 +963,12 @@ func TestRecordedTraceViaCtPrintJson(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	wasmPath := filepath.Join(tmpDir, "rust_test.wasm")
-	// `wasmRustTest` is the bundled debug-built Rust fixture from
-	// `test_code/rust_test.wasm` — it carries DWARF, which is required
-	// for the interpreter to emit source-level Step / Call / Variable
-	// events.  The upstream `wasi_arg.wasm` is hand-written WAT with no
-	// DWARF and would produce an empty trace.
-	require.NoError(t, os.WriteFile(wasmPath, wasmRustTest, 0o700))
+	// The fixture is compiled from `test_code/rust_test.rs` during this
+	// run (see `rust_fixture_test.go`) — it carries DWARF, which is
+	// required for the interpreter to emit source-level Step / Call /
+	// Variable events.  The upstream `wasi_arg.wasm` is hand-written WAT
+	// with no DWARF and would produce an empty trace.
+	require.NoError(t, os.WriteFile(wasmPath, rustTestFixture(t), 0o700))
 
 	outDir := filepath.Join(tmpDir, "traces")
 

@@ -230,13 +230,17 @@ func goldenRustc() (string, error) {
 
 	rustc, err := exec.LookPath(name)
 	if err != nil {
+		// Deliberately not naming one fixture set: this resolver is
+		// shared by the recorder-golden builder and by the rust_test
+		// builder in rust_fixture_test.go, and a message naming only
+		// the former misdirects whoever hits it from the latter.
 		return "", fmt.Errorf("rustc (%q) is not on PATH: %w\n"+
-			"The recorder-golden fixtures are compiled from %s/*.rs during "+
-			"the test run — they are no longer checked in as binaries.  Run "+
-			"the suite inside this repo's Nix dev shell, which pins both "+
-			"rustc and the %s standard library:\n"+
+			"The wasm test fixtures (%s/*.rs and %s) are compiled from their "+
+			"committed Rust sources during the test run — they are no longer "+
+			"checked in as binaries.  Run the suite inside this repo's Nix dev "+
+			"shell, which pins both rustc and the %s standard library:\n"+
 			"    direnv exec . just test        (or: nix develop -c just test)",
-			name, err, goldenFixtureSrcDir, goldenFixtureTarget)
+			name, err, goldenFixtureSrcDir, rustFixtureSrc, goldenFixtureTarget)
 	}
 
 	verOut, err := exec.Command(rustc, "-vV").Output()

@@ -60,13 +60,16 @@ export CODETRACER_TRACE_FORMAT_NIM_PATH="$_TRACE_FORMAT_NIM_DIR"
 # ---------------------------------------------------------------------------
 # Build the FFI library if not already built.
 #
-# The Nim repo's nimble file exposes a `buildLib` task that produces the
-# static library + header next to the source tree.  We only invoke it when
-# the .a file is missing so repeat shell-entries are fast.
+# The Nim repo's nimble file exposes a `buildStaticLib` task that produces
+# the static library + header next to the source tree.  We only invoke it when
+# the .a file is missing so repeat shell-entries are fast.  (The task was
+# called `buildLib` at one point; `codetracer_trace_format.nimble` now spells
+# the static and shared halves apart as `buildStaticLib` / `buildSharedLib`,
+# and invoking the old name fails with "task not found".)
 # ---------------------------------------------------------------------------
 _FFI_INCLUDE_DIR="$_TRACE_FORMAT_NIM_DIR/include"
 # The FFI artifact may be either the static library (`.a`, produced by
-# `nimble buildLib`) or the shared library (`.so`, produced by the workspace's
+# `nimble buildStaticLib`) or the shared library (`.so`, produced by the workspace's
 # `build-siblings.sh` via the sibling repo's own dev shell).  cgo links
 # `-lcodetracer_trace_writer`, which the toolchain resolves from EITHER form in
 # the `-L` dir, so accept whichever is present.
@@ -85,20 +88,26 @@ if [ -z "$_FFI_LIB" ]; then
   # sibling's dev shell instead of polluting this shell with those tools:
   #   * `direnv exec <sibling>` if the sibling uses direnv (.envrc present);
   #   * else `nix develop <sibling>` (the sibling ships a flake).
+  # NOTE: both wrappers below supply the sibling's *environment* but leave the
+  # working directory alone, and `nimble` resolves its project from the cwd
+  # only (it does not search upwards).  Without the `cd` they run in whatever
+  # directory the shell was entered from — the recorder repo — and fail with
+  # "Could not find a file with a .nimble extension".  The subshell keeps the
+  # `cd` from leaking into the shell that sourced this script.
   _BUILD_OK=""
   if [ -f "$_TRACE_FORMAT_NIM_DIR/.envrc" ] && command -v direnv >/dev/null 2>&1; then
-    (direnv exec "$_TRACE_FORMAT_NIM_DIR" nimble -d:release buildLib) && _BUILD_OK=1
+    (cd "$_TRACE_FORMAT_NIM_DIR" && direnv exec "$_TRACE_FORMAT_NIM_DIR" nimble -d:release buildStaticLib) && _BUILD_OK=1
   fi
   if [ -z "$_BUILD_OK" ] && command -v nix >/dev/null 2>&1; then
-    (nix develop "$_TRACE_FORMAT_NIM_DIR" --command nimble -d:release buildLib) && _BUILD_OK=1
+    (cd "$_TRACE_FORMAT_NIM_DIR" && nix develop "$_TRACE_FORMAT_NIM_DIR" --command nimble -d:release buildStaticLib) && _BUILD_OK=1
   fi
   if [ -z "$_BUILD_OK" ] && command -v nimble >/dev/null 2>&1; then
     # Last resort: nimble is on PATH in this shell after all.
-    (cd "$_TRACE_FORMAT_NIM_DIR" && nimble buildLib) && _BUILD_OK=1
+    (cd "$_TRACE_FORMAT_NIM_DIR" && nimble buildStaticLib) && _BUILD_OK=1
   fi
   if [ -z "$_BUILD_OK" ]; then
     echo "  detect-trace-format: ERROR: could not build the FFI in the sibling dev shell." >&2
-    echo "  Build it once with: (cd $_TRACE_FORMAT_NIM_DIR && nix develop --command nimble buildLib)" >&2
+    echo "  Build it once with: (cd $_TRACE_FORMAT_NIM_DIR && nix develop --command nimble buildStaticLib)" >&2
     unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR _BUILD_OK
     return 1 2>/dev/null || exit 1
   fi

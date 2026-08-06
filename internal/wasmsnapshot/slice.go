@@ -22,12 +22,12 @@ package wasmsnapshot
 // relies on for parallel per-slice materialisation, and this package earns it
 // in two places:
 //
-//   - each slice gets a **fresh page-CAS per-trace tier**, so its `wcppages.ns`
+//   - each slice gets a **fresh page-CAS per-trace tier**, so its `snappages.ns`
 //     holds every page its snapshots reference. Sharing one tier across slices
 //     would make slice N's regions `kind=2` references to pages that only
 //     slice 0's container carries — a set of containers that is only readable
 //     in order, which is exactly what slicing exists to avoid.
-//   - each slice's `wcp.idx` lists only that slice's quiescent points, the
+//   - each slice's `snapshot.idx` lists only that slice's quiescent points, the
 //     first flagged as its base, so the slice is self-describing (`Set.Range`).
 //
 // # INTERVAL vs SLICE
@@ -84,7 +84,7 @@ type SlicePolicy struct {
 	//
 	// The measured quantity is deliberately named: it is the region layout,
 	// the inline page bytes, the globals, the tables and the per-trace page
-	// store — everything this package will write into the slice's `wcp.*`
+	// store — everything this package will write into the slice's `snap*`
 	// namespaces. It is **not** the sealed container's size, because the other
 	// half of a slice is the materialised trace, which the CTFS writer buffers
 	// opaquely and only sizes at `ProduceTrace`. Reporting a target this code
@@ -127,7 +127,7 @@ type SliceInfo struct {
 	// File is the slice container's path relative to the manifest.
 	File string `json:"file"`
 	// BasePoint is the quiescent point the slice resumes from. Its snapshot is
-	// flagged as a base in the slice's own `wcp.idx`.
+	// flagged as a base in the slice's own `snapshot.idx`.
 	BasePoint int `json:"base_point"`
 	// EndPoint is the quiescent point the slice's range ends at. The slice
 	// covers exported calls [BasePoint, EndPoint).

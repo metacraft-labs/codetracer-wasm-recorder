@@ -137,7 +137,7 @@ func maskTraceID(t *testing.T, meta []byte) []byte {
 // compareContainers asserts two `.ct` files hold identical *trace* streams
 // with identical bytes, modulo the per-container trace identifier.
 //
-// The `wcp.*` snapshot namespaces are excluded on purpose: they are additive
+// The `snap*` snapshot namespaces are excluded on purpose: they are additive
 // derived data, present or absent independently of what the trace says, and
 // the property under test is about the materialised trace. Excluding them is
 // exactly the reading a snapshot-unaware reader takes.
@@ -286,7 +286,7 @@ func TestReadsAContainerWrittenByTheNimWriter(t *testing.T) {
 }
 
 // deriveSnapshots replays the whole recording, capturing a snapshot at every
-// quiescent point, and attaches the resulting `wcp.*` namespaces to
+// quiescent point, and attaches the resulting `snap*` namespaces to
 // `containerPath`. It returns the number of snapshots taken.
 func deriveSnapshots(t *testing.T, ctDir, containerPath string, inline bool) int {
 	t.Helper()
@@ -607,7 +607,7 @@ func TestUnknownSnapshotVersionDegradesToLinearReplay(t *testing.T) {
 	require.NoError(t, err)
 	container := produce(t, w, work)
 
-	// Build the snapshot streams, then bump `wcp.idx`'s version field to
+	// Build the snapshot streams, then bump `snapshot.idx`'s version field to
 	// something this build does not know before attaching them. Everything
 	// else about the container is untouched.
 	future := futureVersionStreams(t, ctDir)
@@ -706,7 +706,7 @@ func errorsAs(err error, target **boundarylog.DivergenceError) bool {
 	return false
 }
 
-// futureVersionStreams derives a real snapshot set and rewrites its `wcp.idx`
+// futureVersionStreams derives a real snapshot set and rewrites its `snapshot.idx`
 // version field to `SnapshotFormatVersion + 1`.
 func futureVersionStreams(t *testing.T, ctDir string) map[string][]byte {
 	t.Helper()
@@ -732,7 +732,7 @@ func futureVersionStreams(t *testing.T, ctDir string) map[string][]byte {
 	streams := builder.Streams()
 	idx := streams[wasmsnapshot.NamespaceIndex]
 	require.True(t, len(idx) > 6)
-	// Version is a u16 LE at offset 4 of the `WCPI` header.
+	// Version is a u16 LE at offset 4 of the `SNPI` header.
 	idx[4] = byte(wasmsnapshot.SnapshotFormatVersion + 1)
 	idx[5] = 0
 	return streams

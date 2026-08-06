@@ -19,7 +19,7 @@
 // the C FFI in `tracewriter/` (see `ctfs_writer.go`), and that FFI exposes no
 // "add an internal file" entry point. Rather than break the §6 rule by
 // writing snapshot data next to the container, this package appends the
-// `wcp.*` streams into the container directly, using the documented on-disk
+// `snap*` streams into the container directly, using the documented on-disk
 // layout.
 //
 // # Deliberate limits
@@ -38,7 +38,7 @@
 //     "Key Lookup: B-Tree Index" now gives the interior-node layout as well as
 //     the 61-byte header and the leaf descriptors, and
 //     `internal/wasmsnapshot`'s `nsb1.go` writes and reads a real one for the
-//     `wcppages.ns` per-trace page store. That namespace travels through this
+//     `snappages.ns` per-trace page store. That namespace travels through this
 //     package as opaque bytes, exactly like every other stream.
 //   - **No compression.** The container layer is compression-agnostic
 //     (`ctfs-container.md` §1: "Compression is not in the header"); the

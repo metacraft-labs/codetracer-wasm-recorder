@@ -74,7 +74,7 @@ const seekUnset = -1
 func (o *snapshotOptions) register(flags *flag.FlagSet) {
 	flags.BoolVar(&o.derive, "snapshots", false,
 		"Derives replay snapshots during --boundary-log replay and stores them "+
-			"inside the produced `.ct` as the wcp.* namespaces, so a later run can "+
+			"inside the produced `.ct` as the snap* namespaces, so a later run can "+
 			"materialise a sub-range without re-executing everything before it.  A "+
 			"`.ct` without those namespaces is still a complete recording.")
 	flags.IntVar(&o.every, "snapshot-every", 1,

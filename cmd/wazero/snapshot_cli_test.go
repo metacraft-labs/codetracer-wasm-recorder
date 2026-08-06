@@ -88,7 +88,7 @@ func attachSnapshotsTo(t *testing.T, containerPath string) {
 // TestOpenBuildToleratesSnapshotNamespaces is
 // `verify_open_build_reads_snapshot_bearing_container` at the artifact level.
 //
-// Two containers are produced from the same recording, one with the `wcp.*`
+// Two containers are produced from the same recording, one with the `snap*`
 // namespaces attached and one without, and both are read back. The snapshot
 // namespaces must change nothing about the trace the container holds.
 //

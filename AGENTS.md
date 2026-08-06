@@ -41,7 +41,7 @@ produce Step/Call/Function/Event records that CodeTracer loads for time-travel d
   recording, generates import stubs from the boundary signatures, and re-executes
   the original module against the recording. See "Boundary-log replay" below.
 * `internal/wasmsnapshot/` — Replay snapshots: quiescent-point identification,
-  page-granular content addressing, and the `wcp.*` CTFS namespaces that let a
+  page-granular content addressing, and the `snap*` CTFS namespaces that let a
   sub-range of a recording be materialised without replaying everything before
   it. See "Replay snapshots" below.
 * `internal/ctfs/` — Minimal reader/appender for the `.ct` container format,
@@ -342,7 +342,7 @@ Four things are load-bearing:
 * **Snapshots are derived data.** They are reconstructible from
   `(module + boundary log)` and may be discarded and re-derived at a different
   density (`--snapshot-every`) without re-recording.
-* **They live inside the `.ct`.** The six `wcp.*` namespaces are appended to
+* **They live inside the `.ct`.** The six `snap*` namespaces are appended to
   the container by `internal/ctfs`, never written beside it. A `.ct` without
   them is a complete, valid recording.
 * **An unrecognised snapshot version disables seeking and nothing else.** This
@@ -395,10 +395,14 @@ through `ct-print`, an independent CTFS implementation).
 
 #### Format notes worth knowing before you touch this
 
-* **`wcp.entry.lay` / `wcp.entry.mem` are spelled `wcpentry.lay` /
-  `wcpentry.mem`.** Base40 packs exactly twelve characters into the u64
-  `FileEntry.Name`; MCR's `cp.entry.lay` is twelve exactly, and the `w` prefix
-  makes thirteen. The spec text asserts the names fit; they do not.
+* **Every namespace name is at most twelve characters, and five of the six are
+  twelve exactly.** Base40 packs exactly twelve characters into the u64
+  `FileEntry.Name`. The ceiling has already bitten once: an early revision of
+  snapshot spec §6 mirrored MCR's twelve-character `cp.entry.lay` as
+  `wcp.entry.lay`, which is thirteen and cannot be encoded at all. M56 renamed
+  the whole `wcp` family to the descriptive `snapshot.idx` / `snapshot.lay` /
+  `snapshot.mem` / `snappages.ns` / `snapglob.dat` / `snaptab.dat`; there is no
+  room left to spell any of them out further.
 * **The Nim CTFS writer never applies the small-file optimisation.** Every
   internal file it writes, including 3-byte ones, gets a mapping block. The
   two conventions are indistinguishable from the bytes, so `internal/ctfs`
@@ -412,13 +416,13 @@ through `ct-print`, an independent CTFS implementation).
   implemented. It is wrong: `ct-print`, `ct-space` and the db-backend all
   follow the producer, and a container written the other way is **silently
   mis-read past ~2 MB** (511 data blocks at a 4096-byte block). Both
-  `wcppages.ns` and `wcpentry.mem` cross that threshold for any real memory.
+  `snappages.ns` and `snapshot.mem` cross that threshold for any real memory.
   `internal/ctfs/multilevel_layout_test.go` pins both directions — a committed
   Nim-written fixture for the reader, a transcription of the producer's own
   `lookupDataBlock` for the writer. **A round-trip test through this package
   alone cannot catch a mistake here**, because it writes and reads with the
   same convention; that is why those two tests exist.
-* **`wcppages.ns` is a real `NSB1` namespace B-tree — it did not used to be.**
+* **`snappages.ns` is a real `NSB1` namespace B-tree — it did not used to be.**
   It carried a `WPG1` flat sorted table, because `CTFS-Binary-Format.md` §10
   specified the 61-byte namespace header and the leaf entry descriptors but
   not the byte layout of B-tree **interior** nodes, so a wire-compatible
@@ -441,7 +445,7 @@ through `ct-print`, an independent CTFS implementation).
     Padding at the end would leave the stream's tail outside the reach of the
     per-page hash check, which is the format's only integrity check.
   * **`NSB1` has no version field**, so `SnapshotFormatVersion` rides in a
-    `WCPV` record at byte 64 of page 0 — inside the header page, past the
+    `SNPV` record at byte 64 of page 0 — inside the header page, past the
     61-byte header, where every namespace reader ignores it. That is what keeps
     an unrecognised snapshot revision an `*UnsupportedVersionError` ("seeking
     unavailable") rather than a corrupt-stream error.
@@ -467,6 +471,17 @@ through `ct-print`, an independent CTFS implementation).
   — what `--slice-bytes` / `SlicePolicy.TargetBytes` measures — still counts
   page **content** only, deliberately: it is a knob over how much memory a
   slice accumulates, not over its index overhead.
+* **The snapshot record magics are `SNPI` and `SNPV`.** `SNPI` leads
+  `snapshot.idx`; `SNPV` is the version sidecar in `snappages.ns` page 0 above.
+  Stem plus a kind letter, matching the `snap*` namespace stem — they were
+  `WCPI` / `WCPV` until the rename took the `wcp` stem out of the format
+  entirely. The kind letter is deliberately not a revision digit as in `NSB1` /
+  `WPG1`: these records carry `SnapshotFormatVersion` in a field of their own,
+  and a digit would be a second place for a revision to disagree with itself.
+  `SNPI` must stay distinct from `NSB1` — `snapshot.idx` is a flat record
+  array, so a namespace reader pointed at it has to refuse at the magic check
+  rather than mis-walk it as a B-tree, which is the same property `WPG1` was
+  chosen for while the page store was a flat table.
 
 ### Streaming replay — `--boundary-stream`, `--stream-done`
 
@@ -589,11 +604,11 @@ places, and both are easy to break:
 
 * **Each slice gets a fresh page-CAS per-trace tier.** Sharing one across
   slices would make slice N's regions `kind=2` references to pages only slice
-  0's `wcppages.ns` carries — a set of containers readable only in order, which
+  0's `snappages.ns` carries — a set of containers readable only in order, which
   is the opposite of the point. `TestSliceCarriesEveryPageItsSnapshotsReference`
   loads each slice with the system cache **disabled**, so the container's own
   store is the only possible source.
-* **Each slice's `wcp.idx` lists only its own quiescent points**, the first
+* **Each slice's `snapshot.idx` lists only its own quiescent points**, the first
   flagged as its base, so `Set.Range()` makes the slice self-describing. No new
   namespace was needed for this.
 

@@ -18,7 +18,7 @@ import (
 // The second half of the `NSB1` proof: the **real** Nim reader, not a
 // transcription of it.
 //
-// `nsb1_crossread_test.go` holds a `wcppages.ns` to a Go transcription of
+// `nsb1_crossread_test.go` holds a `snappages.ns` to a Go transcription of
 // `cow_btree.nim`'s `loadCowBTree` / `lookupFrom`. That is strong — the
 // transcription shares no code with the writer — but it is still this
 // repository's opinion of what the producer's algorithm is. This test removes
@@ -71,7 +71,7 @@ func TestTheProductionNimReaderLooksUpEveryPage(t *testing.T) {
 	if _, err := os.Stat(checker); err != nil {
 		t.Skipf(
 			"SKIP: the sibling codetracer-trace-format-nim checkout has no %s "+
-				"(looked in %s). The `wcppages.ns` namespace is still held to a "+
+				"(looked in %s). The `snappages.ns` namespace is still held to a "+
 				"transcription of that repo's reader by "+
 				"TestTheProducersTraversalFindsEveryPageInTheStore; what did NOT run "+
 				"is the check against the production Nim reader itself.",
@@ -155,7 +155,7 @@ func TestTheProductionNimReaderLooksUpEveryPage(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
-	imagePath := filepath.Join(tmp, "wcppages.ns")
+	imagePath := filepath.Join(tmp, "snappages.ns")
 	manifestPath := filepath.Join(tmp, "manifest.txt")
 	if err := os.WriteFile(imagePath, raw, 0o644); err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestTheProductionNimReaderLooksUpEveryPage(t *testing.T) {
 		if bytes.Contains(out, []byte("check_nsb1_namespace:")) ||
 			bytes.Contains(out, []byte("Error:")) {
 			t.Fatalf("the production Nim loadCowBTree/lookup could not read the "+
-				"wcppages.ns namespace this package wrote: %v\n%s", err, out)
+				"snappages.ns namespace this package wrote: %v\n%s", err, out)
 		}
 		t.Skipf(
 			"SKIP: could not run the sibling repo's Nim toolchain (%v), so the "+

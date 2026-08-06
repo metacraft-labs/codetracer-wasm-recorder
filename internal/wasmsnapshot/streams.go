@@ -9,7 +9,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/xxh3"
 )
 
-// SnapshotFormatVersion is the revision of the `wcp.*` stream encodings.
+// SnapshotFormatVersion is the revision of the `snap*` stream encodings.
 //
 // Version gating follows CAS spec §10 with the deliberate narrowing snapshot
 // spec §6 spells out: an unrecognised version **disables seeking and nothing
@@ -18,38 +18,50 @@ import (
 // a recording it is perfectly able to materialise.
 const SnapshotFormatVersion uint16 = 1
 
-// CASFormat is the CAS spec §4 algorithm identifier, carried in `wcp.idx` so a
+// CASFormat is the CAS spec §4 algorithm identifier, carried in `snapshot.idx` so a
 // future hash-family transition is detectable rather than silent.
 const CASFormat = "page-xxh3-128"
 
-// Namespace names, per snapshot spec §6. They mirror MCR's one-for-one so the
-// two layouts stay legible side by side.
+// Namespace names, per snapshot spec §6. Each follows the CTFS house style —
+// a stem naming what the stream holds, plus a kind suffix — the way
+// `cp.entry.lay`, `cppages.ns`, `calls.idx` and `coverage.tc` do. The MCR
+// counterpart of each is recorded per-constant rather than encoded in the
+// name.
 //
-// # The base40 exception
+// # Twelve characters, and what that ceiling already cost once
 //
-// Snapshot spec §6 spells two of them `wcp.entry.lay` and `wcp.entry.mem`, and
-// asserts the names "respect the base40 filename constraint of
-// `CTFS-Binary-Format.md` §3". They do not: base40 packs exactly twelve
-// characters into the u64 `FileEntry.Name`, MCR's `cp.entry.lay` is twelve
-// exactly, and prefixing a `w` makes thirteen. The names below drop the first
-// separator instead, which keeps the `wcp` prefix, keeps the `.lay` / `.mem`
-// suffixes, and fits. This divergence from the spec text is recorded in the
-// M38 completion note.
+// Base40 packs exactly twelve characters into the u64 `FileEntry.Name`
+// (`CTFS-Binary-Format.md` §3), so no namespace name may exceed twelve. That
+// is not an academic limit: an earlier revision of snapshot spec §6 mirrored
+// MCR's names one-for-one with a `w` prefix, and since MCR's `cp.entry.lay` is
+// twelve exactly, `wcp.entry.lay` came to thirteen and could not be encoded at
+// all. M38 shortened those to `wcpentry.lay` / `wcpentry.mem` to fit.
+//
+// M56 replaced that whole opaque `wcp` ("wasm checkpoint") family with the
+// descriptive names below. The ceiling still binds and there is no room to
+// spell any of them out further: `snapshot.idx`, `snapshot.lay`,
+// `snapshot.mem`, `snappages.ns` and `snapglob.dat` are twelve exactly, and
+// `snaptab.dat` is eleven.
+//
+// The rename needed no migration path. No container carrying the old names had
+// ever been written outside a test's temp dir — the fixtures that exercise
+// these streams are produced at test time, not committed — so there is
+// deliberately no compatibility shim for the `wcp` spelling.
 const (
 	// NamespaceIndex is the snapshot / quiescent-point index.
-	NamespaceIndex = "wcp.idx"
+	NamespaceIndex = "snapshot.idx"
 	// NamespaceLayout carries per-snapshot region descriptors
 	// (MCR: `cp.entry.lay`).
-	NamespaceLayout = "wcpentry.lay"
+	NamespaceLayout = "snapshot.lay"
 	// NamespaceInlineMem carries inline page bytes for `kind=0` regions
 	// (MCR: `cp.entry.mem`).
-	NamespaceInlineMem = "wcpentry.mem"
+	NamespaceInlineMem = "snapshot.mem"
 	// NamespacePages is the per-trace CAS tier (MCR: `cppages.ns`).
-	NamespacePages = "wcppages.ns"
+	NamespacePages = "snappages.ns"
 	// NamespaceGlobals carries global values per snapshot.
-	NamespaceGlobals = "wcp.glob"
+	NamespaceGlobals = "snapglob.dat"
 	// NamespaceTables carries table contents per snapshot.
-	NamespaceTables = "wcp.tab"
+	NamespaceTables = "snaptab.dat"
 )
 
 // NamespaceNames lists every stream this package writes, in a stable order.
@@ -80,10 +92,27 @@ func (e *UnsupportedVersionError) Error() string {
 }
 
 // ---------------------------------------------------------------------------
-// `wcp.idx`
+// `snapshot.idx`
 // ---------------------------------------------------------------------------
 
-var indexMagic = [4]byte{'W', 'C', 'P', 'I'}
+// indexMagic identifies `snapshot.idx`, at offset 0.
+//
+// The in-stream magics in this format are a short stem plus one discriminator
+// character: `NSB1` (namespace B-tree, revision 1), `CTMD` (CodeTracer
+// metadata), and the pair here — `SNPI` (snapshot index) and `SNPV` (snapshot
+// version, in `pagecas.go`). The stem tracks the namespace stem, so the two
+// snapshot records read as a family alongside `snapshot.*` / `snap*`. The
+// discriminator is a *kind* letter rather than a revision digit as in `NSB1`
+// and the historical `WPG1`, because these records carry
+// `SnapshotFormatVersion` in a field of their own; a digit here would be a
+// second, redundant place for a revision to disagree with itself.
+//
+// **It must not be `NSB1`.** `snapshot.idx` is a flat record array, not a
+// namespace, and a CTFS namespace reader pointed at it has to refuse at the
+// magic check rather than mis-walk it as a B-tree. That is the same property
+// the historical `WPG1` was chosen for when the page store was a flat sorted
+// table, and it is why a snapshot stream never borrows the namespace magic.
+var indexMagic = [4]byte{'S', 'N', 'P', 'I'}
 
 const (
 	indexHeaderSize = 32
@@ -102,7 +131,7 @@ const (
 	flagBaseSnapshot uint32 = 1 << 1
 )
 
-// IndexRecord is one `wcp.idx` entry: one quiescent point, with the offsets
+// IndexRecord is one `snapshot.idx` entry: one quiescent point, with the offsets
 // of its data in the other streams.
 type IndexRecord struct {
 	Ordinal       uint32
@@ -207,7 +236,7 @@ func trimNul(b []byte) []byte {
 }
 
 // ---------------------------------------------------------------------------
-// `wcpentry.lay` — region descriptors (CAS spec §3)
+// `snapshot.lay` — region descriptors (CAS spec §3)
 // ---------------------------------------------------------------------------
 
 func encodeRegions(regions []Region) []byte {
@@ -376,7 +405,7 @@ func decodeRegions(raw []byte) ([]Region, error) {
 }
 
 // ---------------------------------------------------------------------------
-// `wcp.glob` and `wcp.tab`
+// `snapglob.dat` and `snaptab.dat`
 // ---------------------------------------------------------------------------
 
 const globalRecordSize = 20

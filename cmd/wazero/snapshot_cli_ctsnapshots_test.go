@@ -66,7 +66,7 @@ func TestSnapshotsFlagWritesTheNamespacesIntoTheContainer(t *testing.T) {
 // milestone's headline property. The seek distance is short — the committed
 // recording has a single exported call — but the mechanism is the real one:
 // the second run reconstructs the module's memory, globals and tables from the
-// container's `wcp.*` namespaces instead of from instantiation, and its trace
+// container's `snap*` namespaces instead of from instantiation, and its trace
 // must be indistinguishable from the linear run's.
 func TestSeekProducesTheSameTraceAsLinearReplay(t *testing.T) {
 	require.True(t, snapshotsAvailable)

@@ -159,7 +159,7 @@ func isolate(t *testing.T, run sliceRun, index int) string {
 func materialiseFromSlice(t *testing.T, wasmPath, ctDir, slicePath, outDir string) (string, int, int) {
 	t.Helper()
 	// `useSystemCache: false` is load-bearing. It means the only place a memory
-	// page may come from is this container's own `wcppages.ns`, so a slice that
+	// page may come from is this container's own `snappages.ns`, so a slice that
 	// referenced pages introduced by an earlier slice fails here rather than
 	// silently resolving against a warm host cache.
 	set, diag, err := wasmsnapshot.Load(slicePath, false)
@@ -512,7 +512,7 @@ func stateAtPoint(t *testing.T, wasmPath, ctDir string, point int) *wasmsnapshot
 // per-trace tier.
 //
 // If slices shared one tier, slice N's regions would be `kind=2` references to
-// pages that only slice 0's `wcppages.ns` carries, and slice N would be
+// pages that only slice 0's `snappages.ns` carries, and slice N would be
 // unreadable without it — a set of containers readable only in order, which is
 // the opposite of what slicing is for. Loading with the system cache disabled
 // makes the container's own store the only possible source, so this test fails

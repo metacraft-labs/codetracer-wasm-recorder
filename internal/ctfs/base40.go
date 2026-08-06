@@ -17,11 +17,12 @@ const base40Alphabet = "\x000123456789abcdefghijklmnopqrstuvwxyz./-"
 // MaxNameLen is the longest CTFS internal filename: 40^12 < 2^64 < 40^13, so
 // exactly twelve characters pack into the u64 `FileEntry.Name`.
 //
-// This is a hard constraint on every namespace name, and it is the reason the
-// snapshot streams are spelled `wcpentry.lay` / `wcpentry.mem` rather than the
-// `wcp.entry.lay` / `wcp.entry.mem` of
-// `WASM-Replay-Snapshots-And-Slices.md` §6 — see `internal/wasmsnapshot`'s
-// `NamespaceNames` for the full note.
+// This is a hard constraint on every namespace name, and it has already bitten
+// once: an early revision of `WASM-Replay-Snapshots-And-Slices.md` §6 named two
+// snapshot streams `wcp.entry.lay` / `wcp.entry.mem`, which are thirteen
+// characters and cannot be encoded at all. The streams are called
+// `snapshot.lay` / `snapshot.mem` today, at twelve exactly — see
+// `internal/wasmsnapshot`'s namespace constants for the full note.
 const MaxNameLen = 12
 
 // EncodeName packs a CTFS internal filename into the u64 `FileEntry.Name`

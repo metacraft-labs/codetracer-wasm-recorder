@@ -15,7 +15,7 @@
 // of anything the open build does at run time:
 //
 //   - **A snapshot-bearing `.ct` is read normally.** The open build never
-//     looks at the `wcp.*` namespaces, so their presence changes nothing: the
+//     looks at the `snap*` namespaces, so their presence changes nothing: the
 //     container's boundary streams are exactly what they would have been
 //     without them. That is checked, byte for byte, by
 //     `TestOpenBuildReadsSnapshotBearingContainer` in

@@ -35,7 +35,7 @@ const (
 // Region kinds, per CAS spec §3. The values are the same three the MCR layout
 // uses, so a reader of either layout dispatches identically.
 const (
-	// KindFull carries its bytes inline in `wcpentry.mem`.
+	// KindFull carries its bytes inline in `snapshot.mem`.
 	KindFull uint8 = 0
 	// KindHashRef is a flat list of page hashes resolved through the tiers.
 	KindHashRef uint8 = 1
@@ -46,7 +46,7 @@ const (
 // HashPage returns a page's content address. The CAS spec §4 fixes the
 // algorithm at xxh3-128 and records it in the trace's metadata as
 // `"cas_format": "page-xxh3-128"`; `casFormat` below carries the same string
-// into `wcp.idx`.
+// into `snapshot.idx`.
 func HashPage(page []byte) xxh3.Uint128 { return xxh3.Hash128(page) }
 
 // PageCache is one tier of the three-tier lookup (CAS spec §5).
@@ -62,12 +62,12 @@ type PageCache interface {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 1 — the per-trace cache (`wcppages.ns`)
+// Tier 1 — the per-trace cache (`snappages.ns`)
 // ---------------------------------------------------------------------------
 
 // PerTraceCache is the CAS spec §5.1 per-trace tier: "the new pages this
 // recording actually introduced … the trace's self-sufficiency guarantee".
-// It is serialised into the container's `wcppages.ns` stream, so a `.ct`
+// It is serialised into the container's `snappages.ns` stream, so a `.ct`
 // carrying only `kind=2` regions plus a populated per-trace cache replays with
 // a cold system cache and no network.
 type PerTraceCache struct {
@@ -96,13 +96,13 @@ func (c *PerTraceCache) Insert(h xxh3.Uint128, page []byte) error {
 	return nil
 }
 
-func (c *PerTraceCache) Describe() string { return "per-trace cache (wcppages.ns)" }
+func (c *PerTraceCache) Describe() string { return "per-trace cache (snappages.ns)" }
 
 // Len reports how many distinct pages the tier holds.
 func (c *PerTraceCache) Len() int { return len(c.pages) }
 
 // Bytes reports the total page *content* held, which is the dominant term in
-// what the tier contributes to a container's `wcppages.ns` stream, and the
+// what the tier contributes to a container's `snappages.ns` stream, and the
 // term `SlicePolicy.TargetBytes` is measured against.
 //
 // It is a lower bound on the stream, not its size. `encodePageStore` writes a
@@ -306,7 +306,7 @@ func (t *Tiers) Resolve(h xxh3.Uint128, cacheID uint64) ([]byte, error) {
 // Region descriptors (CAS spec §3)
 // ---------------------------------------------------------------------------
 
-// Region is one `wcpentry.lay` record. The field set mirrors MCR's
+// Region is one `snapshot.lay` record. The field set mirrors MCR's
 // `cp.entry.lay` one-for-one so the two layouts stay legible side by side,
 // including the two fields WASM has no use for: `Protect` is always zero
 // because linear memory has no page permissions, and `Flags` is reserved.
@@ -317,7 +317,7 @@ type Region struct {
 	Flags   uint32
 	Kind    uint8
 
-	// FileOffset is the offset into `wcpentry.mem` for KindFull.
+	// FileOffset is the offset into `snapshot.mem` for KindFull.
 	FileOffset uint64
 	// Hashes is the flat page-hash list for KindHashRef.
 	Hashes []xxh3.Uint128
@@ -343,9 +343,9 @@ type EncodeOptions struct {
 	// page exactly once.
 	//
 	// When true a miss is encoded as a `kind=0` region whose bytes go inline
-	// into `wcpentry.mem`, per the CAS spec §3 recorder sketch. That is what a
+	// into `snapshot.mem`, per the CAS spec §3 recorder sketch. That is what a
 	// producer that ships no per-trace namespace must emit, and it is the only
-	// mode in which `wcpentry.mem` is non-empty. It is not the default because
+	// mode in which `snapshot.mem` is non-empty. It is not the default because
 	// combining it with a populated per-trace cache would store every
 	// introduced page twice.
 	InlineMissedPages bool
@@ -361,7 +361,7 @@ type EncodeOptions struct {
 // unchanged, and close the run when it changes.
 //
 // `inline` receives the bytes of every KindFull region in emission order; the
-// caller appends them to `wcpentry.mem` and the returned regions' FileOffset
+// caller appends them to `snapshot.mem` and the returned regions' FileOffset
 // values already account for `memBase`.
 func EncodeMemory(memory []byte, tiers *Tiers, memBase uint64, opts EncodeOptions) (regions []Region, inline []byte, err error) {
 	if len(memory)%PageSize != 0 {
@@ -439,7 +439,7 @@ func EncodeMemory(memory []byte, tiers *Tiers, memBase uint64, opts EncodeOption
 }
 
 // MaterialiseMemory reconstructs a linear-memory image from region descriptors
-// (CAS spec §3 "Replay algorithm"). `inline` is the `wcpentry.mem` stream.
+// (CAS spec §3 "Replay algorithm"). `inline` is the `snapshot.mem` stream.
 func MaterialiseMemory(regions []Region, inline []byte, tiers *Tiers, size uint64) ([]byte, error) {
 	out := make([]byte, size)
 	covered := uint64(0)
@@ -454,7 +454,7 @@ func MaterialiseMemory(regions []Region, inline []byte, tiers *Tiers, size uint6
 			end := r.FileOffset + r.Size
 			if end > uint64(len(inline)) {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: kind=0 region at %d wants wcpentry.mem[%d:%d] but the "+
+					"wasmsnapshot: kind=0 region at %d wants snapshot.mem[%d:%d] but the "+
 						"stream is %d bytes", r.Base, r.FileOffset, end, len(inline))
 			}
 			copy(out[r.Base:r.Base+r.Size], inline[r.FileOffset:end])
@@ -510,10 +510,10 @@ func writePages(out []byte, at uint64, hashes []xxh3.Uint128, cacheID uint64, ti
 }
 
 // ---------------------------------------------------------------------------
-// `wcppages.ns` — the per-trace page store
+// `snappages.ns` — the per-trace page store
 // ---------------------------------------------------------------------------
 
-// # `wcppages.ns` IS an `NSB1` namespace B-tree
+// # `snappages.ns` IS an `NSB1` namespace B-tree
 //
 // The stream is a real CTFS namespace page image, written and read against
 // `codetracer-specs/Trace-Files/CTFS-Binary-Format.md` §10 ("Namespaces"),
@@ -593,11 +593,11 @@ const (
 //
 // `NSB1`'s 4-byte magic is its only version/identity field: §10 says so
 // outright, and the container header carries the *container* format version,
-// not a stream's. The `wcp.*` streams have their own revision
+// not a stream's. The `snap*` streams have their own revision
 // (`SnapshotFormatVersion`), and an unrecognised one must keep producing an
 // `*UnsupportedVersionError` so `Load` downgrades to "seeking unavailable"
 // rather than "recording unreadable" (snapshot spec §6 — the behaviour
-// `TestUnknownVersionIsADiagnosticNotAnError` pins on the sibling `wcp.idx`
+// `TestUnknownVersionIsADiagnosticNotAnError` pins on the sibling `snapshot.idx`
 // stream and `TestAnUnknownPageStoreVersionIsADiagnostic` pins here).
 //
 // It is carried in a sidecar record inside **page 0**, at byte 64 — after the
@@ -609,12 +609,22 @@ const (
 // this record. The alternatives were worse — a version in every payload record
 // repeats itself once per page and says nothing about an *empty* store, and a
 // trailer after the payload has no fixed address to be found at.
-var pageStoreSidecarMagic = [4]byte{'W', 'C', 'P', 'V'}
+//
+// `SNPV` is the sibling of `snapshot.idx`'s `SNPI` (see `streams.go`): the same
+// stem as the `snap*` namespaces, plus a kind letter. Unlike `SNPI` it is not a
+// stream-leading magic, so the "refuse legibly instead of mis-walking"
+// requirement does not apply to it in the same way — nothing dispatches on it
+// to decide what the stream *is*. What it must do is be absent-detectable, and
+// it is: every other namespace producer writes only the 61-byte header and
+// leaves the rest of page 0 zero, so a namespace this package did not write
+// fails the check below with a legible "carries no version record" rather than
+// having its zeros read as a revision number.
+var pageStoreSidecarMagic = [4]byte{'S', 'N', 'P', 'V'}
 
 const (
 	pageStoreSidecarOffset = 64
 	// Layout, all little-endian:
-	//   [64..68)  magic "WCPV"
+	//   [64..68)  magic "SNPV"
 	//   [68..70)  version    u16  — SnapshotFormatVersion
 	//   [70..72)  reserved   u16  = 0
 	//   [72..76)  page_size  u32  — the CAS page size this store addresses
@@ -675,7 +685,7 @@ func encodePageStoreKeyed(c *PerTraceCache, keyOf func(xxh3.Uint128) uint64) []b
 		// every descriptor is `pageStoreDescSize` bytes. Reaching it means this
 		// function is wrong, and writing a namespace no reader can traverse is
 		// worse than failing loudly at derivation time.
-		panic(fmt.Sprintf("wasmsnapshot: sizing the wcppages.ns namespace: %v", err))
+		panic(fmt.Sprintf("wasmsnapshot: sizing the snappages.ns namespace: %v", err))
 	}
 	// The page-alignment padding goes between the page image and the payload,
 	// so the payload ends flush with the end of the stream; see the header
@@ -703,11 +713,11 @@ func encodePageStoreKeyed(c *PerTraceCache, keyOf func(xxh3.Uint128) uint64) []b
 	}
 	image, err := nsBulkLoad(final, pageStoreDescSize, pageStoreFlags)
 	if err != nil {
-		panic(fmt.Sprintf("wasmsnapshot: building the wcppages.ns namespace: %v", err))
+		panic(fmt.Sprintf("wasmsnapshot: building the snappages.ns namespace: %v", err))
 	}
 	if uint64(len(image)+pad) != payloadBase || len(payload) != payloadBytes {
 		panic(fmt.Sprintf(
-			"wasmsnapshot: the wcppages.ns sizing pass predicted a %d-byte payload at "+
+			"wasmsnapshot: the snappages.ns sizing pass predicted a %d-byte payload at "+
 				"offset %d but the final pass produced %d bytes at %d; the descriptors "+
 				"would point at the wrong offsets",
 			payloadBytes, payloadBase, len(payload), len(image)+pad))
@@ -757,7 +767,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 	}
 	if len(raw) < nsPageSize {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns is %d bytes, too short for its %d-byte "+
+			"wasmsnapshot: snappages.ns is %d bytes, too short for its %d-byte "+
 				"NSB1 header page", len(raw), nsPageSize)
 	}
 	// The magic is checked first so a stream that is not a namespace at all
@@ -766,12 +776,12 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 	// "seeking unavailable" instead of being reported as corrupt.
 	if [4]byte(raw[0:4]) != nsMagic {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns does not carry the %q magic", string(nsMagic[:]))
+			"wasmsnapshot: snappages.ns does not carry the %q magic", string(nsMagic[:]))
 	}
 	s := raw[pageStoreSidecarOffset : pageStoreSidecarOffset+pageStoreSidecarSize]
 	if [4]byte(s[0:4]) != pageStoreSidecarMagic {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns is an NSB1 namespace but carries no %q version "+
+			"wasmsnapshot: snappages.ns is an NSB1 namespace but carries no %q version "+
 				"record; this build cannot tell which revision of the CAS entry "+
 				"encoding its payloads use", string(pageStoreSidecarMagic[:]))
 	}
@@ -780,14 +790,14 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 	}
 	if ps := binary.LittleEndian.Uint32(s[8:]); ps != PageSize {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns uses a %d-byte page; this build addresses %d-byte pages",
+			"wasmsnapshot: snappages.ns uses a %d-byte page; this build addresses %d-byte pages",
 			ps, PageSize)
 	}
 	wantKeys := int(binary.LittleEndian.Uint32(s[12:]))
 
 	if flags := raw[nsOffFlags]; flags&nsFlagLeafTypeB == 0 {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns declares namespace flags %#02x, i.e. Leaf Type A "+
+			"wasmsnapshot: snappages.ns declares namespace flags %#02x, i.e. Leaf Type A "+
 				"(8-byte descriptors); the page store is written as Leaf Type B", flags)
 	}
 
@@ -797,7 +807,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 	}
 	if len(entries) != wantKeys {
 		return nil, fmt.Errorf(
-			"wasmsnapshot: wcppages.ns declares %d namespace key(s) but its B-tree "+
+			"wasmsnapshot: snappages.ns declares %d namespace key(s) but its B-tree "+
 				"holds %d", wantKeys, len(entries))
 	}
 
@@ -807,7 +817,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 		end := start + length
 		if end < start || end > uint64(len(raw)) {
 			return nil, fmt.Errorf(
-				"wasmsnapshot: wcppages.ns entry %#x points at bytes [%d,%d) but the "+
+				"wasmsnapshot: snappages.ns entry %#x points at bytes [%d,%d) but the "+
 					"stream is %d bytes", e.key, start, end, len(raw))
 		}
 		chain := raw[start:end]
@@ -818,7 +828,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 		for len(chain) > 0 {
 			if len(chain) < pageRecordHeaderSize {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: wcppages.ns entry %#x has %d trailing byte(s), too "+
+					"wasmsnapshot: snappages.ns entry %#x has %d trailing byte(s), too "+
 						"few for a %d-byte CAS entry header", e.key, len(chain),
 					pageRecordHeaderSize)
 			}
@@ -828,19 +838,19 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 			size := int(binary.LittleEndian.Uint32(chain[16:]))
 			if size != PageSize {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: wcppages.ns entry %#x record %d declares a %d-byte "+
+					"wasmsnapshot: snappages.ns entry %#x record %d declares a %d-byte "+
 						"page; this build addresses %d-byte pages", e.key, n, size, PageSize)
 			}
 			if len(chain)-pageRecordHeaderSize < size {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: wcppages.ns entry %#x record %d wants %d byte(s) of "+
+					"wasmsnapshot: snappages.ns entry %#x record %d wants %d byte(s) of "+
 						"page content but only %d remain", e.key, n, size,
 					len(chain)-pageRecordHeaderSize)
 			}
 			page := chain[pageRecordHeaderSize : pageRecordHeaderSize+size]
 			if HashPage(page) != h {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: wcppages.ns entry %d does not hash to its own key; the "+
+					"wasmsnapshot: snappages.ns entry %d does not hash to its own key; the "+
 						"page store is corrupt and would deliver wrong bytes into a replay", n)
 			}
 			// The full hash and the namespace key must agree, or a lookup by
@@ -848,7 +858,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 			// read from the writer's side.
 			if keyOf(h) != e.key {
 				return nil, fmt.Errorf(
-					"wasmsnapshot: wcppages.ns entry %#x record %d carries a full hash "+
+					"wasmsnapshot: snappages.ns entry %#x record %d carries a full hash "+
 						"whose namespace key is %#x; the page is filed under a key no "+
 						"lookup would reach", e.key, n, keyOf(h))
 			}
@@ -860,7 +870,7 @@ func decodePageStoreKeyed(raw []byte, keyOf func(xxh3.Uint128) uint64) (*PerTrac
 		}
 		if n == 0 {
 			return nil, fmt.Errorf(
-				"wasmsnapshot: wcppages.ns entry %#x has an empty payload; a namespace "+
+				"wasmsnapshot: snappages.ns entry %#x has an empty payload; a namespace "+
 					"key with no CAS entry under it cannot be resolved", e.key)
 		}
 	}

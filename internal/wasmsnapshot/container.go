@@ -7,7 +7,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/ctfs"
 )
 
-// Builder accumulates snapshots and serialises them into the six `wcp.*`
+// Builder accumulates snapshots and serialises them into the six `snap*`
 // streams of snapshot spec §6.
 //
 // It is used only by the derivation path, which is gated behind the
@@ -34,7 +34,7 @@ type Builder struct {
 // NewBuilder starts a snapshot set covering every quiescent point of a
 // recording.
 //
-// Every point is listed in `wcp.idx` whether or not it ends up carrying a
+// Every point is listed in `snapshot.idx` whether or not it ends up carrying a
 // snapshot. That is snapshot spec §8's second requirement — "the
 // quiescent-point index … lets a consumer enumerate legal snapshot points
 // without replaying" — and it means the snapshot *density* is a property of
@@ -74,7 +74,7 @@ func NewIncrementalBuilder(tiers *Tiers, opts EncodeOptions) (*Builder, error) {
 // AddPoint declares one quiescent point, in ordinal order.
 //
 // Declaring a point is separate from snapshotting it (`Add`): every legal point
-// is listed in `wcp.idx` whether or not it carries data, which is what lets a
+// is listed in `snapshot.idx` whether or not it carries data, which is what lets a
 // consumer enumerate legal snapshot points without replaying (snapshot spec
 // §8) and what makes snapshot *density* a property of the data rather than of
 // the format.
@@ -131,7 +131,7 @@ func (b *Builder) Add(s *Snapshot) error {
 		return err
 	}
 	// `kind=0` file offsets are relative to the start of the whole
-	// `wcpentry.mem` stream, so rebase them onto what is already there.
+	// `snapshot.mem` stream, so rebase them onto what is already there.
 	base := uint64(len(b.mem))
 	for j := range regions {
 		if regions[j].Kind == KindFull {
@@ -182,7 +182,7 @@ func (b *Builder) SnapshotCount() int {
 	return n
 }
 
-// Streams renders the six `wcp.*` namespace images.
+// Streams renders the six `snap*` namespace images.
 func (b *Builder) Streams() map[string][]byte {
 	return map[string][]byte{
 		NamespaceIndex:     encodeIndex(b.records),
@@ -251,7 +251,7 @@ func Load(containerPath string, useSystemCache bool) (*Set, string, error) {
 	raw := map[string][]byte{}
 	for _, name := range NamespaceNames() {
 		if !c.Has(name) {
-			// `wcp.idx` is present but a sibling is not. Treat this the same
+			// `snapshot.idx` is present but a sibling is not. Treat this the same
 			// way as an unknown version: seeking is unavailable, the recording
 			// is not.
 			return nil, fmt.Sprintf(

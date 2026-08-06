@@ -513,7 +513,7 @@ func TestBuilderAttachesAdditiveNamespaces(t *testing.T) {
 	}
 }
 
-// TestLoadOnAContainerWithoutSnapshotsIsNotAnError: a `.ct` with no `wcp.*`
+// TestLoadOnAContainerWithoutSnapshotsIsNotAnError: a `.ct` with no `snap*`
 // namespaces is a complete, valid recording (snapshot spec §6).
 func TestLoadOnAContainerWithoutSnapshotsIsNotAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.ct")

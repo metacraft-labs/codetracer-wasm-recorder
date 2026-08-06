@@ -17,8 +17,8 @@ import (
 func TestBase40RoundTrip(t *testing.T) {
 	for _, name := range []string{
 		"meta.dat", "steps.dat", "threads.ns", "syncord.log", "linehits.tc",
-		"memwrites.tc", "wcp.idx", "wcpentry.lay", "wcpentry.mem", "wcppages.ns",
-		"wcp.glob", "wcp.tab", "a", "z-9./",
+		"memwrites.tc", "snapshot.idx", "snapshot.lay", "snapshot.mem", "snappages.ns",
+		"snapglob.dat", "snaptab.dat", "a", "z-9./",
 	} {
 		enc, err := EncodeName(name)
 		if err != nil {
@@ -31,8 +31,11 @@ func TestBase40RoundTrip(t *testing.T) {
 }
 
 func TestBase40RejectsOverlongAndInvalidNames(t *testing.T) {
-	// 13 characters — one past what 40^12 < 2^64 permits. This is exactly the
-	// constraint that forces `wcp.entry.lay` to be spelled `wcpentry.lay`.
+	// 13 characters — one past what 40^12 < 2^64 permits. `wcp.entry.lay` is
+	// the name that actually hit this ceiling: an early revision of snapshot
+	// spec §6 mirrored MCR's twelve-character `cp.entry.lay` with a `w` prefix.
+	// It is why the snapshot streams have short names at all; today they are
+	// `snapshot.lay` / `snapshot.mem`, twelve exactly.
 	if _, err := EncodeName("wcp.entry.lay"); err == nil {
 		t.Error("a 13-character name was accepted; base40 packs at most 12")
 	}
@@ -66,7 +69,7 @@ func deterministicBytes(seed int64, n int) []byte {
 // straddle each structural transition of `ctfs-container.md` §4: the
 // small-file optimisation (`Size <= BlockSize`, `MapBlock` IS the data block),
 // the level-1 mapping block (up to 511 data blocks), and the level-2 hierarchy
-// beyond it. A snapshot's `wcpentry.mem` routinely lands in the last of those.
+// beyond it. A snapshot's `snapshot.mem` routinely lands in the last of those.
 func TestRoundTripAcrossEveryMappingLevel(t *testing.T) {
 	const blockSize = 4096
 	const usable = blockSize/8 - 1 // 511
@@ -148,8 +151,8 @@ func TestAddFilesIsAdditive(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	if err := added.AddFiles(map[string][]byte{
-		"wcp.idx":      deterministicBytes(9, 5000),
-		"wcpentry.lay": deterministicBytes(10, 1000),
+		"snapshot.idx": deterministicBytes(9, 5000),
+		"snapshot.lay": deterministicBytes(10, 1000),
 	}); err != nil {
 		t.Fatalf("AddFiles(snapshots): %v", err)
 	}
@@ -167,7 +170,7 @@ func TestAddFilesIsAdditive(t *testing.T) {
 			t.Errorf("%q changed when snapshot streams were appended", name)
 		}
 	}
-	if !reopened.Has("wcp.idx") || !reopened.Has("wcpentry.lay") {
+	if !reopened.Has("snapshot.idx") || !reopened.Has("snapshot.lay") {
 		t.Errorf("appended streams are missing; names are %v", reopened.Names())
 	}
 }
@@ -177,14 +180,14 @@ func TestAddFilesIsAdditive(t *testing.T) {
 // failure the CAS design forbids.
 func TestAddFilesRefusesToOverwrite(t *testing.T) {
 	c, path := newContainer(t)
-	if err := c.AddFiles(map[string][]byte{"wcp.idx": []byte("first")}); err != nil {
+	if err := c.AddFiles(map[string][]byte{"snapshot.idx": []byte("first")}); err != nil {
 		t.Fatalf("AddFiles: %v", err)
 	}
 	reopened, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := reopened.AddFiles(map[string][]byte{"wcp.idx": []byte("second")}); err == nil {
+	if err := reopened.AddFiles(map[string][]byte{"snapshot.idx": []byte("second")}); err == nil {
 		t.Fatal("overwriting an existing internal file was allowed")
 	}
 	// And the original content is intact.
@@ -192,12 +195,12 @@ func TestAddFilesRefusesToOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	got, err := again.ReadFile("wcp.idx")
+	got, err := again.ReadFile("snapshot.idx")
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if string(got) != "first" {
-		t.Errorf("wcp.idx = %q after the refused overwrite", got)
+		t.Errorf("snapshot.idx = %q after the refused overwrite", got)
 	}
 }
 

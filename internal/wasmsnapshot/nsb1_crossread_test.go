@@ -9,7 +9,7 @@ import (
 	"github.com/tetratelabs/wazero/internal/xxh3"
 )
 
-// `wcppages.ns` is a real `NSB1` namespace B-tree, and this file is what makes
+// `snappages.ns` is a real `NSB1` namespace B-tree, and this file is what makes
 // that claim checkable rather than asserted.
 //
 // A round-trip test through `encodePageStore` / `decodePageStore` cannot catch
@@ -195,7 +195,7 @@ func (t *nimCowBTree) nimLookup(key uint64) ([]byte, error) {
 
 // TestTheProducersTraversalFindsEveryPageInTheStore is the deliverable: an
 // independent reader, following the producer's own algorithm, can look up
-// every page of a `wcppages.ns` by its CAS spec §5.4 truncated key and get the
+// every page of a `snappages.ns` by its CAS spec §5.4 truncated key and get the
 // right bytes back.
 //
 // 400 distinct pages force a multi-level tree — Leaf Type B holds 170 keys per
@@ -291,7 +291,7 @@ func TestTheProducersTraversalFindsEveryPageInTheStore(t *testing.T) {
 // TestTheProducersTraversalReadsADeepBulkLoadedTree exercises the interior
 // levels the page store itself cannot reach.
 //
-// A `wcppages.ns` deep enough to have three levels would need 29 071 keys and
+// A `snappages.ns` deep enough to have three levels would need 29 071 keys and
 // therefore 1.9 GiB of 64 KiB pages, so the tree shape is exercised here at
 // the `nsb1.go` layer instead, over synthetic descriptors. Non-contiguous keys
 // (`i*7 + 3`) keep the separators from coinciding with a positional index, so
@@ -381,6 +381,57 @@ func TestAnUnknownPageStoreVersionIsADiagnostic(t *testing.T) {
 	// carried beside the format, not inside it.
 	if _, err := nimLoadCowBTree(raw, nimCltTypeB); err != nil {
 		t.Errorf("the producer's reader rejected a version-bumped stream: %v", err)
+	}
+}
+
+// TestTheStreamMagicsAreTheDocumentedBytes pins `SNPI` and `SNPV` to their
+// literal on-the-wire spelling.
+//
+// Nothing else can. Both magics are written and checked through the same
+// package-level variable, so every round-trip, version and traversal test in
+// this repository passes unchanged if the four bytes are altered together —
+// which is exactly what happened when the streams were renamed out of the old
+// `wcp` family: the whole rename went green without one assertion touching the
+// bytes. A magic is a wire constant, and a wire constant that only agrees with
+// itself is not pinned at all.
+//
+// The `NSB1` case is different and is included for contrast: it is already
+// held from outside, by the production Nim `loadCowBTree` in
+// `nsb1_nim_crossread_test.go`, which validates that magic itself.
+func TestTheStreamMagicsAreTheDocumentedBytes(t *testing.T) {
+	// `snapshot.idx` leads with `SNPI`.
+	idx := encodeIndex([]IndexRecord{{Ordinal: 0}})
+	if got := string(idx[0:4]); got != "SNPI" {
+		t.Errorf("%s leads with %q, want %q", NamespaceIndex, got, "SNPI")
+	}
+
+	// `snappages.ns` leads with `NSB1` and carries `SNPV` at byte 64.
+	c := NewPerTraceCache()
+	p := page(1)
+	if err := c.Insert(HashPage(p), p); err != nil {
+		t.Fatal(err)
+	}
+	raw := encodePageStore(c)
+	if got := string(raw[0:4]); got != "NSB1" {
+		t.Errorf("%s leads with %q, want %q", NamespacePages, got, "NSB1")
+	}
+	if got := string(raw[pageStoreSidecarOffset : pageStoreSidecarOffset+4]); got != "SNPV" {
+		t.Errorf("%s carries %q at byte %d, want %q",
+			NamespacePages, got, pageStoreSidecarOffset, "SNPV")
+	}
+
+	// The index magic must never be the namespace magic. `snapshot.idx` is a
+	// flat record array, so a CTFS namespace reader pointed at it has to refuse
+	// at the magic check rather than mis-walk it as a B-tree — the property the
+	// page store's historical `WPG1` was chosen for while it was a flat table.
+	if indexMagic == nsMagic {
+		t.Errorf("%s and a namespace share the magic %q; a namespace reader "+
+			"would mis-walk the index instead of refusing it",
+			NamespaceIndex, string(indexMagic[:]))
+	}
+	if _, err := nimLoadCowBTree(idx, nimCltTypeB); err == nil {
+		t.Errorf("the producer's namespace reader accepted %s, which is not a "+
+			"namespace; it must refuse at the magic check", NamespaceIndex)
 	}
 }
 

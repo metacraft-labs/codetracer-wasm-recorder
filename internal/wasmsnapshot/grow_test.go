@@ -16,7 +16,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/internal/ctfs"
+	"github.com/tetratelabs/wazero/internal/ctfsffi"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 	"github.com/tetratelabs/wazero/internal/wasmsnapshot"
 )
@@ -72,9 +72,8 @@ func TestSnapshotOfAGrownMemoryRestoresIntoAFreshInstance(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, b.Add(snap))
 	path := filepath.Join(t.TempDir(), "grown.ct")
-	c, err := ctfs.Create(path, 4096)
-	require.NoError(t, err)
-	require.NoError(t, c.AddFiles(map[string][]byte{"meta.dat": []byte("x")}))
+	require.NoError(t, ctfsffi.Create(path, 4096))
+	require.NoError(t, ctfsffi.Append(path, map[string][]byte{"meta.dat": []byte("x")}))
 	require.NoError(t, b.AttachTo(path))
 
 	set, diag, err := wasmsnapshot.Load(path, false)

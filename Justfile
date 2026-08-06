@@ -31,7 +31,7 @@ build-all-variants: build build-snapshots
 # Run the test suite against the snapshot-deriving build.  The open build's
 # suite is `just test`; both must pass, and CI should exercise both.
 test-snapshots:
-    go test -tags ctsnapshots ./cmd/wazero/... ./internal/wasmsnapshot/... ./internal/boundarylog/... ./internal/ctfs/... ./internal/xxh3/...
+    go test -tags ctsnapshots ./cmd/wazero/... ./internal/wasmsnapshot/... ./internal/boundarylog/... ./internal/ctfs/... ./internal/ctfsffi/... ./internal/xxh3/...
 
 # Both build variants, tested.
 test-all-variants: test test-snapshots

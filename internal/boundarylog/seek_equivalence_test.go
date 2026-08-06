@@ -23,6 +23,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/internal/boundarylog"
 	"github.com/tetratelabs/wazero/internal/ctfs"
+	"github.com/tetratelabs/wazero/internal/ctfsffi"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/wasmsnapshot"
@@ -611,9 +612,7 @@ func TestUnknownSnapshotVersionDegradesToLinearReplay(t *testing.T) {
 	// something this build does not know before attaching them. Everything
 	// else about the container is untouched.
 	future := futureVersionStreams(t, ctDir)
-	c, err := ctfs.Open(container)
-	require.NoError(t, err)
-	require.NoError(t, c.AddFiles(future))
+	require.NoError(t, ctfsffi.Append(container, future))
 
 	set, diag, err := wasmsnapshot.Load(container, false)
 	require.NoError(t, err) // NOT an error: that is the whole point.

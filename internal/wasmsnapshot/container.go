@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tetratelabs/wazero/internal/ctfs"
+	"github.com/tetratelabs/wazero/internal/ctfsffi"
 )
 
 // Builder accumulates snapshots and serialises them into the six `snap*`
@@ -199,12 +200,16 @@ func (b *Builder) Streams() map[string][]byte {
 // This is snapshot spec §6 in one call: the streams go **inside** the trace
 // container, as additive namespaces. Nothing is written outside it — that is
 // what `verify_snapshots_are_not_sidecar_files` checks.
+//
+// The append happens in the canonical CTFS writer, through the FFI
+// (`internal/ctfsffi`). It used to happen in a second implementation of the
+// container layout carried here, which drifted from the canonical one on the
+// multi-level block mapping and silently mis-wrote every stream past ~2 MB —
+// `snapshot.mem` and `snappages.ns` cross that threshold for any real memory,
+// so this call site is precisely where that bug landed. See the header of
+// `internal/ctfs`.
 func (b *Builder) AttachTo(containerPath string) error {
-	c, err := ctfs.Open(containerPath)
-	if err != nil {
-		return err
-	}
-	return c.AddFiles(b.Streams())
+	return ctfsffi.Append(containerPath, b.Streams())
 }
 
 // ---------------------------------------------------------------------------

@@ -33,7 +33,12 @@
 //
 //  3. **Snapshots live inside the `.ct` container** as additive CTFS
 //     namespaces (snapshot spec §6), never as sidecar files. `container.go`
-//     appends them through `internal/ctfs`.
+//     appends them through `internal/ctfsffi`, i.e. through the canonical CTFS
+//     writer in `codetracer-trace-format-nim`; it used to append through a
+//     second implementation of the container layout carried here, which
+//     drifted on the multi-level block mapping and silently mis-wrote every
+//     stream past ~2 MB. `internal/ctfs` survives as the independent *reader*
+//     that adjudicates the writer.
 //
 //  4. **A `.ct` without the snapshot namespaces is a complete recording, and
 //     an unreadable snapshot version disables seeking and nothing else**

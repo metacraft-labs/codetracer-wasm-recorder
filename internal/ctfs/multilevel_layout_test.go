@@ -3,7 +3,6 @@ package ctfs
 import (
 	"bytes"
 	"encoding/binary"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -11,15 +10,21 @@ import (
 // The multi-level block-mapping layout is the one part of this package that
 // cannot be validated by round-tripping against itself: a self-consistent but
 // wrong hierarchy reads back perfectly here and is silently mis-read by every
-// other CTFS implementation. Both halves below therefore check the layout
-// against the *producer's* definition rather than against this package's.
+// other CTFS implementation. This file therefore checks the reader against the
+// *producer's* definition rather than against this package's.
 //
 // NO MOCKS. `testdata/nim-multilevel.ct` was written by the canonical Nim
 // writer (`codetracer-trace-format-nim`, `codetracer_ctfs/container.nim` +
-// `block_mapping.nim`) and is committed verbatim, so the reader half needs no
-// Nim toolchain at test time. The writer half is checked by an independent
-// transcription of that writer's own `lookupDataBlock`, so a change to this
-// package's resolver cannot make the writer test pass by agreeing with it.
+// `block_mapping.nim`) and is committed verbatim, so this test needs no Nim
+// toolchain and no cgo at test time — which is exactly what makes it the
+// dependency-free anchor of the reader.
+//
+// This file used to carry a second test pinning this package's own *writer*
+// against `nimLookupDataBlock`. That writer is gone (M38b: the canonical one
+// gained an append entry point, see `internal/ctfsffi`), and the obligation
+// moved with it to `ffi_crossread_test.go`, which drives `nimLookupDataBlock`
+// over a container the FFI wrote. The transcription stays here because both
+// files use it and because it belongs next to the fixture it explains.
 
 const (
 	// The fixture uses a 512-byte block, so `usable` is 127 and a 130-block
@@ -61,55 +66,6 @@ func TestReadsAMultiLevelFileWrittenByTheNimWriter(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%q round-tripped %d bytes, want %d (equal prefix %d, block %d)",
 			fixtureName, len(got), len(want), commonPrefix(got, want),
-			commonPrefix(got, want)/fixtureBlockSize)
-	}
-}
-
-// TestNimWriterResolverReadsWhatThisPackageWrote pins the *writer*.
-//
-// `nimLookupDataBlock` below is a direct transcription of
-// `codetracer-trace-format-nim`'s `lookupDataBlock` / `navigateAndLookup`. It
-// shares no code with this package, so a container this package writes has to
-// satisfy the producer's algorithm, not its own.
-func TestNimWriterResolverReadsWhatThisPackageWrote(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "written.ct")
-	c, err := Create(path, fixtureBlockSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := fixturePattern()
-	if err := c.AddFiles(map[string][]byte{fixtureName: want}); err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry, err := reopened.find(fixtureName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.MapBlock == 0 {
-		t.Fatal("the entry has no mapping block")
-	}
-
-	got := make([]byte, 0, len(want))
-	for i := 0; i < fixtureBlockCount; i++ {
-		blk := nimLookupDataBlock(t, raw, fixtureBlockSize, entry.MapBlock, uint64(i))
-		if blk == 0 {
-			t.Fatalf("the producer's resolver found no data block for file block %d", i)
-		}
-		off := int(blk) * fixtureBlockSize
-		got = append(got, raw[off:off+fixtureBlockSize]...)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("the producer's resolver read %d wrong byte(s), first at %d (block %d)",
-			len(want)-commonPrefix(got, want), commonPrefix(got, want),
 			commonPrefix(got, want)/fixtureBlockSize)
 	}
 }

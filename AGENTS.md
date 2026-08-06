@@ -44,9 +44,13 @@ produce Step/Call/Function/Event records that CodeTracer loads for time-travel d
   page-granular content addressing, and the `snap*` CTFS namespaces that let a
   sub-range of a recording be materialised without replaying everything before
   it. See "Replay snapshots" below.
-* `internal/ctfs/` — Minimal reader/appender for the `.ct` container format,
-  used to put the snapshot namespaces **inside** the trace container rather
-  than beside it.
+* `internal/ctfs/` — Minimal **reader** for the `.ct` container format. It
+  used to write too; that writer drifted from the canonical one and is gone
+  (M38b). It survives as the independent reader that adjudicates the writer.
+* `internal/ctfsffi/` — cgo binding to the canonical CTFS writer's post-hoc
+  container entry points (`ct_container_create` /
+  `ct_container_append_files`), which is how the snapshot namespaces get
+  **inside** the trace container rather than beside it.
 * `internal/xxh3/` — XXH3-128, pinned against the reference C implementation.
   The content-addressing hash the memory-page CAS is specified to use.
 * `internal/engine/interpreter/interpreter.go` — Core interpreter loop with DWARF-based
@@ -343,7 +347,7 @@ Four things are load-bearing:
   `(module + boundary log)` and may be discarded and re-derived at a different
   density (`--snapshot-every`) without re-recording.
 * **They live inside the `.ct`.** The six `snap*` namespaces are appended to
-  the container by `internal/ctfs`, never written beside it. A `.ct` without
+  the container by `internal/ctfsffi`, never written beside it. A `.ct` without
   them is a complete, valid recording.
 * **An unrecognised snapshot version disables seeking and nothing else.** This
   is a deliberate narrowing of `MCR-Memory-Page-CAS.md` §10, where an unknown
@@ -407,21 +411,31 @@ through `ct-print`, an independent CTFS implementation).
   internal file it writes, including 3-byte ones, gets a mapping block. The
   two conventions are indistinguishable from the bytes, so `internal/ctfs`
   follows the producer rather than the prose. See `dataBlocks` there.
-* **The mapping levels are cumulative, and the container spec does not say
-  so.** The level-1 root holds data blocks `[0, usable)`; the level-2 block
-  reached through its chain slot holds `[usable, usable + usable²)` with the
-  index rebased, and so on. The other reading — level 2 re-parenting the root,
-  so its slot 0 covers blocks 0..usable-1 again — is equally compatible with
+* **The mapping levels are cumulative, and this is now normative.** The
+  level-1 root holds data blocks `[0, usable)`; the level-2 block reached
+  through its chain slot holds `[usable, usable + usable²)` with the index
+  rebased, and so on. The other reading — level 2 re-parenting the root, so
+  its slot 0 covers blocks 0..usable-1 again — was equally compatible with
   `CTFS-Binary-Format.md` §4's diagram and is what `internal/ctfs` originally
   implemented. It is wrong: `ct-print`, `ct-space` and the db-backend all
   follow the producer, and a container written the other way is **silently
   mis-read past ~2 MB** (511 data blocks at a 4096-byte block). Both
   `snappages.ns` and `snapshot.mem` cross that threshold for any real memory.
-  `internal/ctfs/multilevel_layout_test.go` pins both directions — a committed
-  Nim-written fixture for the reader, a transcription of the producer's own
-  `lookupDataBlock` for the writer. **A round-trip test through this package
-  alone cannot catch a mistake here**, because it writes and reads with the
-  same convention; that is why those two tests exist.
+  §4 now says so in as many words, and §5d specifies appending to a closed
+  container — which is what let this repo stop carrying a second writer at all
+  (M38b): `internal/ctfsffi` calls the canonical one.
+  What is pinned, and how: `internal/ctfs/multilevel_layout_test.go` holds the
+  **reader** to a committed Nim-written fixture (no toolchain, no cgo), and
+  `internal/ctfs/ffi_crossread_test.go` holds the canonical **writer's append
+  path** three ways over a 4.5 MB internal file — this package's reader, a
+  literal transcription of the producer's `lookupDataBlock`, and the
+  production Nim reader run out of the sibling checkout. **A round-trip test
+  through one implementation cannot catch a mistake here**, because it writes
+  and reads with the same convention; that is why all four exist. All four
+  were confirmed to fail under a non-cumulative writer, and the 4.5 MB size
+  is not arbitrary — a mutation that mis-divides the level-2 descent is
+  invisible below 1022 data blocks, because everything smaller lands in
+  level-2 slot 0 either way.
 * **`snappages.ns` is a real `NSB1` namespace B-tree — it did not used to be.**
   It carried a `WPG1` flat sorted table, because `CTFS-Binary-Format.md` §10
   specified the 61-byte namespace header and the leaf entry descriptors but

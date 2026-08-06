@@ -13,6 +13,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/internal/boundarylog"
 	"github.com/tetratelabs/wazero/internal/ctfs"
+	"github.com/tetratelabs/wazero/internal/ctfsffi"
 	"github.com/tetratelabs/wazero/internal/wasm"
 	"github.com/tetratelabs/wazero/internal/xxh3"
 )
@@ -435,12 +436,11 @@ func TestUnknownVersionIsADiagnosticNotAnError(t *testing.T) {
 
 func TestBuilderAttachesAdditiveNamespaces(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.ct")
-	c, err := ctfs.Create(path, 4096)
-	if err != nil {
+	if err := ctfsffi.Create(path, 4096); err != nil {
 		t.Fatal(err)
 	}
 	original := map[string][]byte{"meta.dat": []byte("hello"), "steps.dat": bytes.Repeat([]byte{7}, 9000)}
-	if err := c.AddFiles(original); err != nil {
+	if err := ctfsffi.Append(path, original); err != nil {
 		t.Fatal(err)
 	}
 
@@ -517,11 +517,10 @@ func TestBuilderAttachesAdditiveNamespaces(t *testing.T) {
 // namespaces is a complete, valid recording (snapshot spec §6).
 func TestLoadOnAContainerWithoutSnapshotsIsNotAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.ct")
-	c, err := ctfs.Create(path, 4096)
-	if err != nil {
+	if err := ctfsffi.Create(path, 4096); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AddFiles(map[string][]byte{"meta.dat": []byte("x")}); err != nil {
+	if err := ctfsffi.Append(path, map[string][]byte{"meta.dat": []byte("x")}); err != nil {
 		t.Fatal(err)
 	}
 	set, diag, err := Load(path, false)

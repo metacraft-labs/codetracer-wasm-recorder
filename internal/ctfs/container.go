@@ -1,5 +1,5 @@
-// Package ctfs is a minimal reader/appender for the CTFS container format —
-// the single-file `.ct` bundle CodeTracer traces are stored in.
+// Package ctfs is a minimal, self-contained **reader** for the CTFS container
+// format — the single-file `.ct` bundle CodeTracer traces are stored in.
 //
 // The format is specified by
 // `codetracer-trace-format-spec/ctfs-container.md` and (identically)
@@ -7,30 +7,46 @@
 // implements the subset the WASM replay snapshotter needs:
 //
 //   - open an existing container and enumerate its internal files;
-//   - read an internal file's raw bytes;
-//   - **append** a new internal file to a container that is not being written
-//     concurrently.
+//   - read an internal file's raw bytes.
 //
-// # Why this exists
+// # It used to write, and that is exactly why it no longer does
 //
 // `WASM-Replay-Snapshots-And-Slices.md` §6 is emphatic that snapshots are
-// "**not** sidecar files. They live inside the trace container". The `.ct`
-// itself is produced by `codetracer-trace-format-nim`'s CTFS writer through
-// the C FFI in `tracewriter/` (see `ctfs_writer.go`), and that FFI exposes no
-// "add an internal file" entry point. Rather than break the §6 rule by
-// writing snapshot data next to the container, this package appends the
-// `snap*` streams into the container directly, using the documented on-disk
-// layout.
+// "**not** sidecar files. They live inside the trace container" — but the
+// `.ct` is produced by `codetracer-trace-format-nim`'s CTFS writer through
+// the C FFI in `tracewriter/`, and that container is already **closed** by
+// the time snapshots are attached. With no "add an internal file to a closed
+// container" entry point in the FFI, this package grew an appender: enough of
+// the on-disk layout re-implemented to write into a sealed container.
+//
+// It drifted. The two writers disagreed about whether the multi-level block
+// mapping of §4 is cumulative; containers written here were silently mis-read
+// by `ct-print`, `ct-space` and the db-backend past ~511 data blocks (~2 MB at
+// the default 4096-byte block) — 364 KB of wrong bytes, no error raised. The
+// spec was ambiguous, both readings were defensible, and this package's own
+// round-trip test could not see it because it wrote and read with the same
+// convention.
+//
+// M38b closed the gap at the source: `ct_container_append_files` in the
+// canonical writer, bound by `internal/ctfsffi`. The writer half of this
+// package is gone with it.
+//
+// # Why the reader stays
+//
+// Because a round trip through one implementation proves nothing, which is
+// the whole lesson above. An FFI-written container is adjudicated by a reader
+// that shares no code with the writer — a different implementation in a
+// different language — and this is that reader. Deleting it would leave the
+// canonical writer's newest and least-exercised path checked only by the
+// implementation that produced the bytes.
+//
+// It is pure Go and depends on no toolchain, which is what lets
+// `multilevel_layout_test.go` pin it against a committed Nim-written fixture
+// with nothing installed.
 //
 // # Deliberate limits
 //
-//   - **Append-only creation of whole files.** A stream is written in one
-//     call, complete. That matches how the snapshotter produces its streams
-//     (they are finished before the container is touched) and avoids
-//     re-implementing the incremental writer protocol of §6.
-//   - **Single writer, container quiescent.** The container must not be open
-//     for writing elsewhere. The trace writer has already closed it by the
-//     time snapshots are attached.
+//   - **Read-only.** Nothing here mutates a container. Use `internal/ctfsffi`.
 //   - **No namespace B-tree in this package.** The `NSB1` namespace machinery
 //     of `CTFS-Binary-Format.md` §10 is not implemented here: this package
 //     stores and retrieves whole internal files, and indexes nothing by key.
@@ -42,7 +58,7 @@
 //     package as opaque bytes, exactly like every other stream.
 //   - **No compression.** The container layer is compression-agnostic
 //     (`ctfs-container.md` §1: "Compression is not in the header"); the
-//     streams written here are stored raw and self-describe as such.
+//     streams read here are stored raw and self-describe as such.
 package ctfs
 
 import (
@@ -72,8 +88,10 @@ type FileEntry struct {
 	Size     uint64
 	MapBlock uint64
 	Name     uint64
-	// slot is the entry's index in the array, needed to write it back.
-	slot int
+	// Slot is the entry's index in the block-0 array. Nothing here writes an
+	// entry back, but a diagnostic that says *which* slot is malformed is the
+	// difference between a usable error and "the container is broken".
+	Slot int
 }
 
 // Container is an opened `.ct` file.
@@ -162,43 +180,6 @@ func Open(path string) (*Container, error) {
 	return c, nil
 }
 
-// Create writes a new, empty CTFS container: a single block 0 carrying the
-// header and an all-zero (i.e. all-free) file-entry array.
-//
-// The recorder's own traces are produced by the Nim CTFS writer through the
-// `tracewriter` FFI, not by this function. It exists for the container-level
-// tests — which need containers whose files are large enough to exercise the
-// multi-level mapping hierarchy, something a small demo trace never does —
-// and for the slice writer, which must open a fresh container per slice.
-//
-// `maxShards = 0` (no sharding) and `maxRootEntries = 0` (auto-fill block 0)
-// are used, giving `(blockSize - 16) / 24` entry slots.
-func Create(path string, blockSize uint64) (*Container, error) {
-	if blockSize < 512 || blockSize%8 != 0 {
-		return nil, fmt.Errorf("ctfs: unusable block size %d", blockSize)
-	}
-	block0 := make([]byte, blockSize)
-	copy(block0, magic[:])
-	block0[offsetVersion] = 4
-	block0[offsetEncrypt] = 0
-	block0[offsetShards] = 0
-	binary.LittleEndian.PutUint32(block0[offsetBlockSz:], uint32(blockSize))
-	binary.LittleEndian.PutUint32(block0[offsetMaxRootE:], 0)
-	if err := os.WriteFile(path, block0, 0o644); err != nil {
-		return nil, fmt.Errorf("ctfs: creating container %s: %w", path, err)
-	}
-	return &Container{
-		path:          path,
-		version:       4,
-		blockSize:     blockSize,
-		block0:        block0,
-		entryBase:     headerSize,
-		entryCount:    (int(blockSize) - headerSize) / fileEntrySize,
-		nextFreeBlock: 1,
-		fileSize:      blockSize,
-	}, nil
-}
-
 // locateEntryArray finds the byte offset of the FileEntry array in block 0.
 //
 // `ctfs-container.md` §1 places a free-list root area of
@@ -285,15 +266,8 @@ func (c *Container) entryAt(i int) FileEntry {
 		Size:     binary.LittleEndian.Uint64(c.block0[off:]),
 		MapBlock: binary.LittleEndian.Uint64(c.block0[off+8:]),
 		Name:     binary.LittleEndian.Uint64(c.block0[off+16:]),
-		slot:     i,
+		Slot:     i,
 	}
-}
-
-func (c *Container) putEntry(e FileEntry) {
-	off := c.entryBase + e.slot*fileEntrySize
-	binary.LittleEndian.PutUint64(c.block0[off:], e.Size)
-	binary.LittleEndian.PutUint64(c.block0[off+8:], e.MapBlock)
-	binary.LittleEndian.PutUint64(c.block0[off+16:], e.Name)
 }
 
 // BlockSize reports the container's block size in bytes.
@@ -369,8 +343,8 @@ func (c *Container) readEntry(f *os.File, e FileEntry) ([]byte, error) {
 		}
 		if _, err := f.ReadAt(out[start:end], int64(blk*c.blockSize)); err != nil {
 			return nil, fmt.Errorf(
-				"ctfs: reading %q block %d (container block %d): %w",
-				DecodeName(e.Name), i, blk, err)
+				"ctfs: reading %q (entry slot %d) block %d (container block %d): %w",
+				DecodeName(e.Name), e.Slot, i, blk, err)
 		}
 	}
 	return out, nil
@@ -395,14 +369,14 @@ func levelCapacity(usable uint64, level int) uint64 {
 //
 // # Why the levels are *cumulative*, and why that is not a free choice
 //
-// `ctfs-container.md` §4 describes the hierarchy but does not pin down how a
-// block index divides between the levels, and its diagram admits two readings:
-// either the level-2 block re-parents the level-1 root (so its slot 0 covers
-// data blocks 0..usable-1 again), or the level-2 block covers only the blocks
-// *past* what the root already holds. The two produce different bytes for any
-// file larger than `usable` data blocks — about 2 MiB at the default 4096-byte
-// block size — and a reader using the wrong one silently returns the wrong
-// data blocks rather than failing.
+// `ctfs-container.md` §4's diagram once admitted two readings: either the
+// level-2 block re-parents the level-1 root (so its slot 0 covers data blocks
+// 0..usable-1 again), or the level-2 block covers only the blocks *past* what
+// the root already holds. The two produce different bytes for any file larger
+// than `usable` data blocks — about 2 MiB at the default 4096-byte block size
+// — and a reader using the wrong one silently returns the wrong data blocks
+// rather than failing. `CTFS-Binary-Format.md` §4 now settles it normatively,
+// in favour of the second reading; this comment records why it had to.
 //
 // The producer settles it. `codetracer-trace-format-nim`'s
 // `block_mapping.nim` (`insertDataBlock` / `lookupDataBlock`, mirroring the
@@ -413,10 +387,12 @@ func levelCapacity(usable uint64, level int) uint64 {
 //
 // — so the level-1 root holds data blocks `[0, usable)`, the level-2 block
 // holds `[usable, usable + usable^2)` with the index rebased, and so on. This
-// package implements that, byte for byte, in both directions. The alternative
-// reading is not merely a different-but-valid layout: a container written that
-// way is *mis-read* by `ct-print`, `ct-space` and the db-backend, which is the
-// wrong-bytes failure the snapshot design must not have.
+// package transcribes that walk independently — same algorithm, no shared
+// code — which is what makes it usable as the adjudicator of an FFI-written
+// container in `ffi_crossread_test.go`. The alternative reading is not merely
+// a different-but-valid layout: a container written that way is *mis-read* by
+// `ct-print`, `ct-space` and the db-backend, which is the wrong-bytes failure
+// the snapshot design must not have.
 //
 // # The small-file optimisation is deliberately not implemented
 //
@@ -435,7 +411,7 @@ func levelCapacity(usable uint64, level int) uint64 {
 // returning a block number where a reader asked for content.
 //
 // So this package follows the producer, not the prose: it always resolves
-// through a mapping block, and always writes one.
+// through a mapping block.
 func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 	block func(uint64) ([]byte, error),
 ) (uint64, error) {
@@ -538,223 +514,4 @@ func (c *Container) readBlock(f *os.File, blk uint64) ([]byte, error) {
 		return nil, fmt.Errorf("ctfs: reading block %d of %s: %w", blk, c.path, err)
 	}
 	return buf, nil
-}
-
-// AddFiles appends new internal files to the container in one pass.
-//
-// Every name must be absent — this package never overwrites, because CTFS is
-// append-only (`ctfs-container.md` "Non-Goals": no file deletion or
-// truncation) and a stale-but-present stream is exactly the "returns wrong
-// bytes" failure the snapshot design must not have. Re-attaching snapshots to
-// a container that already carries them is therefore an error the caller must
-// resolve by re-materialising the trace.
-//
-// The write order follows the §6 writer protocol: all data and mapping blocks
-// are appended and flushed first, and block 0 — which is what makes them
-// reachable — is rewritten and flushed last. A crash mid-way therefore leaves
-// a container with some unreferenced trailing blocks, which is wasteful but
-// perfectly readable, rather than an entry pointing at absent data.
-func (c *Container) AddFiles(files map[string][]byte) error {
-	if len(files) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	encoded := make(map[string]uint64, len(names))
-	for _, name := range names {
-		v, err := EncodeName(name)
-		if err != nil {
-			return err
-		}
-		if c.Has(name) {
-			return fmt.Errorf(
-				"ctfs: %s already contains an internal file named %q; CTFS is "+
-					"append-only and this package will not overwrite it", c.path, name)
-		}
-		encoded[name] = v
-	}
-
-	free := c.freeSlots()
-	if len(free) < len(names) {
-		return fmt.Errorf(
-			"ctfs: %s has %d free file-entry slot(s) but %d new internal file(s) were "+
-				"requested; the container's entry array is full", c.path, len(free), len(names))
-	}
-
-	f, err := os.OpenFile(c.path, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("ctfs: opening container for append: %w", err)
-	}
-	defer f.Close()
-
-	// Snapshot the allocator and block 0 so a failure part-way leaves this
-	// Container object consistent with the (unmodified) block 0 on disk.
-	savedNext := c.nextFreeBlock
-	savedBlock0 := append([]byte(nil), c.block0...)
-	restore := func() {
-		c.nextFreeBlock = savedNext
-		c.block0 = savedBlock0
-	}
-
-	newEntries := make([]FileEntry, 0, len(names))
-	for i, name := range names {
-		mapBlock, err := c.writeStream(f, files[name])
-		if err != nil {
-			restore()
-			return fmt.Errorf("ctfs: writing internal file %q: %w", name, err)
-		}
-		newEntries = append(newEntries, FileEntry{
-			Size:     uint64(len(files[name])),
-			MapBlock: mapBlock,
-			Name:     encoded[name],
-			slot:     free[i],
-		})
-	}
-
-	// Data first, durable, then the entries that make it reachable.
-	if err := f.Sync(); err != nil {
-		restore()
-		return fmt.Errorf("ctfs: flushing appended blocks: %w", err)
-	}
-	for _, e := range newEntries {
-		c.putEntry(e)
-	}
-	if _, err := f.WriteAt(c.block0, 0); err != nil {
-		restore()
-		return fmt.Errorf("ctfs: rewriting block 0: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		restore()
-		return fmt.Errorf("ctfs: flushing block 0: %w", err)
-	}
-	return nil
-}
-
-func (c *Container) freeSlots() []int {
-	var out []int
-	for i := 0; i < c.entryCount; i++ {
-		e := c.entryAt(i)
-		if e.Size == 0 && e.MapBlock == 0 && e.Name == 0 {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-// allocBlock claims the next block and materialises it on disk, so the file
-// always stays a whole number of blocks (which is what lets `Open` recover
-// the allocator from the file length).
-func (c *Container) allocBlock(f *os.File, data []byte) (uint64, error) {
-	if uint64(len(data)) > c.blockSize {
-		return 0, fmt.Errorf("ctfs: internal error: %d bytes do not fit a block", len(data))
-	}
-	buf := make([]byte, c.blockSize)
-	copy(buf, data)
-	blk := c.nextFreeBlock
-	if _, err := f.WriteAt(buf, int64(blk*c.blockSize)); err != nil {
-		return 0, err
-	}
-	c.nextFreeBlock++
-	return blk, nil
-}
-
-// writeStream writes a complete internal file and returns the value for its
-// `FileEntry.MapBlock` — always a level-1 mapping block, never a data block.
-//
-// It is the exact inverse of `resolveDataBlock`, and deliberately mirrors the
-// producer's `insertDataBlock`: data block `i` goes into the level-1 root while
-// `i < usable`, and past that into a level-2 (then level-3, …) hierarchy
-// reached through the root's chain slot, with the index rebased by each
-// level's capacity as it ascends. Getting this wrong is not a cosmetic
-// difference — see `resolveDataBlock`.
-//
-// A zero-length file still gets a mapping block, because that is what the
-// producer's `addFile` does (it allocates one before the size is known) and
-// because at least one shipping tool, `ct-space`, mis-accounts an entry whose
-// `MapBlock` is 0.
-func (c *Container) writeStream(f *os.File, data []byte) (uint64, error) {
-	usable := c.usable()
-
-	// Mapping blocks are built in memory and flushed at the end: the writer
-	// revisits them as later data blocks arrive, and the block numbers must be
-	// claimed in allocation order regardless.
-	pending := map[uint64][]byte{}
-	newMapBlock := func() uint64 {
-		blk := c.nextFreeBlock
-		c.nextFreeBlock++
-		pending[blk] = make([]byte, c.blockSize)
-		return blk
-	}
-	readPtr := func(blk, i uint64) uint64 {
-		return binary.LittleEndian.Uint64(pending[blk][i*8:])
-	}
-	writePtr := func(blk, i, v uint64) {
-		binary.LittleEndian.PutUint64(pending[blk][i*8:], v)
-	}
-
-	root := newMapBlock()
-
-	// insert places one data-block pointer at `idx` within a level-`level`
-	// mapping block, allocating the intermediate blocks it passes through.
-	var insert func(node uint64, level int, idx, dataBlk uint64)
-	insert = func(node uint64, level int, idx, dataBlk uint64) {
-		if level == 1 {
-			writePtr(node, idx, dataBlk)
-			return
-		}
-		subCap := levelCapacity(usable, level-1)
-		entryIdx, subIdx := idx/subCap, idx%subCap
-		child := readPtr(node, entryIdx)
-		if child == 0 {
-			child = newMapBlock()
-			writePtr(node, entryIdx, child)
-		}
-		insert(child, level-1, subIdx, dataBlk)
-	}
-
-	blockIdx := uint64(0)
-	for off := 0; off < len(data); off += int(c.blockSize) {
-		end := off + int(c.blockSize)
-		if end > len(data) {
-			end = len(data)
-		}
-		dataBlk, err := c.allocBlock(f, data[off:end])
-		if err != nil {
-			return 0, err
-		}
-
-		idx, level, cur := blockIdx, 1, root
-		for {
-			capacity := levelCapacity(usable, level)
-			if idx < capacity {
-				break
-			}
-			idx -= capacity
-			level++
-			if level > maxMapLevels {
-				return 0, fmt.Errorf(
-					"ctfs: a %d-byte internal file exceeds the %d-level mapping limit",
-					len(data), maxMapLevels)
-			}
-			chain := readPtr(cur, usable)
-			if chain == 0 {
-				chain = newMapBlock()
-				writePtr(cur, usable, chain)
-			}
-			cur = chain
-		}
-		insert(cur, level, idx, dataBlk)
-		blockIdx++
-	}
-
-	for blk, buf := range pending {
-		if _, err := f.WriteAt(buf, int64(blk*c.blockSize)); err != nil {
-			return 0, err
-		}
-	}
-	return root, nil
 }

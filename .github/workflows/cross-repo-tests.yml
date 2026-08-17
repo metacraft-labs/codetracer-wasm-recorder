@@ -28,9 +28,9 @@ name: Cross-Repo Integration Tests
 
 on:
   pull_request:
-    branches: [wasm-tracing, main]
+    branches: [wasm-tracing, main, dev, stable]
   push:
-    branches: [wasm-tracing, main]
+    branches: [wasm-tracing, main, dev, stable]
 
   # Manual trigger with configurable codetracer revision.
   workflow_dispatch:

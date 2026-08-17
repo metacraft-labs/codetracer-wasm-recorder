@@ -17,9 +17,9 @@ name: CI
 
 on:
   push:
-    branches: [wasm-tracing, main]
+    branches: [wasm-tracing, main, dev, stable]
   pull_request:
-    branches: [wasm-tracing, main]
+    branches: [wasm-tracing, main, dev, stable]
 
 jobs:
   lint-and-test:

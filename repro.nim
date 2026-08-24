@@ -92,6 +92,22 @@ package codetracer_wasm_recorder:
     # inline in each command string.
     "sh"
 
+    # Chocolatey — `choco pack` / `choco push` in this repo's
+    # .github/workflows/publish-chocolatey.yml. Declared here rather than
+    # installed on the runner: a tool this repo needs is this repo's
+    # dependency, and leaving it to the machine means a developer and CI each
+    # get whatever their box happens to carry.
+    #
+    # BOTH halves below are load-bearing and they answer different questions.
+    # `platforms: [windows]` on the package (reprobuild's catalog) says where
+    # chocolatey CAN exist; this guard says whether THIS recipe needs it here.
+    # No package-side declaration can answer the second — which is why Nix
+    # keeps meta.platforms beside lib.optionals, and Spack requires() beside
+    # depends_on(when=). Do not delete the guard on the grounds that the
+    # package now declares its platform.
+    when defined(windows):
+      "chocolatey"
+
   # The primary shipping artefact. The on-disk binary is ``wazero`` (the
   # one documented exception to the ``codetracer-<lang>-recorder`` naming
   # pattern); a Nim identifier must be a valid ident so it is declared

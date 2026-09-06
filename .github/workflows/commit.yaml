@@ -1,13 +1,13 @@
 name: Test
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev, stable]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'
       - 'netlify.toml'
   push:
-    branches: [main]
+    branches: [main, dev, stable]
     paths-ignore:  # ignore docs as they are built with Netlify.
       - '**/*.md'
       - 'site/**'
@@ -99,8 +99,8 @@ jobs:
         if: runner.os == 'Linux'
         run: make coverage
 
-      - name: "Upload coverage report"  # only on main push and only once (not per OS)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os == 'Linux'
+      - name: "Upload coverage report"  # only on a mainline push and only once (not per OS)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && runner.os == 'Linux'
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         run: bash <(curl -s https://codecov.io/bash)

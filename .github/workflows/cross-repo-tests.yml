@@ -99,7 +99,7 @@ jobs:
         # "no override"; preserve that by only passing the input when it is
         # set to something other than 'main'. The repository_dispatch payload
         # (empty unless set) also overrides; empty => lock.
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}
@@ -161,7 +161,7 @@ jobs:
       - name: Mirror test logs to S3 (non-blocking)
         if: failure()
         continue-on-error: true
-        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@main
+        uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
           path: ../codetracer/target/
           prefix: cross-repo-test-logs/${{ github.run_id }}

@@ -176,6 +176,22 @@ jobs:
           path:
             dist/
 
+      # NOTE (packaging audit): this `--draft` is upstream wazero's own
+      # release flow, vendored with the fork -- a human reviews the generated
+      # notes and publishes. Treat it as DELIBERATE; do not flip it.
+      #
+      # It is also irrelevant to this repo's publish-* channels, which is the
+      # point worth recording: `make dist` produces
+      #   wazero_<ver>_{linux,darwin}_amd64.tar.gz
+      #   wazero_<ver>_windows_amd64.zip  and  wazero_<ver>_windows_amd64.msi
+      # (note there IS a windows .zip -- it is simply named for wazero, not
+      # for this recorder, so it is not the asset the publishers fetch)
+      # while publish-homebrew fetches codetracer-wasm-recorder-<os>-<arch>
+      # and publish-{scoop,chocolatey} fetch
+      # codetracer-wasm-recorder-<ver>-windows-x86_64.zip. Zero overlap. So
+      # this workflow is NOT the missing producer for those channels and
+      # ordering the publishers after it would not help; a real producer
+      # (renaming/building the codetracer-* asset names) is still missing.
       - name: Create draft release
         run: |
           ls dist

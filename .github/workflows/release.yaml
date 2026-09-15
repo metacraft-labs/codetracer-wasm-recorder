@@ -68,12 +68,28 @@ jobs:
 
       - name: Make artifacts (test)
         if: github.event_name != 'push' || !contains(github.ref, 'refs/tags/')
+        # LOCAL DIVERGENCE from upstream wazero (see the NOTE above `Create
+        # draft release`): values reach the shell through `env:` instead of
+        # being spliced into the script with `${{ }}`. A `${{ }}` in a `run:`
+        # body is textual substitution performed BEFORE bash parses the
+        # script, so the value becomes program text; `"$VAR"` is a parameter
+        # expansion bash cannot re-parse as syntax. Re-apply this on any
+        # re-vendor -- upstream main still splices these.
+        env:
+          CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+          HEAD_SHA: ${{ github.sha }}
         run: | # On the fork PRs, our org secret is not visible. We unset the required env so that `make dist` uses default self-signed cert.
           if [ $WINDOWS_CODESIGN_P12 ]; then
-            export WINDOWS_CODESIGN_PASSWORD=${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+            export WINDOWS_CODESIGN_PASSWORD="$CODESIGN_PASSWORD"
           fi
-          VERSION=${{ github.sha }}
-          make dist VERSION=$VERSION
+          VERSION="$HEAD_SHA"
+          # Quoted because VERSION now holds a value of unknown content
+          # rather than the expression literal actionlint had already
+          # inlined -- shellcheck raises SC2086 here exactly because the
+          # value is data now, which is the point of the change.
+          # (Do not write a GitHub expression in this comment: actionlint
+          # parses expressions inside run bodies, comments included.)
+          make dist VERSION="$VERSION"
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
         shell: bash
 
@@ -136,23 +152,38 @@ jobs:
       - name: Test (linux)
          # Check if the version was correctly inserted with VERSION variable
         if: runner.os == 'Linux'
+        # LOCAL DIVERGENCE: VERSION through env. On a `push:` tag run this
+        # value derives from the tag name, and `git tag` accepts backticks
+        # and `$(...)` -- `git check-ref-format` rejects only whitespace,
+        # control characters and a short punctuation list. Re-apply on
+        # re-vendor.
+        env:
+          VERSION: ${{ needs.pre_release.outputs.VERSION }}
         run: |
-          tar xf dist/wazero_${{ needs.pre_release.outputs.VERSION }}_linux_amd64.tar.gz
-          ./wazero version | grep ${{ needs.pre_release.outputs.VERSION }}
+          tar xf "dist/wazero_${VERSION}_linux_amd64.tar.gz"
+          ./wazero version | grep -- "$VERSION"
 
       - name: Test (darwin)
         # Check if the version was correctly inserted with VERSION variable
         if: runner.os == 'macOS'
+        # LOCAL DIVERGENCE: VERSION through env (see Test (linux) above).
+        env:
+          VERSION: ${{ needs.pre_release.outputs.VERSION }}
         run: |
-          tar xf dist/wazero_${{ needs.pre_release.outputs.VERSION }}_darwin_amd64.tar.gz
-          ./wazero version | grep ${{ needs.pre_release.outputs.VERSION }}
+          tar xf "dist/wazero_${VERSION}_darwin_amd64.tar.gz"
+          ./wazero version | grep -- "$VERSION"
 
       # This only checks the installer when built on Windows as it is simpler than switching OS.
       # refreshenv is from choco, and lets you reload ENV variables (used here for PATH).
       - name: Test Windows Installer
         if: runner.os == 'Windows'
+        # LOCAL DIVERGENCE: VERSION through env (see Test (linux) above).
+        # `%VERSION%` is cmd's expansion of the env var, not a substitution
+        # into the batch text.
+        env:
+          VERSION: ${{ needs.pre_release.outputs.VERSION }}
         run: |
-          set MSI_FILE="dist\wazero_${{ needs.pre_release.outputs.VERSION }}_windows_amd64.msi"
+          set MSI_FILE="dist\wazero_%VERSION%_windows_amd64.msi"
           call packaging\msi\verify_msi.cmd
         shell: cmd
 

@@ -560,7 +560,7 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 		doc.Metadata.Program, wasmPath)
 
 	// ----- function table — writer-assignment order, NO extras ----------
-	require.Equal(t, []string{"main", "classify", "sum_iter", "nested_loop"},
+	require.Equal(t, []string{"<toplevel>", "main", "classify", "sum_iter", "nested_loop"},
 		doc.Functions, "function table mismatch")
 
 	// ----- path table — exactly one entry, ending with control_flow.rs --
@@ -588,7 +588,11 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	//     sources are not on disk at the path their DWARF names, so they
 	//     carry no per-line table and now record no columns at all,
 	//     instead of columns that decoded into out-of-range line numbers.
-	require.Equal(t, 142, doc.Counts["steps"], "counts.steps")
+	// `start` contributes one step, one function and one call: the entry step
+	// and the `<toplevel>` frame that roots the call tree
+	// (`trace-events.md` §"Recorder Integration — Starting a Recording").
+	// A recording therefore holds one more step than the recorder emitted.
+	require.Equal(t, 143, doc.Counts["steps"], "counts.steps")
 	// `main` now surfaces as a 4th completed call.  The Nim trace
 	// writer's `close()` drains any unclosed PendingCalls (LIFO) so
 	// partial-trace recordings still produce balanced
@@ -598,10 +602,10 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// the writer fix `close()` silently dropped it and counts.calls
 	// stopped at 3.  See
 	// codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim::close.
-	require.Equal(t, 4, doc.Counts["calls"], "counts.calls")
+	require.Equal(t, 5, doc.Counts["calls"], "counts.calls")
 	require.Equal(t, 0, doc.Counts["io_events"], "counts.io_events")
-	require.Equal(t, 142, doc.Counts["values"], "counts.values")
-	require.Equal(t, 4, doc.Counts["functions"], "counts.functions")
+	require.Equal(t, 143, doc.Counts["values"], "counts.values")
+	require.Equal(t, 5, doc.Counts["functions"], "counts.functions")
 	require.Equal(t, 1, doc.Counts["paths"], "counts.paths")
 	require.Equal(t, 11, doc.Counts["varnames"], "counts.varnames")
 
@@ -612,17 +616,18 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	for _, ev := range events {
 		kinds[ev.Kind]++
 	}
-	// 4 call_entry + 4 call_exit = `main` now appears in both
-	// streams thanks to the writer's close-time PendingCall drain.
+	// 5 call_entry + 5 call_exit: the four user frames — `main` appears in
+	// both streams thanks to the writer's close-time PendingCall drain — plus
+	// the `<toplevel>` frame `start` opens to root the call tree.
 	require.Equal(t, map[string]int{
-		"step": 142, "call_entry": 4, "call_exit": 4,
+		"step": 143, "call_entry": 5, "call_exit": 5,
 	}, kinds, "event-kind histogram")
-	require.Equal(t, 150, len(events), "events length")
+	require.Equal(t, 153, len(events), "events length")
 
 	// ----- call entry sequence -------------------------------------------
 	// `main` is now the first entry — it is opened at module entry
 	// and flushed at `close()` by the writer's PendingCall drain.
-	require.Equal(t, []string{"main", "classify", "sum_iter", "nested_loop"},
+	require.Equal(t, []string{"<toplevel>", "main", "classify", "sum_iter", "nested_loop"},
 		callSequence(events), "call_entry sequence")
 
 	// ----- call exit return values (each must decode as Int) -------------
@@ -631,7 +636,8 @@ func TestRecorderGoldenControlFlow(t *testing.T) {
 	// synthetic VoidReturnMarker that the writer's close-time drain
 	// emits in lieu of an explicit return value.
 	exits := callExitSequence(t, events)
-	require.Equal(t, 4, len(exits), "call_exit count")
+	// 5: the four user frames plus the `<toplevel>` frame `start` opens.
+	require.Equal(t, 5, len(exits), "call_exit count")
 
 	require.Equal(t, "classify", exits[0].Function)
 	require.Equal(t, "Int", exits[0].Return.Kind)
@@ -1216,7 +1222,7 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		"metadata.program; got %q", doc.Metadata.Program)
 
 	// Function table — writer-assignment order, exactly five entries.
-	require.Equal(t, []string{"main", "level1", "level2", "level3", "factorial"},
+	require.Equal(t, []string{"<toplevel>", "main", "level1", "level2", "level3", "factorial"},
 		doc.Functions, "function table")
 
 	require.Equal(t, 1, len(doc.Paths))
@@ -1241,7 +1247,10 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	//     sources are not on disk at the path their DWARF names, so they
 	//     carry no per-line table and now record no columns at all,
 	//     instead of columns that decoded into out-of-range line numbers.
-	require.Equal(t, 49, doc.Counts["steps"])
+	// `start` contributes one step, one function and one call: the entry step
+	// and the `<toplevel>` frame that roots the call tree
+	// (`trace-events.md` §"Recorder Integration — Starting a Recording").
+	require.Equal(t, 50, doc.Counts["steps"])
 	// 8 = 3 chain (level1/2/3) + 5 recursive factorial frames.  The
 	// 9th is `main` itself — the wasm recorder leaves the outermost
 	// `main` frame open at end-of-execution (no DWARF
@@ -1252,10 +1261,10 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	// the count is 9 and the call_entry/call_exit streams pick up
 	// the outer frame as well.  See
 	// codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim::close.
-	require.Equal(t, 9, doc.Counts["calls"], "3 chain + 5 recursive + 1 outer "+
-		"`main` flushed by writer's close-time PendingCall drain = 9")
+	require.Equal(t, 10, doc.Counts["calls"], "3 chain + 5 recursive + 1 outer "+
+		"`main` flushed by writer's close-time PendingCall drain + 1 `<toplevel>` = 10")
 	require.Equal(t, 0, doc.Counts["io_events"], "clean exit produces no io_events")
-	require.Equal(t, 5, doc.Counts["functions"])
+	require.Equal(t, 6, doc.Counts["functions"])
 	require.Equal(t, 6, doc.Counts["varnames"])
 
 	events := decodeEvents(t, doc)
@@ -1266,14 +1275,14 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 49, "call_entry": 9, "call_exit": 9,
+		"step": 50, "call_entry": 10, "call_exit": 10,
 	}, kinds, "event-kind histogram")
 
 	// Call-entry sequence: `main` is opened first (at module
 	// entry), then the level1→level2→level3 chain (outermost to
 	// innermost), then factorial five times (depth 1..5).
 	want := []string{
-		"main",
+		"<toplevel>", "main",
 		"level1", "level2", "level3",
 		"factorial", "factorial", "factorial", "factorial", "factorial",
 	}
@@ -1286,7 +1295,8 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 	//   factorial(1)=1, factorial(2)=2, factorial(3)=6, factorial(4)=24,
 	//   factorial(5)=120
 	exits := callExitSequence(t, events)
-	require.Equal(t, 9, len(exits))
+	// 10: the nine user frames plus the `<toplevel>` frame `start` opens.
+	require.Equal(t, 10, len(exits))
 
 	type fnRet struct {
 		fn   string
@@ -1297,11 +1307,13 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		{"level3", 6, "Int"}, {"level2", 12, "Int"}, {"level1", 22, "Int"},
 		{"factorial", 1, "Int"}, {"factorial", 2, "Int"}, {"factorial", 6, "Int"},
 		{"factorial", 24, "Int"}, {"factorial", 120, "Int"},
-		// `main` is the deepest (latest to exit) frame and so
-		// appears last.  Its return value is the synthetic
-		// VoidReturnMarker the writer's close-time PendingCall
-		// drain emits in lieu of an explicit return value.
+		// `main` and the `<toplevel>` frame around it are both still open at
+		// end-of-execution, so the writer's close-time PendingCall drain
+		// closes them LIFO: `main` first, then the outer `<toplevel>` that
+		// `start` opened. Both carry the synthetic VoidReturnMarker the drain
+		// emits in lieu of an explicit return value.
 		{"main", 0, "Void"},
+		{"<toplevel>", 0, "Void"},
 	}
 	for i, e := range exits {
 		require.Equal(t, wantExits[i].fn, e.Function,
@@ -1411,7 +1423,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	require.True(t, strings.HasSuffix(doc.Metadata.Program, "collections.wasm"),
 		"metadata.program; got %q", doc.Metadata.Program)
 
-	require.Equal(t, []string{"main", "make_vec", "sum_vec"}, doc.Functions,
+	require.Equal(t, []string{"<toplevel>", "main", "make_vec", "sum_vec"}, doc.Functions,
 		"function table")
 
 	require.Equal(t, 1, len(doc.Paths))
@@ -1435,16 +1447,19 @@ func TestRecorderGoldenCollections(t *testing.T) {
 	//     sources are not on disk at the path their DWARF names, so they
 	//     carry no per-line table and now record no columns at all,
 	//     instead of columns that decoded into out-of-range line numbers.
-	require.Equal(t, 43, doc.Counts["steps"])
+	// `start` contributes one step, one function and one call: the entry step
+	// and the `<toplevel>` frame that roots the call tree
+	// (`trace-events.md` §"Recorder Integration — Starting a Recording").
+	require.Equal(t, 44, doc.Counts["steps"])
 	// The 3rd call is `main` — the wasm recorder leaves the
 	// outermost `main` frame open at end-of-execution and the Nim
 	// trace writer's `close()` now flushes any unclosed
 	// PendingCalls (LIFO) so partial-trace recordings still
 	// produce balanced call_entry/call_exit pairs.  See
 	// codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim::close.
-	require.Equal(t, 3, doc.Counts["calls"])
+	require.Equal(t, 4, doc.Counts["calls"])
 	require.Equal(t, 0, doc.Counts["io_events"], "clean exit produces no io_events")
-	require.Equal(t, 3, doc.Counts["functions"])
+	require.Equal(t, 4, doc.Counts["functions"])
 	require.Equal(t, 12, doc.Counts["varnames"])
 
 	events := decodeEvents(t, doc)
@@ -1455,16 +1470,17 @@ func TestRecorderGoldenCollections(t *testing.T) {
 		kinds[ev.Kind]++
 	}
 	require.Equal(t, map[string]int{
-		"step": 43, "call_entry": 3, "call_exit": 3,
+		"step": 44, "call_entry": 4, "call_exit": 4,
 	}, kinds, "event-kind histogram")
 
 	// `main` is opened first at module entry; the writer flushes
 	// it at close().  make_vec / sum_vec appear in source order.
-	require.Equal(t, []string{"main", "make_vec", "sum_vec"}, callSequence(events),
+	require.Equal(t, []string{"<toplevel>", "main", "make_vec", "sum_vec"}, callSequence(events),
 		"call_entry sequence")
 
 	exits := callExitSequence(t, events)
-	require.Equal(t, 3, len(exits))
+	// 4: the three user frames plus the `<toplevel>` frame `start` opens.
+	require.Equal(t, 4, len(exits))
 	// RECORDER BUG: make_vec returns a Vec<i32>, but the recorder
 	// surfaces the return value as Raw rather than as a Sequence.
 	require.Equal(t, "make_vec", exits[0].Function)

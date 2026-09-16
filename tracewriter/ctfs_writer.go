@@ -165,6 +165,18 @@ type CtfsTraceWriter struct {
 	// on a non-column-aware writer, which would leak into unrelated
 	// `last_error()` queries.
 	columnAware bool
+	// internedFuncIds maps this writer's own FunctionId — assigned by
+	// `RegisterFunctionWithNewId` as a bare counter while events are being
+	// buffered — to the id the Nim writer interned the function under during
+	// replay.  The two are NOT the same space: `trace_writer_start` interns
+	// `<toplevel>` as the call tree's root before any of these are replayed,
+	// so every id here is one higher on the Nim side.  Passing the local id to
+	// `register_call` attributed each call to the function next door.
+	//
+	// Indexed by local id, which is the order the `ctfsEventFunction` events
+	// were buffered in and therefore the order they are replayed in.
+	internedFuncIds []uint64
+
 	// pathsWithLineLengths tracks which paths the recorder has already
 	// registered through `RegisterPathWithLineLengths` so duplicate
 	// calls do not produce duplicate paths.dat entries.  The actual
@@ -278,6 +290,21 @@ func (w *CtfsTraceWriter) EnableColumnMotionsSupport() {
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind: ctfsEventEnableColumnMotionsSupport,
 	})
+}
+
+// isWriterModeEvent reports whether a buffered event sets a writer-wide MODE
+// rather than recording something that happened.  These must be replayed before
+// any path or step, because they change how the records that follow are
+// written.
+func isWriterModeEvent(kind ctfsEventKind) bool {
+	switch kind {
+	case ctfsEventEnableColumnAwareSteps,
+		ctfsEventEnableColumnBreakpointsSupport,
+		ctfsEventEnableColumnMotionsSupport:
+		return true
+	default:
+		return false
+	}
 }
 
 // RegisterPathWithLineLengths records a paths.dat Layout A registration
@@ -477,13 +504,6 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 	C.trace_writer_set_workdir(handle, cWorkdir)
 	C.free(unsafe.Pointer(cWorkdir))
 
-	// Seed the start record with the first observed step (path + line).
-	if firstPath, firstLine := w.findFirstStep(); firstPath != "" {
-		cPath := C.CString(firstPath)
-		C.trace_writer_start(handle, cPath, C.int64_t(firstLine))
-		C.free(unsafe.Pointer(cPath))
-	}
-
 	// Events.  In the Nim FFI, begin_events is the point where the
 	// .ct file is opened — the path's *directory* is used; the Nim writer
 	// derives the filename from the program basename.  We pass a synthetic
@@ -499,8 +519,52 @@ func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, work
 			C.GoString(C.trace_writer_last_error()))
 	}
 
-	// Replay all buffered events through the FFI.
+	// Register every source path BEFORE `start`, then `start`, then
+	// everything else.
+	//
+	// The ordering is the spec's: "`start(path, line)` is the first writer
+	// call a recorder makes AFTER ITS PATHS ARE REGISTERED"
+	// (`trace-events.md` §"Recorder Integration — Starting a Recording").
+	// `start` interns the path it is given, and in a column-aware trace a
+	// path interned without its per-line lengths gets the bare `paths.dat`
+	// record rather than Layout A. The later registration then finds the path
+	// already interned and does nothing, leaving a bare record in a table the
+	// reader decodes as Layout A — which reads the path's own bytes as line
+	// lengths and fails on the first negative one.
+	//
+	// And AFTER begin_events, which is what makes the writer ready:
+	// `trace_writer_start` returns immediately on a writer that is not, and
+	// returns void, so calling it before did nothing and said nothing. The
+	// trace then had no entry step and no `<toplevel>` frame at all.
+	// The mode opt-ins come before the paths, because they decide how a path
+	// record is written: a column-aware trace uses the self-describing Layout A
+	// form, and a path interned before the flag is latched gets the bare record
+	// instead — leaving a bare record in a table the reader decodes as Layout A.
 	for _, event := range w.events {
+		if isWriterModeEvent(event.kind) {
+			w.replayEvent(handle, event)
+		}
+	}
+	for _, event := range w.events {
+		if event.kind == ctfsEventPath || event.kind == ctfsEventPathWithLineLengths {
+			w.replayEvent(handle, event)
+		}
+	}
+
+	// Seed the start record with the first observed step (path + line).
+	if firstPath, firstLine := w.findFirstStep(); firstPath != "" {
+		cPath := C.CString(firstPath)
+		C.trace_writer_start(handle, cPath, C.int64_t(firstLine))
+		C.free(unsafe.Pointer(cPath))
+	}
+
+	// Replay the remaining buffered events through the FFI.
+	for _, event := range w.events {
+		if isWriterModeEvent(event.kind) ||
+			event.kind == ctfsEventPath ||
+			event.kind == ctfsEventPathWithLineLengths {
+			continue
+		}
 		w.replayEvent(handle, event)
 	}
 
@@ -545,6 +609,18 @@ func (w *CtfsTraceWriter) findFirstStep() (string, tracetypes.Line) {
 }
 
 // replayEvent dispatches a single buffered event through the Nim FFI.
+// internedFuncId translates a locally-assigned FunctionId into the id the Nim
+// writer interned that function under.  An id with no mapping is passed
+// through: that can only happen for a call replayed before its function event,
+// which the buffering order does not produce, and inventing a different id
+// would be worse than letting the writer refuse the one it was given.
+func (w *CtfsTraceWriter) internedFuncId(local tracetypes.FunctionId) uint64 {
+	if int(local) < len(w.internedFuncIds) {
+		return w.internedFuncIds[int(local)]
+	}
+	return uint64(local)
+}
+
 func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBufferedEvent) {
 	switch event.kind {
 	case ctfsEventStep:
@@ -598,7 +674,7 @@ func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBuffere
 		for _, arg := range event.args {
 			w.replayVariableValue(handle, arg)
 		}
-		C.trace_writer_register_call(handle, C.size_t(event.functionId))
+		C.trace_writer_register_call(handle, C.size_t(w.internedFuncId(event.functionId)))
 
 	case ctfsEventReturn:
 		w.replayReturnValue(handle, event.returnValue)
@@ -625,10 +701,12 @@ func (w *CtfsTraceWriter) replayEvent(handle C.trace_writer_t, event ctfsBuffere
 		}
 		cName := C.CString(event.funcName)
 		cPath := C.CString(pathStr)
-		C.trace_writer_ensure_function_id(handle,
+		interned := C.trace_writer_ensure_function_id(handle,
 			cName, cPath, C.int64_t(event.funcLine))
 		C.free(unsafe.Pointer(cName))
 		C.free(unsafe.Pointer(cPath))
+		// Keep the id the writer chose; see `internedFuncIds`.
+		w.internedFuncIds = append(w.internedFuncIds, uint64(interned))
 
 	case ctfsEventType:
 		cLangType := C.CString(event.typeRecord.LangType)

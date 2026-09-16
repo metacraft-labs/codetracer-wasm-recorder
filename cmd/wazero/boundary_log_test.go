@@ -139,7 +139,7 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 	//
 	// `compute_balance` is the only function the recording names. The two
 	// private helpers exist only because the module was re-executed.
-	require.Equal(t, []string{"compute_balance", "loyalty_bonus", "amount_credit"},
+	require.Equal(t, []string{"<toplevel>", "compute_balance", "loyalty_bonus", "amount_credit"},
 		doc.Functions,
 		"the materialised trace must recover the private helpers the boundary "+
 			"log never saw; got %v", doc.Functions)
@@ -147,11 +147,12 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 	events := decodeEvents(t, doc)
 	stepIndicesMonotonic(t, events)
 
-	require.Equal(t, []string{"compute_balance", "loyalty_bonus", "amount_credit"},
+	require.Equal(t, []string{"<toplevel>", "compute_balance", "loyalty_bonus", "amount_credit"},
 		callSequence(events), "call_entry sequence")
 
 	exits := callExitSequence(t, events)
-	require.Equal(t, 3, len(exits), "call_exit count")
+	// 4: the three helper frames plus the `<toplevel>` frame `start` opens.
+	require.Equal(t, 4, len(exits), "call_exit count")
 	require.Equal(t, "loyalty_bonus", exits[0].Function)
 	require.Equal(t, int64(420), *exits[0].Return.I, "loyalty_bonus(42) = 42*10 = 420")
 	require.Equal(t, "amount_credit", exits[1].Function)
@@ -162,14 +163,22 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 
 	// ----- exact counts and exact step lines -----------------------------
 	//
+	// The first line appears twice: `start` emits an ENTRY STEP at the
+	// position it is given before the recorder's own first step lands on the
+	// same line. A recording holds one more step than the recorder emitted
+	// (`trace-events.md` §"Recorder Integration — Starting a Recording").
+	//
 	// Pinned literally so a recorder regression cannot go unnoticed. The
 	// input recording carried three steps, all on line 71; re-execution
-	// produces ten, walking the two helper bodies.
-	require.Equal(t, 10, doc.Counts["steps"], "counts.steps")
-	require.Equal(t, 3, doc.Counts["calls"], "counts.calls")
-	require.Equal(t, 3, doc.Counts["functions"], "counts.functions")
+	// produces ten, walking the two helper bodies — plus the entry step
+	// `start` emits, and the `<toplevel>` function and call it registers to
+	// root the call tree (`trace-events.md` §"Recorder Integration — Starting
+	// a Recording").
+	require.Equal(t, 11, doc.Counts["steps"], "counts.steps")
+	require.Equal(t, 4, doc.Counts["calls"], "counts.calls")
+	require.Equal(t, 4, doc.Counts["functions"], "counts.functions")
 	require.Equal(t, 1, doc.Counts["paths"], "counts.paths")
-	require.Equal(t, 10, doc.Counts["values"], "counts.values")
+	require.Equal(t, 11, doc.Counts["values"], "counts.values")
 	require.Equal(t, 0, doc.Counts["io_events"], "counts.io_events")
 	require.Equal(t, []string{"user_id", "amount", "bonus", "credit"}, doc.Varnames,
 		"the variable table must carry the helper locals, not just the boundary values")
@@ -195,7 +204,7 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 	// raw byte offset as a line number. 3368 is exactly the file's 3443 bytes
 	// less its 75 newlines. See `addressableColumn` in
 	// internal/engine/interpreter/interpreter.go.
-	require.Equal(t, []int64{72, 57, 58, 59, 73, 62, 63, 64, 74, 75}, lines,
+	require.Equal(t, []int64{72, 72, 57, 58, 59, 73, 62, 63, 64, 74, 75}, lines,
 		"step lines, in trace order")
 
 	// ----- the recorded arguments really drove the replay ----------------
@@ -251,7 +260,7 @@ func TestBoundaryLogWorksWithoutAManifest(t *testing.T) {
 	require.Equal(t, 0, exitCode, "replay should succeed without a manifest; stderr:\n%s", stderr)
 
 	doc := dumpFull(t, outDir)
-	require.Equal(t, []string{"compute_balance", "loyalty_bonus", "amount_credit"}, doc.Functions)
+	require.Equal(t, []string{"<toplevel>", "compute_balance", "loyalty_bonus", "amount_credit"}, doc.Functions)
 }
 
 // TestManifestFromADifferentBuildIsRejected pins the cross-check when a

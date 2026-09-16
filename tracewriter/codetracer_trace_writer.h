@@ -197,6 +197,13 @@ int ct_write_meta_dat_to_buffer(
     const uint8_t* const* args, const size_t* arg_lens, size_t args_count,
     const uint8_t* const* paths, const size_t* path_lens, size_t paths_count,
     const uint8_t* recorder_id, size_t recorder_id_len,
+    /* M-REC-1: the recording's canonical UUIDv7 identity.  Pass NULL / 0 to
+     * have the writer mint one.  This pair was missing from this vendored
+     * copy while the library required it, so a caller compiled against the
+     * declaration below would have passed `out_buf` and `out_len` where the
+     * library reads the id — and the arity mismatch is not something C
+     * diagnoses across a shared library boundary. */
+    const uint8_t* recording_id, size_t recording_id_len,
     uint8_t** out_buf, size_t* out_len);
 
 void ct_free_buffer(uint8_t* buf);

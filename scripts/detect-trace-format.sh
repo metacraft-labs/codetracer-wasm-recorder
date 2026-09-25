@@ -86,17 +86,16 @@ if [ -z "$_FFI_LIB" ]; then
   # The FFI build needs nim/nimble + zstd, which live in the SIBLING repo's own
   # dev shell, NOT this wasm recorder's shell.  Build the dependency in the
   # sibling's dev shell instead of polluting this shell with those tools:
-  #   * `direnv exec <sibling>` if the sibling uses direnv (.envrc present);
+  #   * `repro exec <sibling>` if the sibling declares an environment;
   #   * else `nix develop <sibling>` (the sibling ships a flake).
-  # NOTE: both wrappers below supply the sibling's *environment* but leave the
-  # working directory alone, and `nimble` resolves its project from the cwd
+  # Explicitly enter the sibling before invoking either wrapper, and `nimble` resolves its project from the cwd
   # only (it does not search upwards).  Without the `cd` they run in whatever
   # directory the shell was entered from — the recorder repo — and fail with
   # "Could not find a file with a .nimble extension".  The subshell keeps the
   # `cd` from leaking into the shell that sourced this script.
   _BUILD_OK=""
-  if [ -f "$_TRACE_FORMAT_NIM_DIR/.envrc" ] && command -v direnv >/dev/null 2>&1; then
-    (cd "$_TRACE_FORMAT_NIM_DIR" && direnv exec "$_TRACE_FORMAT_NIM_DIR" nimble -d:release buildStaticLib) && _BUILD_OK=1
+  if command -v repro >/dev/null 2>&1; then
+    (cd "$_TRACE_FORMAT_NIM_DIR" && repro exec "$_TRACE_FORMAT_NIM_DIR" -- nimble -d:release buildStaticLib) && _BUILD_OK=1
   fi
   if [ -z "$_BUILD_OK" ] && command -v nix >/dev/null 2>&1; then
     (cd "$_TRACE_FORMAT_NIM_DIR" && nix develop "$_TRACE_FORMAT_NIM_DIR" --command nimble -d:release buildStaticLib) && _BUILD_OK=1

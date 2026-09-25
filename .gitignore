@@ -66,3 +66,6 @@ zig-out/
 # that exists on no machine here, and carried the building
 # contributor's home directory in its DWARF.
 /cmd/wazero/testdata/build/
+
+# Repro development environment cache
+.repro/

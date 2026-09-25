@@ -1,8 +1,4 @@
-{
-  pkgs,
-  codetracer-trace-format-nim ? null,
-  ...
-}:
+{ pkgs, codetracer-trace-format-nim ? null, ... }:
 # wazero CodeTracer fork — CTFS-only Go binary.
 #
 # The recording path lives in `tracewriter/ctfs_writer.go` and links against

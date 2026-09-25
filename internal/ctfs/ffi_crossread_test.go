@@ -210,28 +210,22 @@ func TestTheProductionNimReaderReadsAnFfiWrittenContainer(t *testing.T) {
 				"did NOT run is the check against the production Nim reader itself.",
 			filepath.Base(checker), repo)
 	}
-	direnv := ""
-	if home, err := os.UserHomeDir(); err == nil {
-		p := filepath.Join(home, ".nix-profile", "bin", "direnv")
-		if _, err := os.Stat(p); err == nil {
-			direnv = p
+	repro := ""
+	if repro == "" {
+		if p, err := exec.LookPath("repro"); err == nil {
+			repro = p
 		}
 	}
-	if direnv == "" {
-		if p, err := exec.LookPath("direnv"); err == nil {
-			direnv = p
-		}
-	}
-	if direnv == "" {
+	if repro == "" {
 		t.Skip(
-			"SKIP: direnv is not available, and the sibling repo's Nim toolchain is " +
+			"SKIP: repro is not available, and the sibling repo's Nim toolchain is " +
 				"supplied by its own nix dev shell rather than by this one, so the " +
 				"production Nim reader cannot be built. The two in-repo cross-reads " +
 				"still ran.")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		t.Skipf("SKIP: no home directory, so direnv cannot be run: %v", err)
+		t.Skipf("SKIP: no home directory, so repro cannot be run: %v", err)
 	}
 
 	path, want := crossFixture(t)
@@ -260,7 +254,7 @@ func TestTheProductionNimReaderReadsAnFfiWrittenContainer(t *testing.T) {
 	// into the test's temp dir so nothing is left behind in the sibling.
 	args := []string{
 		"-i", "HOME=" + home, "PATH=/run/current-system/sw/bin:/usr/bin:/bin",
-		direnv, "exec", repo,
+		repro, "exec", repo, "--",
 		"nim", "c", "-r", "-d:release", "-p:src", "--hints:off",
 		"--nimcache:" + filepath.Join(tmp, "nimcache"),
 		"-o:" + filepath.Join(tmp, "check_ctfs_container"),

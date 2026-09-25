@@ -1,5 +1,6 @@
 {
-  description = "CodeTracer WASM Recorder — a fork of wazero with execution tracing";
+  description =
+    "CodeTracer WASM Recorder — a fork of wazero with execution tracing";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -11,23 +12,11 @@
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
   };
 
-  outputs =
-    inputs@{ flake-parts, ... }:
+  outputs = inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
-      ];
-      perSystem =
-        {
-          pkgs,
-          inputs',
-          self',
-          system,
-          ...
-        }:
+      systems =
+        [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      perSystem = { pkgs, inputs', self', system, ... }:
         let
           preCommit = inputs.pre-commit-hooks.lib.${system}.run {
             src = ./.;
@@ -41,18 +30,11 @@
               };
             };
           };
-        in
-        {
+        in {
           checks.pre-commit-check = preCommit;
 
-          devShells.default = import ./shell.nix {
-            inherit
-              pkgs
-              self'
-              inputs'
-              preCommit
-              ;
-          };
+          devShells.default =
+            import ./shell.nix { inherit pkgs self' inputs' preCommit; };
 
           # Default package: wazero without the Nim FFI (the CTFS writer
           # falls back to the non-functional stub from

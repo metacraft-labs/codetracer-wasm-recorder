@@ -471,7 +471,7 @@ through `ct-print`, an independent CTFS implementation).
   against that source — and `nsb1_nim_crossread_test.go` shells out to the
   **production** Nim reader through `codetracer-trace-format-nim`'s
   `tests/check_nsb1_namespace.nim`. The second skips, loudly, when the sibling
-  checkout or `direnv` is absent; never make a failure go away by arranging for
+  checkout or `repro` is absent; never make a failure go away by arranging for
   the skip.
 
   **Sizing:** a B-tree image is bigger than the flat table was, by one 4096-byte

@@ -302,9 +302,9 @@ func TestACleanContainerReportsNoPartialTail(t *testing.T) {
 // present, and it says out loud when it does not run. **Never make a failure
 // go away by arranging for the skip.**
 
-// nimChecker locates the sibling checkout and the direnv that supplies its
+// nimChecker locates the sibling checkout and the repro that supplies its
 // toolchain, skipping (loudly) when either is absent.
-func nimChecker(t *testing.T) (repo string, direnv string, home string) {
+func nimChecker(t *testing.T) (repo string, repro string, home string) {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
@@ -320,18 +320,16 @@ func nimChecker(t *testing.T) (repo string, direnv string, home string) {
 	}
 	home, err = os.UserHomeDir()
 	if err != nil {
-		t.Skipf("SKIP: no home directory, so direnv cannot be run: %v", err)
+		t.Skipf("SKIP: no home directory, so repro cannot be run: %v", err)
 	}
-	if p := filepath.Join(home, ".nix-profile", "bin", "direnv"); fileExists(p) {
-		direnv = p
-	} else if p, err := exec.LookPath("direnv"); err == nil {
-		direnv = p
+	if p, err := exec.LookPath("repro"); err == nil {
+		repro = p
 	} else {
-		t.Skip("SKIP: direnv is not available, and the sibling repo's Nim toolchain " +
+		t.Skip("SKIP: repro is not available, and the sibling repo's Nim toolchain " +
 			"is supplied by its own nix dev shell rather than by this one, so the " +
 			"production Nim reader cannot be built.")
 	}
-	return repo, direnv, home
+	return repo, repro, home
 }
 
 func fileExists(p string) bool {
@@ -344,7 +342,7 @@ func fileExists(p string) bool {
 // It returns the checker's combined output and whether it exited 0.
 func runNimChecker(t *testing.T, container string, present map[string][]byte, absent []string) (string, bool) {
 	t.Helper()
-	repo, direnv, home := nimChecker(t)
+	repo, repro, home := nimChecker(t)
 
 	tmp := t.TempDir()
 	var manifest strings.Builder
@@ -368,7 +366,7 @@ func runNimChecker(t *testing.T, container string, present map[string][]byte, ab
 	// ends up proving something about the wrong toolchain.
 	args := []string{
 		"-i", "HOME=" + home, "PATH=/run/current-system/sw/bin:/usr/bin:/bin",
-		direnv, "exec", repo,
+		repro, "exec", repo, "--",
 		"nim", "c", "-r", "-d:release", "-p:src", "--hints:off",
 		"--nimcache:" + filepath.Join(tmp, "nimcache"),
 		"-o:" + filepath.Join(tmp, "check_ctfs_container"),

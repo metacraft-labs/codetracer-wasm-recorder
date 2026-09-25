@@ -77,6 +77,7 @@
 ## is the right default. ``sh`` drives the two ``shell(...)`` edges.
 
 import repro_project_dsl
+import repro_dsl_stdlib/foreign_env
 import repro_dsl_stdlib/packages/sh
 
 package codetracer_wasm_recorder:
@@ -117,6 +118,9 @@ package codetracer_wasm_recorder:
     name: "wazero"
 
   devEnv:
+    when not defined(windows):
+      useFlakeDevShell()
+
     activity "default"
 
   build:

@@ -50,16 +50,10 @@ func nimTraceFormatRepo(t *testing.T) string {
 	return filepath.Join(root, "..", "codetracer-trace-format-nim")
 }
 
-// direnvPath finds direnv, which is how the sibling repo's Nim toolchain is
+// reproPath finds repro, which is how the sibling repo's Nim toolchain is
 // entered without importing this repo's dev shell (their flakes differ).
-func direnvPath() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		p := filepath.Join(home, ".nix-profile", "bin", "direnv")
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	if p, err := exec.LookPath("direnv"); err == nil {
+func reproPath() string {
+	if p, err := exec.LookPath("repro"); err == nil {
 		return p
 	}
 	return ""
@@ -77,17 +71,17 @@ func TestTheProductionNimReaderLooksUpEveryPage(t *testing.T) {
 				"is the check against the production Nim reader itself.",
 			filepath.Base(checker), repo)
 	}
-	direnv := direnvPath()
-	if direnv == "" {
+	repro := reproPath()
+	if repro == "" {
 		t.Skip(
-			"SKIP: direnv is not available, and the sibling repo's Nim toolchain is " +
+			"SKIP: repro is not available, and the sibling repo's Nim toolchain is " +
 				"supplied by its own nix dev shell rather than by this one, so the " +
 				"production Nim reader cannot be built. The transcription-based proof " +
 				"in TestTheProducersTraversalFindsEveryPageInTheStore still ran.")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		t.Skipf("SKIP: no home directory, so direnv cannot be run: %v", err)
+		t.Skipf("SKIP: no home directory, so repro cannot be run: %v", err)
 	}
 
 	// A store big enough to need an internal node (Leaf Type B holds 170 keys
@@ -171,7 +165,7 @@ func TestTheProductionNimReaderLooksUpEveryPage(t *testing.T) {
 	// sibling checkout.
 	args := []string{
 		"-i", "HOME=" + home, "PATH=/run/current-system/sw/bin:/usr/bin:/bin",
-		direnv, "exec", repo,
+		repro, "exec", repo, "--",
 		"nim", "c", "-r", "-d:release", "-p:src", "--hints:off",
 		"--nimcache:" + filepath.Join(tmp, "nimcache"),
 		"-o:" + filepath.Join(tmp, "check_nsb1_namespace"),

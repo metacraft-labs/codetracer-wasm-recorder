@@ -21,35 +21,31 @@
 #     inputs.codetracer-wasm-recorder.packages.${system}.default
 #   ];
 
-{
-  lib ? (import <nixpkgs> { }).lib,
-  rustPlatform ? (import <nixpkgs> { }).rustPlatform,
-  stdenv ? (import <nixpkgs> { }).stdenv,
-  fetchFromGitHub ? (import <nixpkgs> { }).fetchFromGitHub,
-  # When `srcOverride` is set the build uses the supplied source tree;
-  # otherwise it fetches from the public repo at the pinned tag.
-  # Source-tree override is the path Nix-based CI takes (it already
-  # has the checkout).
-  srcOverride ? null,
-  version ? "0.1.0",
-}:
+{ lib ? (import <nixpkgs> { }).lib
+, rustPlatform ? (import <nixpkgs> { }).rustPlatform
+, stdenv ? (import <nixpkgs> { }).stdenv
+, fetchFromGitHub ? (import <nixpkgs> { }).fetchFromGitHub,
+# When `srcOverride` is set the build uses the supplied source tree;
+# otherwise it fetches from the public repo at the pinned tag.
+# Source-tree override is the path Nix-based CI takes (it already
+# has the checkout).
+srcOverride ? null, version ? "0.1.0", }:
 
 rustPlatform.buildRustPackage rec {
   pname = "codetracer-wasm-recorder";
   inherit version;
 
-  src =
-    if srcOverride != null then
-      srcOverride
-    else
-      fetchFromGitHub {
-        owner = "metacraft-labs";
-        repo = "codetracer-wasm-recorder";
-        rev = "v${version}";
-        # The publish workflow rewrites this placeholder before
-        # tagging. When building locally pass `srcOverride = ./.;`.
-        sha256 = lib.fakeSha256;
-      };
+  src = if srcOverride != null then
+    srcOverride
+  else
+    fetchFromGitHub {
+      owner = "metacraft-labs";
+      repo = "codetracer-wasm-recorder";
+      rev = "v${version}";
+      # The publish workflow rewrites this placeholder before
+      # tagging. When building locally pass `srcOverride = ./.;`.
+      sha256 = lib.fakeSha256;
+    };
 
   # Cargo.lock pins every dep — `cargoLock.lockFile` keeps the build
   # reproducible without requiring `outputHashes` for every git dep.

@@ -64,20 +64,20 @@ echo "verify-vectors: producer at $CODETRACER_ROOT"
 # ---------------------------------------------------------------------------
 # Record, inside the sibling's environment.
 #
-# `direnv exec` is the cheap path and what a developer's shell already
-# has; `nix develop` is the fallback for CI images that do not run direnv.
+# `repro exec` is the cheap path and what a developer's shell already
+# has; `nix develop` is the fallback for CI images that do not run repro.
 # Neither is optional: running the pipeline from *this* shell fails on a
 # missing `node`, which is a true statement about this repo and a useless
 # one about the vectors.
 # ---------------------------------------------------------------------------
-if command -v direnv >/dev/null 2>&1; then
-	run_in_producer_env() { direnv exec "$CODETRACER_ROOT" "$@"; }
+if command -v repro >/dev/null 2>&1; then
+	run_in_producer_env() { repro exec "$CODETRACER_ROOT" -- "$@"; }
 elif command -v nix >/dev/null 2>&1; then
 	run_in_producer_env() {
 		(cd "$CODETRACER_ROOT" && nix develop '.?submodules=1' --command "$@")
 	}
 else
-	die "neither direnv nor nix is available; the producer's toolchain cannot be entered"
+	die "neither repro nor nix is available; the producer's toolchain cannot be entered"
 fi
 
 materialize() {

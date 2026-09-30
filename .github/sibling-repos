@@ -28,6 +28,8 @@
 #
 # Cross-repo siblings cloned by setup-dev-env at the explicit SHAs
 # pinned below (see codetracer-specs/Testing/Cross-Repo-CI-Integration.md).
-# Only codetracer-trace-format is needed: the Go tracewriter FFI links
-# against its codetracer_trace_writer_ffi rust crate.
-codetracer-trace-format=54ef5d649623be7c4cb9ef2357b90f79694ddbed  # codetracer-trace-format@stable tip
+# codetracer-trace-format-nim provides the CTFS writer the recorder links
+# through cgo (scripts/detect-trace-format.sh) and the ct-print the tests
+# decode traces with. codetracer-trace-format is the cross-repo tests' pin.
+codetracer-trace-format=c884aae7e195e3fa1ef8080d0e45c56e22fedca6  # codetracer-trace-format@dev (2026-09-30)
+codetracer-trace-format-nim=d88c0cd460e98df607976fed818c456d9dfb3c9e  # codetracer-trace-format-nim@dev (2026-09-30): the CTFS writer (cgo FFI) and ct-print

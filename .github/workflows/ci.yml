@@ -70,23 +70,17 @@ jobs:
       - name: Pure-Go tracewriter tests
         run: dev-exec just test-tracewriter-go
 
-      - name: Build FFI library and run tracewriter tests
+      - name: Build ct-print
+        # The recorder tests decode recorded traces with ct-print from the
+        # trace-format-nim sibling, built in that sibling's own dev shell (the
+        # same way the shell hook builds its static library, which the tests
+        # link through cgo).
         run: |
-          dev-exec bash -c '
-            set -e
+          cd ../codetracer-trace-format-nim
+          nix develop --command nimble buildCtPrint
 
-            # Build the FFI library from the sibling checkout
-            cd ../codetracer-trace-format
-            cargo build -p codetracer_trace_writer_ffi --release
-            FFI_LIB_DIR="$(pwd)/target/release"
-
-            # Run tracewriter tests with CGO linking to the FFI library
-            cd "$GITHUB_WORKSPACE"
-            CGO_ENABLED=1 \
-            CGO_LDFLAGS="-L${FFI_LIB_DIR}" \
-            LD_LIBRARY_PATH="${FFI_LIB_DIR}" \
-              go test ./tracewriter/ -v
-          '
+      - name: Test
+        run: dev-exec just test
 
   nix-build:
     name: Verify nix flake packages build (${{ matrix.runner }})

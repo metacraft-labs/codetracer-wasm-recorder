@@ -5,6 +5,7 @@ on:
   # Only runs on the PRs are closed, regardless of it is merged or not.
   # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#running-your-pull_request-workflow-when-a-pull-request-merges
   pull_request:
+    branches-ignore: [agents]
     types:
       - closed
 

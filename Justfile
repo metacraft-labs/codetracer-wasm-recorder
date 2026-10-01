@@ -68,7 +68,7 @@ lint-go:
 
 # Lint Nix files
 lint-nix:
-    if command -v nixfmt >/dev/null; then find . -name '*.nix' -print0 | xargs -0 nixfmt --check; fi
+    find . -name '*.nix' -not -path './vendor/*' -print0 | xargs -0 nixfmt --check
 
 # Lint all code
 lint: lint-go lint-nix
@@ -79,7 +79,7 @@ format-go:
 
 # Format Nix files
 format-nix:
-    if command -v nixfmt >/dev/null; then find . -name '*.nix' -print0 | xargs -0 nixfmt; fi
+    find . -name '*.nix' -not -path './vendor/*' -print0 | xargs -0 nixfmt
 
 # Format all code
 format: format-go format-nix

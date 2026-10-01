@@ -36,9 +36,16 @@ test-snapshots:
 # Both build variants, tested.
 test-all-variants: test test-snapshots
 
-# Run all Go tests (delegates to Makefile)
+# Run all Go tests (delegates to Makefile), then check that the dev shell
+# links the trace-writer library built from the sibling's current sources.
 test:
     make test
+    just test-detect-trace-format
+
+# `scripts/detect-trace-format.sh` rebuilds a stale trace-writer library and
+# hands the linker exactly the one it chose.
+test-detect-trace-format:
+    bash tests/detect-trace-format-test.sh
 
 # Run tracewriter package tests (CTFS-only — the Rust FFI writer was
 # removed in the 2026-05-08 convention compliance pass; see

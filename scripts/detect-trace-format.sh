@@ -58,11 +58,14 @@ fi
 export CODETRACER_TRACE_FORMAT_NIM_PATH="$_TRACE_FORMAT_NIM_DIR"
 
 # ---------------------------------------------------------------------------
-# Build the FFI library if not already built.
+# Build the FFI library if it is missing or older than its sources.
 #
 # The Nim repo's nimble file exposes a `buildStaticLib` task that produces
-# the static library + header next to the source tree.  We only invoke it when
-# the .a file is missing so repeat shell-entries are fast.  (The task was
+# the static library + header next to the source tree.  We invoke it when the
+# library is missing, or when any of the sibling's sources is newer than it:
+# a checkout that moves the sibling to another revision touches the files it
+# changes, and a library built from the previous revision would otherwise keep
+# writing the previous format.  Repeat shell entries stay fast.  (The task was
 # called `buildLib` at one point; `codetracer_trace_format.nimble` now spells
 # the static and shared halves apart as `buildStaticLib` / `buildSharedLib`,
 # and invoking the old name fails with "task not found".)
@@ -81,8 +84,17 @@ else
   _FFI_LIB=""
 fi
 
+# A library is stale when a source it is built from (`src/`, the `.nimble`)
+# is newer than it.
+if [ -n "$_FFI_LIB" ] && [ -n "$(find "$_TRACE_FORMAT_NIM_DIR/src" "$_TRACE_FORMAT_NIM_DIR"/*.nimble \
+  -newer "$_FFI_LIB" -type f \( -name '*.nim' -o -name '*.c' -o -name '*.h' -o -name '*.nimble' \) \
+  -print 2>/dev/null | head -n 1)" ]; then
+  echo "  detect-trace-format: $_FFI_LIB is older than its sources; rebuilding." >&2
+  _FFI_LIB=""
+fi
+
 if [ -z "$_FFI_LIB" ]; then
-  echo "  detect-trace-format: building the trace-writer FFI (first time)..." >&2
+  echo "  detect-trace-format: building the trace-writer FFI..." >&2
   # The FFI build needs nim/nimble + zstd, which live in the SIBLING repo's own
   # dev shell, NOT this wasm recorder's shell.  Build the dependency in the
   # sibling's dev shell instead of polluting this shell with those tools:
@@ -110,11 +122,8 @@ if [ -z "$_FFI_LIB" ]; then
     unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR _BUILD_OK
     return 1 2>/dev/null || exit 1
   fi
-  if [ -f "$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a" ]; then
-    _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a"
-  else
-    _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.so"
-  fi
+  # `buildStaticLib` writes the `.a`; anything else would be a stale `.so`.
+  _FFI_LIB="$_TRACE_FORMAT_NIM_DIR/libcodetracer_trace_writer.a"
   unset _BUILD_OK
   echo "  detect-trace-format: FFI library built successfully ($_FFI_LIB)." >&2
 else
@@ -126,11 +135,27 @@ case "$(uname -s)" in
   Darwin*) export DYLD_LIBRARY_PATH="${_TRACE_FORMAT_NIM_DIR}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# Link exactly the library chosen above.
+#
+# cgo links `-lcodetracer_trace_writer`.  Pointed at the sibling directory, the
+# linker takes the `.so` whenever one sits next to the `.a`, whatever its age,
+# so the library chosen above would not be the one linked.  And Go's build
+# cache keys a link on CGO_LDFLAGS, not on the content of the libraries it
+# names, so a rebuilt library under an unchanged flag is not relinked.  The
+# `-L` directory is therefore one that holds only the chosen library, named by
+# a checksum of its content: a different library is a different flag.
+# ---------------------------------------------------------------------------
+_FFI_SUM="$(cksum <"$_FFI_LIB" | cut -d' ' -f1)"
+_FFI_LINK_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/codetracer-wasm-recorder/ffi-link/${_FFI_SUM}-$(basename "$_FFI_LIB")"
+mkdir -p "$_FFI_LINK_DIR"
+ln -sfn "$_FFI_LIB" "$_FFI_LINK_DIR/$(basename "$_FFI_LIB")"
+
 export FFI_LIB_DIR="$_TRACE_FORMAT_NIM_DIR"
 export FFI_INCLUDE_DIR="$_FFI_INCLUDE_DIR"
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I${_FFI_INCLUDE_DIR}"
-export CGO_LDFLAGS="-L${_TRACE_FORMAT_NIM_DIR}"
+export CGO_LDFLAGS="-L${_FFI_LINK_DIR}"
 
 # ---------------------------------------------------------------------------
 # Locate libzstd — the Nim FFI links against zstd for CTFS chunk
@@ -166,4 +191,4 @@ echo "  detect-trace-format: CGO_ENABLED=1, FFI_LIB_DIR=$_TRACE_FORMAT_NIM_DIR" 
 # ---------------------------------------------------------------------------
 # Clean up temporary variables.
 # ---------------------------------------------------------------------------
-unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR
+unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR _FFI_SUM _FFI_LINK_DIR

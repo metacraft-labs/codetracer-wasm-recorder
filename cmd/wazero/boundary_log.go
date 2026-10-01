@@ -206,7 +206,9 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 		return 0
 	}
 
-	produceTrace(req.outDir, req.traceName, req.recorder)
+	if !produceTrace(req.outDir, req.traceName, req.recorder, stdErr) {
+		return 1
+	}
 
 	if req.outDir != "" {
 		containerPath, err := containerPathFor(req.outDir, req.traceName)

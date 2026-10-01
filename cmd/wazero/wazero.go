@@ -520,11 +520,13 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			if exitCode == sys.ExitCodeDeadlineExceeded {
 				fmt.Fprintf(stdErr, "error: %v (timeout %v)\n", exitErr, timeout)
 			}
-			produceTrace(outDir, wasmFile, recorder)
+			if !produceTrace(outDir, wasmFile, recorder, stdErr) && exitCode == 0 {
+				return 1
+			}
 			return int(exitCode)
 		}
 		fmt.Fprintf(stdErr, "error instantiating wasm binary: %v\n", err)
-		produceTrace(outDir, wasmFile, recorder)
+		produceTrace(outDir, wasmFile, recorder, stdErr)
 		return 1
 	}
 
@@ -562,28 +564,39 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 		}
 
 		if stylusFailed {
-			produceTrace(outDir, wasmFile, recorder)
+			produceTrace(outDir, wasmFile, recorder, stdErr)
 			return 1
 		}
 	} else {
 		// We're done, _start was called as part of instantiating the module.
 	}
 
-	produceTrace(outDir, wasmFile, recorder)
+	if !produceTrace(outDir, wasmFile, recorder, stdErr) {
+		return 1
+	}
 
 	return 0
 }
 
-func produceTrace(outDir string, fileName string, recorder tracewriter.TraceRecorder) {
-
-	// TODO: Handle error
-	workDir, _ := os.Getwd()
-	if outDir != "" && recorder != nil {
-		err := recorder.ProduceTrace(outDir, fileName, workDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating trace: %v\n", err)
-		}
+// produceTrace writes the recorded trace to outDir, when recording was
+// requested, and reports whether the run's recording obligation was met.
+// A run asked to record whose trace could not be written has failed: the
+// caller must turn a false result into a non-zero exit status, because a
+// failure visible only on stderr is invisible to every wrapping tool.
+func produceTrace(outDir string, fileName string, recorder tracewriter.TraceRecorder, stdErr io.Writer) bool {
+	if outDir == "" || recorder == nil {
+		return true
 	}
+	workDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stdErr, "error creating trace: resolving the working directory: %v\n", err)
+		return false
+	}
+	if err := recorder.ProduceTrace(outDir, fileName, workDir); err != nil {
+		fmt.Fprintf(stdErr, "error creating trace: %v\n", err)
+		return false
+	}
+	return true
 }
 
 func validateMounts(mounts sliceFlag, stdErr logging.Writer) (rc int, rootPath string, config wazero.FSConfig) {

@@ -261,3 +261,48 @@ func TestVerifyStylusEntrypointFailureExitsNonZero(t *testing.T) {
 			"non-zero — a failure reported only on stderr is invisible to "+
 			"every caller.  Got exit %d; output:\n%s", exitCode, combined)
 }
+
+// ===========================================================================
+// verify_trace_write_failure_exits_non_zero
+// ===========================================================================
+
+// TestVerifyTraceWriteFailureExitsNonZero: a run asked to record whose
+// trace cannot be written has failed, whatever the module did.  The
+// recording is the product of `--out-dir`; a caller that checks the exit
+// status (CI, `ct record`, a test harness) must not be told it succeeded
+// when no trace exists.  This covers every reason the writer can fail —
+// an unusable output directory here, and equally a binary built without
+// the CTFS writer, whose stub refuses to produce a trace.
+//
+// The output directory is made unusable by placing it under a regular
+// file, so `MkdirAll` fails before anything is written.
+func TestVerifyTraceWriteFailureExitsNonZero(t *testing.T) {
+	t.Setenv("CODETRACER_WASM_RECORDER_OUT_DIR", "")
+
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+	outDir := filepath.Join(blocker, "trace")
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"wasi", []string{"run", "--out-dir", outDir, "testdata/wasi_arg.wasm"}},
+		{"stylus", []string{
+			"run", "--out-dir", outDir,
+			"--stylus=testdata/stylus/entrypoint_trace.json",
+			"testdata/stylus/entrypoint.wasm",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exitCode, stdout, stderr := runMain(t, "", tc.args)
+			combined := stdout + stderr
+			require.True(t, strings.Contains(stderr, "error creating trace"),
+				"the write failure must be reported on the run's stderr; output:\n%s", combined)
+			require.True(t, exitCode != 0,
+				"a run whose trace could not be written must exit non-zero.  "+
+					"Got exit %d; output:\n%s", exitCode, combined)
+		})
+	}
+}

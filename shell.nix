@@ -1,4 +1,9 @@
-{ pkgs, self', inputs', preCommit, }:
+{
+  pkgs,
+  self',
+  inputs',
+  preCommit,
+}:
 let
   # Rust toolchain for building the FFI library from the sibling
   # codetracer-trace-format repo (requires cargo), and for compiling
@@ -10,9 +15,15 @@ let
   # the DWARF the recorder's stepping assertions read — is a property
   # of `flake.lock`, not of whatever rustup happened to be on the
   # builder's PATH.  Bumping the fenix input moves both together.
-  rust-toolchain = with inputs'.fenix.packages;
-    combine [ stable.cargo stable.rustc targets.wasm32-wasip1.stable.rust-std ];
-in with pkgs;
+  rust-toolchain =
+    with inputs'.fenix.packages;
+    combine [
+      stable.cargo
+      stable.rustc
+      targets.wasm32-wasip1.stable.rust-std
+    ];
+in
+with pkgs;
 mkShell {
 
   hardeningDisable = [ "all" ];
@@ -37,7 +48,8 @@ mkShell {
     prek
 
     figlet
-  ] ++ preCommit.enabledPackages;
+  ]
+  ++ preCommit.enabledPackages;
 
   shellHook = ''
     export EM_CACHE=/tmp/emcc/

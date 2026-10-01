@@ -107,7 +107,8 @@ func produceAs(t *testing.T, w tracewriter.TraceRecorder, dir, program string) s
 
 // metaDatTraceID is the byte range of `meta.dat` holding the container's
 // freshly generated UUIDv7 trace identifier: a `CTMD` magic (4) + version (2)
-// + flags (2), then a length-prefixed 36-character UUID.
+// + flags (2) + flags_ext (4, always present from meta.dat version 6), then a
+// length-prefixed 36-character UUID.
 //
 // It is the ONLY byte range in a `.ct` that differs between two runs of the
 // identical trace — verified by `TestContainerBytesDifferOnlyInTheTraceID`
@@ -115,7 +116,7 @@ func produceAs(t *testing.T, w tracewriter.TraceRecorder, dir, program string) s
 // names the container, not the execution, so two materialisations of the same
 // range are expected to disagree about it.
 const (
-	metaDatIDLenOffset = 8
+	metaDatIDLenOffset = 12
 	metaDatIDLength    = 36
 )
 

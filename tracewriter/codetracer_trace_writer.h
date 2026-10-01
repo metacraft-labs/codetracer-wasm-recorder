@@ -195,7 +195,6 @@ int ct_write_meta_dat_to_buffer(
     const uint8_t* program, size_t program_len,
     const uint8_t* workdir, size_t workdir_len,
     const uint8_t* const* args, const size_t* arg_lens, size_t args_count,
-    const uint8_t* const* paths, const size_t* path_lens, size_t paths_count,
     const uint8_t* recorder_id, size_t recorder_id_len,
     /* M-REC-1: the recording's canonical UUIDv7 identity.  Pass NULL / 0 to
      * have the writer mint one.  This pair was missing from this vendored
@@ -219,8 +218,6 @@ const uint8_t* ct_meta_dat_program(meta_dat_reader_t h, size_t* out_len);
 const uint8_t* ct_meta_dat_workdir(meta_dat_reader_t h, size_t* out_len);
 size_t ct_meta_dat_args_count(meta_dat_reader_t h);
 const uint8_t* ct_meta_dat_arg(meta_dat_reader_t h, size_t idx, size_t* out_len);
-size_t ct_meta_dat_paths_count(meta_dat_reader_t h);
-const uint8_t* ct_meta_dat_path(meta_dat_reader_t h, size_t idx, size_t* out_len);
 const uint8_t* ct_meta_dat_recorder_id(meta_dat_reader_t h, size_t* out_len);
 void ct_meta_dat_free(meta_dat_reader_t h);
 

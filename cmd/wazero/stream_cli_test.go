@@ -293,12 +293,20 @@ func requireSameTraceStreams(t *testing.T, wantPath, gotPath string) {
 		b, err := got.ReadFile(name)
 		require.NoError(t, err)
 		if name == "meta.dat" {
-			// The trace id is a 36-byte UUID at a fixed offset; blank it in
-			// both. `TestContainerBytesDifferOnlyInTheTraceID` in
-			// `internal/boundarylog` establishes it is the only field two
+			// The trace id is a 36-byte UUID after the 12-byte header
+			// (magic, version, flags, flags_ext) and its one-byte length
+			// prefix; blank it in both. `TestContainerBytesDifferOnlyInTheTraceID`
+			// in `internal/boundarylog` establishes it is the only field two
 			// materialisations of the same range ever disagree about.
+			const idLenOffset, idLen = 12, 36
+			for _, m := range [][]byte{a, b} {
+				require.True(t, len(m) > idLenOffset+idLen,
+					"meta.dat is too short to hold the trace id")
+				require.Equal(t, byte(idLen), m[idLenOffset],
+					"meta.dat byte %d is not the trace-id length prefix", idLenOffset)
+			}
 			a, b = append([]byte(nil), a...), append([]byte(nil), b...)
-			for i := 9; i < 9+36 && i < len(a) && i < len(b); i++ {
+			for i := idLenOffset + 1; i <= idLenOffset+idLen; i++ {
 				a[i], b[i] = '?', '?'
 			}
 		}

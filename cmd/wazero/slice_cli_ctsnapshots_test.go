@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/tetratelabs/wazero/internal/ctfs"
@@ -24,7 +23,7 @@ import (
 // on its own materialises its range.
 func TestSliceDirEmitsIndependentlyMaterialisableContainers(t *testing.T) {
 	require.True(t, snapshotsAvailable)
-	src := repeatRecording(t, 4)
+	src, _ := repeatRecording(t, 4)
 	dir := filepath.Join(t.TempDir(), "slices")
 
 	code, stdout, stderr := runMain(t, "", []string{
@@ -91,34 +90,16 @@ func TestSliceDirEmitsIndependentlyMaterialisableContainers(t *testing.T) {
 // together, through the CLI: the recording arrives while the run is under way
 // and slice containers appear as it goes.
 func TestSliceDirWithBoundaryStreamSealsSlicesDuringTheRecording(t *testing.T) {
-	src := repeatRecording(t, 6)
-	raw, err := os.ReadFile(filepath.Join(src, "trace.json"))
-	require.NoError(t, err)
-
-	live := filepath.Join(t.TempDir(), "frontend-wasm.ct")
-	require.NoError(t, os.MkdirAll(live, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(live, "trace.json"), nil, 0o644))
-	for _, f := range []string{"trace_metadata.json", "trace_paths.json"} {
-		b, err := os.ReadFile(filepath.Join(src, f))
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(live, f), b, 0o644))
-	}
-	marker := filepath.Join(t.TempDir(), "done")
-
-	var wg sync.WaitGroup
-	dribble(t, &wg, filepath.Join(live, "trace.json"), marker, raw)
+	_, raw := repeatRecording(t, 6)
 
 	dir := filepath.Join(t.TempDir(), "slices")
-	code, stdout, stderr := runMain(t, "", []string{
+	code, stdout, stderr := runMainStreaming(t, raw, []string{
 		"run",
-		"--boundary-log=" + live,
-		"--boundary-stream=" + filepath.Join(live, "trace.json"),
-		"--stream-done=" + marker,
+		"--boundary-stream=-",
 		"--slice-dir=" + dir,
 		"--slice-every=2",
 		"testdata/boundary-log/balance_calc.wasm",
 	})
-	wg.Wait()
 	require.Equal(t, 0, code, "stderr:\n%s", stderr)
 	require.True(t, bytes.Contains([]byte(stdout), []byte("wrote 3 slice(s)")), stdout)
 
@@ -141,7 +122,7 @@ func TestSliceDirWithBoundaryStreamSealsSlicesDuringTheRecording(t *testing.T) {
 // TestSliceFlagsRefuseIncoherentCombinations: each refusal explains what the
 // two flags would mean together, rather than silently preferring one.
 func TestSliceFlagsRefuseIncoherentCombinations(t *testing.T) {
-	src := repeatRecording(t, 2)
+	src, _ := repeatRecording(t, 2)
 	for _, tc := range []struct {
 		name  string
 		args  []string

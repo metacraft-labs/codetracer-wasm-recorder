@@ -1,7 +1,6 @@
 package boundarylog
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -276,7 +275,7 @@ func (a *assembler) pushEvent(ev *traceEvent) error {
 	// crossing, so it must be recognised before the realm-marker parse
 	// rather than after — `parseRealmMarker` would return ok=false for it
 	// and the record would be silently dropped.
-	if hs, ok, err := parseHostStateMarker(*ev.Event); err != nil {
+	if hs, ok, err := parseHostStateMarker(ev.Event); err != nil {
 		return err
 	} else if ok {
 		folded, err := foldHostStateMarker(a.hostState, hs)
@@ -286,7 +285,7 @@ func (a *assembler) pushEvent(ev *traceEvent) error {
 		a.hostState = folded
 		return nil
 	}
-	m, ok := parseRealmMarker(*ev.Event)
+	m, ok := parseRealmMarker(ev.Event)
 	if !ok || m.kind != CrossingImport {
 		return nil
 	}
@@ -371,10 +370,6 @@ func (a *assembler) pushValue(ev *traceEvent) error {
 		// everything inside the module.
 		return a.closeRun()
 	}
-	var odv onDiskValue
-	if err := json.Unmarshal(ev.Value.Value, &odv); err != nil {
-		return fmt.Errorf("decoding value for binding %q: %w", name, err)
-	}
 	// A run ends when the binding's (label, role) changes, or when the slot
 	// index restarts at 0 — the latter is what distinguishes two back-to-back
 	// calls of the SAME import from one over-long tuple. (`Step` closes runs
@@ -395,7 +390,7 @@ func (a *assembler) pushValue(ev *traceEvent) error {
 				"have been seen; the recording's value runs are not in slot order",
 			name, slot, len(a.pending.values))
 	}
-	a.pending.values = append(a.pending.values, odv.raw())
+	a.pending.values = append(a.pending.values, ev.Value.Value)
 	return nil
 }
 

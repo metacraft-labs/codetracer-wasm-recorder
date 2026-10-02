@@ -498,27 +498,14 @@ func le32(v uint32) []byte {
 	return []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}
 }
 
-// hostStateRecording drives host_state.wasm: `sum()` observes only the
-// §3.3 initial state; `after_tick(1)` observes the §3.4 mutations the host
-// made while servicing `tick`.
+// hostStateDoc is the §3.3 / §3.4 state host_state.wasm's recording
+// carries:
 //
 //	initial: memory[0..4] = 100, memory[4..8] = 7, counter = 5
-//	sum()             -> 100 + 5   = 105
-//	after_tick(1): tick(1) -> 0, and while servicing it the host writes
-//	                  memory[4..8] = 70 and sets counter = 9
-//	                  -> 70 + 9    = 79
-func hostStateRecording(t *testing.T) (string, *recordingBuilder) {
-	t.Helper()
-	b := newRecordingBuilder("host-state")
-	b.export("sum", 0, "/src/host_state.wat", 1, nil, []jsValue{jsInt(105)}, nil)
-	b.export("after_tick", 1, "/src/host_state.wat", 2,
-		[]jsValue{jsInt(1)}, []jsValue{jsInt(79)}, func() {
-			b.importCall(0, "/src/host_state.wat", 2,
-				[]jsValue{jsInt(1)}, []jsValue{jsInt(0)})
-		})
-	dir := b.write(t, t.TempDir())
-
-	writeHostState(t, dir, map[string]any{
+//	while servicing `tick` (crossing #2) the host writes
+//	         memory[4..8] = 70 and sets counter = 9
+func hostStateDoc() map[string]any {
+	return map[string]any{
 		"version": 1,
 		"initial": map[string]any{
 			"memories": []any{map[string]any{
@@ -543,8 +530,31 @@ func hostStateRecording(t *testing.T) (string, *recordingBuilder) {
 				"module": "env", "name": "counter", "type": "i32", "value": "9",
 			}},
 		}},
-	})
-	return dir, b
+	}
+}
+
+// hostStateRecording drives host_state.wasm: `sum()` observes only the
+// §3.3 initial state; `after_tick(1)` observes the §3.4 mutations the host
+// made while servicing `tick`.
+//
+//	sum()             -> 100 + 5   = 105
+//	after_tick(1): tick(1) -> 0, then 70 + 9 = 79
+//
+// `state` is the host-state document the recording carries in its
+// host-state records; nil records none.
+func hostStateRecording(t *testing.T, state map[string]any) string {
+	t.Helper()
+	b := newRecordingBuilder("host-state")
+	b.export("sum", 0, "/src/host_state.wat", 1, nil, []jsValue{jsInt(105)}, nil)
+	b.export("after_tick", 1, "/src/host_state.wat", 2,
+		[]jsValue{jsInt(1)}, []jsValue{jsInt(79)}, func() {
+			b.importCall(0, "/src/host_state.wat", 2,
+				[]jsValue{jsInt(1)}, []jsValue{jsInt(0)})
+		})
+	if state != nil {
+		b.withHostState(state)
+	}
+	return b.write(t, t.TempDir())
 }
 
 // TestInitialStateAndMutationsAreApplied is the §3.3/§3.4 proof. Both
@@ -554,7 +564,7 @@ func hostStateRecording(t *testing.T) (string, *recordingBuilder) {
 // have returned 0 and diverged; had the mutation not been applied at the
 // recorded point, `after_tick` would have returned 7 + 5 = 12.
 func TestInitialStateAndMutationsAreApplied(t *testing.T) {
-	dir, _ := hostStateRecording(t)
+	dir := hostStateRecording(t, hostStateDoc())
 	res, err := replayFixture(t, hostStateWasm, dir, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.ExportCalls)
@@ -562,29 +572,27 @@ func TestInitialStateAndMutationsAreApplied(t *testing.T) {
 }
 
 // TestMissingInitialStateIsRefused pins the spec §8 discipline for the
-// §3.3 input: with the sidecar removed, the module's imported memory has no
-// recorded contents. Replay refuses up front and names what is missing,
+// §3.3 input: with no host-state records, the module's imported memory has
+// no recorded contents. Replay refuses up front and names what is missing,
 // rather than supplying a zeroed memory and diverging later at a point
 // unrelated to the cause.
 func TestMissingInitialStateIsRefused(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	require.NoError(t, os.Remove(dir+"/"+HostStateFileName))
+	dir := hostStateRecording(t, nil)
 
 	_, err := replayFixture(t, hostStateWasm, dir, nil)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "imports memory env.memory"),
 		"the diagnostic must name the memory; got: %v", err)
-	require.True(t, strings.Contains(err.Error(), HostStateFileName),
-		"the diagnostic must name the sidecar that should carry it; got: %v", err)
+	require.True(t, strings.Contains(err.Error(), hostStateBoundary),
+		"the diagnostic must name the record that should carry it; got: %v", err)
 }
 
 // TestZeroedInitialStateDiverges is the control that proves
 // TestInitialStateAndMutationsAreApplied is really exercising §3.3: keep
-// the sidecar's structure but empty the recorded contents, and `sum`
+// the state's structure but empty the recorded contents, and `sum`
 // computes 0 instead of the recorded 105.
 func TestZeroedInitialStateDiverges(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	writeHostState(t, dir, map[string]any{
+	dir := hostStateRecording(t, map[string]any{
 		"version": 1,
 		"initial": map[string]any{
 			"memories": []any{map[string]any{
@@ -611,8 +619,7 @@ func TestZeroedInitialStateDiverges(t *testing.T) {
 // initial state, drop only the mutation, and `after_tick` computes
 // 7 + 5 = 12 instead of the recorded 79.
 func TestMissingMutationDiverges(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	writeHostState(t, dir, map[string]any{
+	dir := hostStateRecording(t, map[string]any{
 		"version": 1,
 		"initial": map[string]any{
 			"memories": []any{map[string]any{
@@ -640,8 +647,7 @@ func TestMissingMutationDiverges(t *testing.T) {
 
 // TestHostStateRejectsAnUnknownVersion pins the §8 refusal rule.
 func TestHostStateRejectsAnUnknownVersion(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	writeHostState(t, dir, map[string]any{"version": 99})
+	dir := hostStateRecording(t, map[string]any{"version": 99})
 	_, err := LoadRecording(dir)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "version 99"), "got: %v", err)
@@ -650,8 +656,7 @@ func TestHostStateRejectsAnUnknownVersion(t *testing.T) {
 // TestHostStateRejectsImportedTables pins the §8 list: imported tables
 // mutated by the host are refused rather than silently degraded.
 func TestHostStateRejectsImportedTables(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	writeHostState(t, dir, map[string]any{
+	dir := hostStateRecording(t, map[string]any{
 		"version": 1,
 		"initial": map[string]any{"tables": []any{map[string]any{"name": "t"}}},
 	})
@@ -662,8 +667,7 @@ func TestHostStateRejectsImportedTables(t *testing.T) {
 
 // TestHostStateRejectsAMutationOfANonMutableGlobal covers the validator.
 func TestHostStateRejectsAMutationOfANonMutableGlobal(t *testing.T) {
-	dir, _ := hostStateRecording(t)
-	writeHostState(t, dir, map[string]any{
+	dir := hostStateRecording(t, map[string]any{
 		"version": 1,
 		"initial": map[string]any{
 			"globals": []any{map[string]any{

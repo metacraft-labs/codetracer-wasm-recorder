@@ -4,31 +4,25 @@
 //
 // NO MOCKS: the bytes fed in are produced by the same `recordingBuilder` that
 // `TestBuilderReproducesTheCommittedBrowserRecording` pins against the real
-// browser output, and they are fed through the real scanner, the real
-// assembler and, where a growing file is involved, a real file on disk.
+// browser output, encoded as CTBL by `EncodeTestLog`, and they are fed through
+// the real frame decoder and the real assembler.
 package boundarylog
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
 
-// streamBytes renders a builder's records as the producer would write them.
+// streamBytes renders a builder's records as the boundary log the producer
+// writes to its consumer, `End` frame included.
 func streamBytes(t *testing.T, b *recordingBuilder) []byte {
 	t.Helper()
-	raw, err := json.Marshal(b.events)
-	require.NoError(t, err)
-	return raw
+	return b.log()
 }
 
 // threeCallStream builds a recording of three `compute_balance` calls.
@@ -124,9 +118,7 @@ func TestStreamAgreesWithTheBatchParser(t *testing.T) {
 	batch, err := LoadRecording(dir)
 	require.NoError(t, err)
 
-	raw, err := os.ReadFile(filepath.Join(dir, "trace.json"))
-	require.NoError(t, err)
-	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw)))
+	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(ReadTestLog(t, dir))))
 	require.NoError(t, err)
 
 	var streamed []Crossing
@@ -137,8 +129,8 @@ func TestStreamAgreesWithTheBatchParser(t *testing.T) {
 }
 
 // byteAtATime hands out one byte per Read, which is the worst case for a
-// scanner that splits a growing document: every record's braces, strings and
-// escapes are seen across as many reads as they have bytes.
+// decoder of a growing stream: every frame's length prefix and payload are
+// seen across as many reads as they have bytes.
 type byteAtATime struct {
 	b []byte
 	i int
@@ -162,35 +154,27 @@ func TestStreamSurvivesArbitraryChunking(t *testing.T) {
 	require.Equal(t, 3, len(groups))
 }
 
-// TestStreamHandlesBracesInsideStrings guards the scanner's string tracking.
-// The producer's correlation markers embed whole JSON documents as strings, so
-// `{`, `}` and escaped quotes inside a string value are the normal case, not an
-// exotic one.
-func TestStreamHandlesBracesInsideStrings(t *testing.T) {
-	b := newRecordingBuilder("braces")
-	// `marker` nests two JSON documents as strings; `export` emits two of them.
-	b.export("weird\"name{}", 0, "/src/x.wat", 1,
-		[]jsValue{jsInt(1)}, []jsValue{jsInt(2)}, nil)
-	raw := streamBytes(t, b)
-	require.True(t, bytes.Contains(raw, []byte(`\"`)),
-		"the fixture does not actually contain an escaped quote")
-
-	groups, err := collectGroups(t, NewStreamReader(&byteAtATime{b: raw}))
-	require.NoError(t, err)
-	require.Equal(t, 1, len(groups))
-	require.Equal(t, "weird\"name{}", groups[0][0].Name)
-}
-
 // ---------------------------------------------------------------------------
 // Truncation
 // ---------------------------------------------------------------------------
 
-// TestTruncatedMidRecordIsNamed: the producer died halfway through writing a
-// record.
+// TestTruncatedMidRecordIsNamed: the stream stops halfway through a frame.
 func TestTruncatedMidRecordIsNamed(t *testing.T) {
 	raw := threeCallStream(t)
-	// Cut inside the last record, past the point where two calls are complete.
-	cut := bytes.LastIndex(raw, []byte(`{"Return"`)) + 12
+	_, frames, tags := SplitTestLogFrames(t, raw)
+	// Cut inside the last `Return` frame, past the point where two calls are
+	// complete.
+	offset := len(raw)
+	lastReturn := -1
+	for i := len(frames) - 1; i >= 0; i-- {
+		offset -= len(frames[i])
+		if tags[i] == tagReturn {
+			lastReturn = offset
+			break
+		}
+	}
+	require.True(t, lastReturn > 0)
+	cut := lastReturn + 6
 	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw[:cut])))
 	require.Error(t, err)
 
@@ -202,7 +186,7 @@ func TestTruncatedMidRecordIsNamed(t *testing.T) {
 	// recording is a prefix, not a write-off.
 	require.Equal(t, 2, len(groups))
 	require.Equal(t, 2, trunc.Groups)
-	require.True(t, strings.Contains(err.Error(), "middle of a record"), err.Error())
+	require.True(t, strings.Contains(err.Error(), "middle of a frame"), err.Error())
 }
 
 // TestTruncatedMidCrossingIsNamed: the producer stopped while an exported call
@@ -226,14 +210,16 @@ func TestTruncatedMidCrossingIsNamed(t *testing.T) {
 	require.Equal(t, 1, len(groups), "the completed call must still be delivered")
 }
 
-// TestTruncatedUnterminatedArrayIsNamedAndBenign: the producer stopped cleanly
-// between calls without closing the array. Everything it did write is faithful,
-// and the diagnostic says so.
-func TestTruncatedUnterminatedArrayIsNamedAndBenign(t *testing.T) {
+// TestTruncatedUnterminatedStreamIsNamedAndBenign: the producer stopped
+// cleanly between records without sending `End` — what a killed page leaves.
+// Everything it did write is faithful, and the diagnostic says so.
+func TestTruncatedUnterminatedStreamIsNamedAndBenign(t *testing.T) {
 	raw := threeCallStream(t)
-	require.Equal(t, byte(']'), raw[len(raw)-1])
+	_, frames, tags := SplitTestLogFrames(t, raw)
+	require.Equal(t, byte(tagEnd), tags[len(tags)-1])
+	unterminated := raw[:len(raw)-len(frames[len(frames)-1])]
 
-	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw[:len(raw)-1])))
+	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(unterminated)))
 	require.Error(t, err)
 	trunc, ok := IsTruncation(err)
 	require.True(t, ok, "expected a truncation error, got %T: %v", err, err)
@@ -243,99 +229,56 @@ func TestTruncatedUnterminatedArrayIsNamedAndBenign(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "faithful"), err.Error())
 }
 
-// TestStreamRefusesNonArrayInput and its sibling below keep a malformed stream
-// from being read as an empty one.
-func TestStreamRefusesNonArrayInput(t *testing.T) {
-	_, err := collectGroups(t, NewStreamReader(bytes.NewReader([]byte(`{"Path":"x"}`))))
+// TestStreamRefusesTheRetiredJSONLayout: a `trace.json` piped in where a
+// boundary log belongs is refused by name, not read as an empty stream.
+func TestStreamRefusesTheRetiredJSONLayout(t *testing.T) {
+	_, err := collectGroups(t, NewStreamReader(bytes.NewReader([]byte(`[{"Path":"x"}]`))))
 	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "JSON array"), err.Error())
+	require.True(t, strings.Contains(err.Error(), "not a CTBL boundary log"), err.Error())
 }
 
-func TestStreamRefusesNonObjectRecords(t *testing.T) {
-	_, err := collectGroups(t, NewStreamReader(bytes.NewReader([]byte(`[1,2]`))))
+// TestStreamRefusesAnUnknownVersion: a partly-understood boundary log replays
+// into a divergence far from its cause, so a version this reader does not
+// know is a hard error.
+func TestStreamRefusesAnUnknownVersion(t *testing.T) {
+	raw := threeCallStream(t)
+	raw[4] = 2
+	_, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw)))
 	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "JSON objects"), err.Error())
+	require.True(t, strings.Contains(err.Error(), "version 2"), err.Error())
+}
+
+// TestStreamRefusesAStreamWithoutAHeader: the first frame names the
+// recording; a stream that starts anywhere else is not one.
+func TestStreamRefusesAStreamWithoutAHeader(t *testing.T) {
+	raw := []byte("CTBL\x01")
+	raw = append(raw, EncodeTestRecord(map[string]any{"Path": "x"})...)
+	_, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw)))
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "first frame must be its Header"), err.Error())
 }
 
 // TestEmptyStreamIsNotAnError: a recording of a page that loaded and unloaded
-// without calling into the module is `[]` — zero groups, clean EOF.
+// without calling into the module is a Header and an End — zero groups,
+// clean EOF.
 func TestEmptyStreamIsNotAnError(t *testing.T) {
-	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader([]byte("[]"))))
+	raw := EncodeTestLog("empty", "/", nil, true)
+	groups, err := collectGroups(t, NewStreamReader(bytes.NewReader(raw)))
 	require.NoError(t, err)
 	require.Equal(t, 0, len(groups))
 }
 
-// ---------------------------------------------------------------------------
-// Following a growing file
-// ---------------------------------------------------------------------------
-
-// TestFollowFileWaitsForTheProducer is the "recording still in progress vs.
-// genuinely cut off" distinction, made concrete.
-//
-// The file is written a record at a time with the reader already consuming it.
-// The reader must block at each end-of-file rather than declaring the recording
-// over, and must return EOF only once `done` is closed.
-func TestFollowFileWaitsForTheProducer(t *testing.T) {
+// TestReadHeaderReturnsTheRecordingsMetadataBeforeAnyCall: the CLI starts a
+// streaming replay from the Header alone, so it must be available without
+// waiting for — or consuming — a single crossing.
+func TestReadHeaderReturnsTheRecordingsMetadataBeforeAnyCall(t *testing.T) {
 	raw := threeCallStream(t)
-	path := filepath.Join(t.TempDir(), "trace.json")
-	require.NoError(t, os.WriteFile(path, nil, 0o644))
-
-	done := make(chan struct{})
-	src, err := FollowFile(path, done)
+	_, frames, _ := SplitTestLogFrames(t, raw)
+	headerOnly := raw[:ctblPrefixLen+len(frames[0])]
+	r := NewStreamReader(&byteAtATime{b: headerOnly})
+	rec, err := r.ReadHeader("<test>")
 	require.NoError(t, err)
-	defer func() { _ = src.Close() }()
-
-	// The writer dribbles the document out in small pieces with a pause
-	// between each, so the reader is forced to wait at end-of-file repeatedly.
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer func() { _ = f.Close() }()
-		for i := 0; i < len(raw); i += 17 {
-			end := i + 17
-			if end > len(raw) {
-				end = len(raw)
-			}
-			if _, err := f.Write(raw[i:end]); err != nil {
-				t.Error(err)
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-		close(done)
-	}()
-
-	groups, err := collectGroups(t, NewStreamReader(src))
-	wg.Wait()
-	require.NoError(t, err)
-	require.Equal(t, 3, len(groups))
-}
-
-// TestFollowFileReportsAProducerThatDiesMidWrite: `done` closing while the
-// document is incomplete is exactly the "genuinely cut off" case, and it is
-// reported rather than silently accepted as the end of the recording.
-func TestFollowFileReportsAProducerThatDiesMidWrite(t *testing.T) {
-	raw := threeCallStream(t)
-	cut := bytes.LastIndex(raw, []byte(`{"Return"`))
-	path := filepath.Join(t.TempDir(), "trace.json")
-	require.NoError(t, os.WriteFile(path, raw[:cut], 0o644))
-
-	done := make(chan struct{})
-	close(done) // the producer is already gone
-	src, err := FollowFile(path, done)
-	require.NoError(t, err)
-	defer func() { _ = src.Close() }()
-
-	groups, err := collectGroups(t, NewStreamReader(src))
-	require.Error(t, err)
-	trunc, ok := IsTruncation(err)
-	require.True(t, ok, "expected a truncation error, got %T: %v", err, err)
-	require.Equal(t, TruncatedMidCrossing, trunc.Kind)
-	require.Equal(t, 2, len(groups))
+	require.Equal(t, "stream", rec.Program)
+	require.Equal(t, "codetracer-js-recorder-browser", rec.Recorder)
+	require.Equal(t, 0, len(rec.Crossings))
 }

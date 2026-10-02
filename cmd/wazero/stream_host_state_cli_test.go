@@ -2,20 +2,18 @@
 //
 // `internal/boundarylog/stream_host_state_test.go` drives the property at
 // package level. This drives the same thing through the real `run`
-// command, because the flag plumbing is its own surface: `--boundary-log`
-// supplies the metadata, `--boundary-stream` supplies the bytes, and
-// `--stream-done` says when the producer stopped. A package-level test
-// cannot show that those three still compose once host state has to come
-// from the stream rather than from a file.
+// command, because the flag plumbing is its own surface: `--boundary-stream -`
+// supplies the whole recording on stdin, host state included, and nothing
+// else does.
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tetratelabs/wazero/internal/boundarylog/ctbltest"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
 
@@ -24,31 +22,6 @@ const (
 	vaultCorpusWasm      = vaultCorpusDir + "/vault_apply.wasm"
 	vaultCorpusRecording = vaultCorpusDir + "/vault-apply.ct"
 )
-
-// copyRecordingWithoutSidecar reproduces the shape a recording has while
-// it is still being produced: a `trace.json` the daemon is appending to,
-// and no `boundary_state.json`, because the sidecar is a rendering of
-// records the daemon has already put into the stream.
-func copyRecordingWithoutSidecar(t *testing.T, src, dst string) string {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(dst, 0o755))
-	entries, err := os.ReadDir(src)
-	require.NoError(t, err)
-	copied := 0
-	for _, e := range entries {
-		if e.IsDir() || e.Name() == "boundary_state.json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(src, e.Name()))
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dst, e.Name()), data, 0o600))
-		copied++
-	}
-	require.True(t, copied >= 1, "%s held nothing to copy", src)
-	require.True(t, !fileExists(filepath.Join(dst, "boundary_state.json")),
-		"the copy must carry no sidecar, or it proves nothing")
-	return dst
-}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -81,17 +54,13 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 	require.Equal(t, 0, exitCode, "batch replay failed; stderr:\n%s", stderr)
 	want := dumpFull(t, outBatch)
 
-	// --- the live shape: a stream and no sidecar ------------------------
-	live := copyRecordingWithoutSidecar(t, vaultCorpusRecording, filepath.Join(tmp, "live"))
-	done := filepath.Join(live, ".complete")
-	require.NoError(t, os.WriteFile(done, nil, 0o600))
+	// --- the live shape: the boundary log on stdin ----------------------
+	raw, err := ctbltest.ReadLog(vaultCorpusRecording)
+	require.NoError(t, err)
 
 	outStream := filepath.Join(tmp, "streamed")
-	exitCode, stdout, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + live,
-		"--boundary-stream=" + filepath.Join(live, "trace.json"),
-		"--stream-done=" + done,
-		"--out-dir=" + outStream, vaultCorpusWasm})
+	exitCode, stdout, stderr := runMainStreaming(t, raw, []string{
+		"run", "--boundary-stream=-", "--out-dir=" + outStream, vaultCorpusWasm})
 	require.Equal(t, 0, exitCode,
 		"streaming replay of an imported-memory recording failed; stderr:\n%s", stderr)
 	require.True(t, len(stdout) > 0, "the CLI should report what it replayed")
@@ -139,32 +108,19 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 // control: the refusal M44b relaxed must still fire when the state is
 // genuinely absent rather than merely late.
 //
-// The recording here carries neither the sidecar nor the in-stream §3.3
-// record, so no amount of waiting would produce one. A streaming replay
+// The recording here carries no §3.3 record, so no amount of waiting would
+// produce one. A streaming replay
 // that accepted it would be replaying against a zeroed memory — the
 // silent degradation spec §8 exists to prevent.
 func TestBoundaryStreamStillRefusesAModuleWhoseStateNeverArrives(t *testing.T) {
 	tmp := t.TempDir()
-	live := copyRecordingWithoutSidecar(t, vaultCorpusRecording, filepath.Join(tmp, "live"))
-
-	// Strip the in-stream host-state records too. Done on the raw text
-	// because the records are the only ones naming this boundary, and a
-	// textual filter cannot accidentally drop a crossing.
-	raw, err := os.ReadFile(filepath.Join(live, "trace.json"))
+	raw, err := ctbltest.ReadLog(vaultCorpusRecording)
 	require.NoError(t, err)
 	stripped := stripHostStateRecords(t, raw)
-	require.True(t, len(stripped) < len(raw), "nothing was stripped")
-	require.NoError(t, os.WriteFile(filepath.Join(live, "trace.json"), stripped, 0o600))
-
-	done := filepath.Join(live, ".complete")
-	require.NoError(t, os.WriteFile(done, nil, 0o600))
 
 	outDir := filepath.Join(tmp, "traces")
-	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + live,
-		"--boundary-stream=" + filepath.Join(live, "trace.json"),
-		"--stream-done=" + done,
-		"--out-dir=" + outDir, vaultCorpusWasm})
+	exitCode, _, stderr := runMainStreaming(t, stripped, []string{
+		"run", "--boundary-stream=-", "--out-dir=" + outDir, vaultCorpusWasm})
 	require.Equal(t, 1, exitCode,
 		"a recording that never supplies its §3.3 state must still be refused")
 	require.True(t, containsAll(stderr, "env.memory", "no initial contents for it"),
@@ -174,20 +130,18 @@ func TestBoundaryStreamStillRefusesAModuleWhoseStateNeverArrives(t *testing.T) {
 		outDir, tracePaths(t, outDir))
 }
 
-// stripHostStateRecords removes every in-stream host-state record from a
-// `trace.json`.
+// stripHostStateRecords removes every host-state record from a boundary log.
 //
-// It decodes and re-encodes the record array rather than editing the text,
-// so what it leaves behind is a well-formed document: the control above
-// must fail because an INPUT is missing, not because the recording no
-// longer parses.
+// It works on whole frames, so what it leaves behind is a well-formed log:
+// the control above must fail because an INPUT is missing, not because the
+// recording no longer parses.
 func stripHostStateRecords(t *testing.T, raw []byte) []byte {
 	t.Helper()
-	var records []json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &records))
-	kept := make([]json.RawMessage, 0, len(records))
+	h, records, ended, err := ctbltest.Decode(raw)
+	require.NoError(t, err)
+	kept := make([]map[string]any, 0, len(records))
 	for _, r := range records {
-		if strings.Contains(string(r), "wasm-host-state") {
+		if strings.Contains(ctbltest.JSON(r), "wasm-host-state") {
 			continue
 		}
 		kept = append(kept, r)
@@ -195,9 +149,7 @@ func stripHostStateRecords(t *testing.T, raw []byte) []byte {
 	require.True(t, len(kept) < len(records),
 		"the fixture carries no in-stream host-state record, so this control "+
 			"is no longer testing anything")
-	out, err := json.Marshal(kept)
-	require.NoError(t, err)
-	return out
+	return ctbltest.Encode(h, kept, ended)
 }
 
 // containsAll reports whether `s` contains every fragment.

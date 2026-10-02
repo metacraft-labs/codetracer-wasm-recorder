@@ -211,23 +211,11 @@ func TestOpenBuildRefusesSliceFlagsWithAnExplanation(t *testing.T) {
 // `--boundary-stream` and produce the same trace the commercial one does.
 func TestOpenBuildStreamsARecording(t *testing.T) {
 	require.False(t, snapshotsAvailable)
-	src := repeatRecording(t, 2)
-	raw, err := os.ReadFile(filepath.Join(src, "trace.json"))
-	require.NoError(t, err)
-
-	live := filepath.Join(t.TempDir(), "frontend-wasm.ct")
-	require.NoError(t, os.MkdirAll(live, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(live, "trace.json"), raw, 0o644))
-	marker := filepath.Join(t.TempDir(), "done")
-	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+	_, raw := repeatRecording(t, 2)
 
 	out := t.TempDir()
-	exitCode, stdout, stderr := runMain(t, "", []string{
-		"run",
-		"--boundary-log=" + live,
-		"--boundary-stream=" + filepath.Join(live, "trace.json"),
-		"--stream-done=" + marker,
-		"--out-dir=" + out,
+	exitCode, stdout, stderr := runMainStreaming(t, raw, []string{
+		"run", "--boundary-stream=-", "--out-dir=" + out,
 		"testdata/boundary-log/balance_calc.wasm",
 	})
 	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)

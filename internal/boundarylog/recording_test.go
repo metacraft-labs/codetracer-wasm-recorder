@@ -1,12 +1,12 @@
 package boundarylog
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tetratelabs/wazero/internal/ctfsffi"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
 
@@ -216,33 +216,52 @@ func TestIgnoresNonBoundaryBindings(t *testing.T) {
 	require.Equal(t, []rawValue{{"Int", "3"}}, rec.Crossings[0].Results)
 }
 
-func TestLoadRecordingAcceptsATraceJSONPath(t *testing.T) {
-	b := newRecordingBuilder("direct")
-	b.export("run", 0, "/src/lib.rs", 1, nil, nil, nil)
-	dir := b.write(t, t.TempDir())
+// TestLoadRecordingRefusesTheRetiredJSONLayout: a `.ct` directory, or a
+// `trace.json`, is the three-file JSON layout `record-web` no longer writes.
+// It is refused by name rather than probed, so nobody mistakes it for a
+// recording this reader could have opened.
+func TestLoadRecordingRefusesTheRetiredJSONLayout(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "old.ct")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "trace.json"), []byte("[]"), 0o644))
 
-	rec, err := LoadRecording(filepath.Join(dir, "trace.json"))
-	require.NoError(t, err)
-	require.Equal(t, 1, len(rec.Crossings))
+	for _, path := range []string{dir, filepath.Join(dir, "trace.json")} {
+		_, err := LoadRecording(path)
+		require.Error(t, err)
+		require.True(t, strings.Contains(err.Error(), "retired three-file JSON layout"),
+			"%s: got: %v", path, err)
+	}
 }
 
-func TestLoadRecordingRejectsARandomFile(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "something.json")
-	require.NoError(t, os.WriteFile(f, []byte("[]"), 0o644))
-	_, err := LoadRecording(f)
+// TestLoadRecordingRefusesAContainerWithoutABoundaryLog: a CTFS container
+// that is not a `record-web` recording — any recorder's ordinary trace — is
+// named as such.
+func TestLoadRecordingRefusesAContainerWithoutABoundaryLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plain.ct")
+	require.NoError(t, ctfsffi.Create(path, 4096))
+	require.NoError(t, ctfsffi.Append(path, map[string][]byte{"meta.dat": {0}}))
+	_, err := LoadRecording(path)
 	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "neither a `.ct` directory nor a `trace.json`"),
-		"got: %v", err)
+	require.True(t, strings.Contains(err.Error(), "carries no boundary.log"), "got: %v", err)
 }
 
-// writeRawRecording materialises a `.ct` directory from hand-written event
+// TestLoadRecordingRefusesAnUnfinishedLog: a finished recording's log ends
+// with End; one that stops short was never finalised.
+func TestLoadRecordingRefusesAnUnfinishedLog(t *testing.T) {
+	b := newRecordingBuilder("unfinished")
+	b.export("run", 0, "/src/lib.rs", 1, nil, nil, nil)
+	path := filepath.Join(t.TempDir(), "unfinished.ct")
+	WriteTestRecording(t, path, EncodeTestLog(b.program, b.workdir, b.events, false))
+	_, err := LoadRecording(path)
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "without its End frame"), "got: %v", err)
+}
+
+// writeRawRecording materialises a `.ct` from hand-written event
 // records, for the malformed cases the producer replica cannot express.
 func writeRawRecording(t *testing.T, events []map[string]any) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "raw.ct")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	raw, err := json.Marshal(events)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "trace.json"), raw, 0o644))
-	return dir
+	path := filepath.Join(t.TempDir(), "raw.ct")
+	WriteTestRecording(t, path, EncodeTestLog("raw", "/", events, true))
+	return path
 }

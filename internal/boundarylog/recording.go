@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/tetratelabs/wazero/internal/ctfs"
 )
 
 // CrossingKind distinguishes the two boundary directions the spec records:
@@ -80,18 +82,19 @@ func (c *Crossing) Describe() string {
 // Recording is a parsed boundary recording: the crossings the browser
 // observed, plus the host-supplied state the spec's §3.3 / §3.4 describe.
 type Recording struct {
-	// Program is `trace_metadata.json`'s `program` field.
+	// Program, Args and Workdir are the boundary log's Header frame.
 	Program string
-	// Workdir is `trace_metadata.json`'s `workdir` field.
+	Args    []string
 	Workdir string
 	// Recorder names the producer, e.g. "codetracer-js-recorder-browser".
 	Recorder string
-	// Paths is `trace_paths.json`.
+	// Paths are the recording's source paths, in `Path`-record order: a
+	// path's position is the `path_id` every step refers to.
 	Paths []string
 	// Crossings are every recovered boundary crossing, in call order.
 	Crossings []Crossing
-	// HostState carries spec §3.3 initial state and §3.4 mutations when
-	// the recording ships a `boundary_state.json` sidecar; nil otherwise.
+	// HostState carries the spec §3.3 initial state and §3.4 mutations the
+	// recording's host-state records describe; nil when it has none.
 	HostState *HostState
 	// MarkersIdentifyImports reports that this recording's realm markers
 	// name the import edge in their own right (`wasm import #<n>`), which
@@ -151,197 +154,138 @@ func (r *Recording) NestedExports() []*Crossing {
 }
 
 // ---------------------------------------------------------------------------
-// `.ct` (three-file JSON) decoding
+// Loading a boundary log
 // ---------------------------------------------------------------------------
 
-// traceMetadata mirrors `trace_metadata.json`, written by
-// `browser_stream_host.rs::JsonFileCtfsWriter::flush`.
-type traceMetadata struct {
-	Program  string   `json:"program"`
-	Args     []string `json:"args"`
-	Workdir  string   `json:"workdir"`
-	Recorder struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"recorder"`
+// The records of a boundary log, as `ctbl.go` decodes them. Each is one
+// record of the recording itself; `traceEvent` carries exactly one of them.
+type traceEvent struct {
+	Path         *string
+	Step         *stepRecord
+	Function     *functionRecord
+	Call         *callRecord
+	Return       *returnRecord
+	Value        *valueRecord
+	VariableName *string
+	Event        *eventRecord
 }
 
-// traceEvent is one element of `trace.json`. The Rust producer serialises
-// `TraceLowLevelEvent` as an externally tagged enum with PascalCase names,
-// so each element is a single-key object.
-type traceEvent struct {
-	Path         *string          `json:"Path"`
-	Step         *json.RawMessage `json:"Step"`
-	Function     *functionRecord  `json:"Function"`
-	Call         *callRecord      `json:"Call"`
-	Return       *returnRecord    `json:"Return"`
-	Value        *valueRecord     `json:"Value"`
-	VariableName *string          `json:"VariableName"`
-	Event        *json.RawMessage `json:"Event"`
+type stepRecord struct {
+	PathID uint32
+	Line   int64
 }
 
 type functionRecord struct {
-	Name   string `json:"name"`
-	PathID uint32 `json:"path_id"`
-	Line   int64  `json:"line"`
+	Name   string
+	PathID uint32
+	Line   int64
 }
 
 type callRecord struct {
-	FunctionID uint32 `json:"function_id"`
+	FunctionID uint32
 	// Args is always empty on the browser path — `browser_session.js`
 	// sends `{kind:"Call", fnId, args: []}` and delivers the arguments as
 	// separate `Value` records. Decoded anyway so a producer that starts
 	// populating it does not silently lose data.
-	Args []json.RawMessage `json:"args"`
+	Args []argRecord
+}
+
+type argRecord struct {
+	VariableID uint32
+	Value      rawValue
 }
 
 type returnRecord struct {
-	ReturnValue json.RawMessage `json:"return_value"`
+	ReturnValue rawValue
 }
 
 type valueRecord struct {
-	VariableID uint32          `json:"variable_id"`
-	Value      json.RawMessage `json:"value"`
+	VariableID uint32
+	Value      rawValue
 }
 
-// onDiskValue is `ValueRecordOnDisk`: an internally tagged enum whose
-// payload field name depends on the variant.
-type onDiskValue struct {
-	Kind string `json:"kind"`
-	I    string `json:"i"`
-	F    string `json:"f"`
-	R    string `json:"r"`
-	Text string `json:"text"`
-	B    *bool  `json:"b"`
-}
-
-func (v onDiskValue) raw() rawValue {
-	switch v.Kind {
-	case "Int":
-		return rawValue{Kind: v.Kind, Text: v.I}
-	case "Float":
-		return rawValue{Kind: v.Kind, Text: v.F}
-	case "Raw":
-		return rawValue{Kind: v.Kind, Text: v.R}
-	case "String":
-		return rawValue{Kind: v.Kind, Text: v.Text}
-	case "Bool":
-		if v.B != nil && *v.B {
-			return rawValue{Kind: v.Kind, Text: "true"}
-		}
-		return rawValue{Kind: v.Kind, Text: "false"}
-	default:
-		return rawValue{Kind: v.Kind}
-	}
-}
-
-// LoadRecording reads a boundary recording from `path`, which may be either
-// the `.ct` directory itself or its `trace.json`.
+// LoadRecording reads the boundary recording stored in a `.ct`: the CTFS
+// container `record-web` writes, whose `boundary.log` internal file is the
+// boundary log (`Browser-Recording-Container.md` §2).
+//
+// A directory, or a `trace.json`, is the retired three-file JSON layout and
+// is refused by name rather than probed.
 func LoadRecording(path string) (*Recording, error) {
-	rec, err := LoadRecordingMetadata(path)
+	st, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening boundary recording %s: %w", path, err)
 	}
-	dir := rec.Source
+	if st.IsDir() || filepath.Base(path) == "trace.json" {
+		return nil, fmt.Errorf(
+			"boundary recording %s is the retired three-file JSON layout "+
+				"(trace.json); a boundary recording is the single-file `<program>.ct` "+
+				"`record-web` writes, with its boundary log stored inside it", path)
+	}
+	c, err := ctfs.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening boundary recording %s: %w", path, err)
+	}
+	data, err := c.ReadFile(BoundaryLogFileName)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"boundary recording %s carries no %s: it is a CTFS container, but not "+
+				"one `record-web` wrote (%w)", path, BoundaryLogFileName, err)
+	}
+	return DecodeRecording(data, path)
+}
 
-	eventsRaw, err := os.ReadFile(filepath.Join(dir, "trace.json"))
-	if err != nil {
-		return nil, fmt.Errorf("reading boundary recording events: %w", err)
-	}
+// DecodeRecording reads a complete boundary log — the bytes of a
+// `boundary.log` — into a Recording. `source` names it in diagnostics.
+//
+// The log must end with its `End` frame: a finished recording that stops
+// short is damaged, not merely early.
+func DecodeRecording(data []byte, source string) (*Recording, error) {
+	d := &frameDecoder{}
+	d.feed(data)
 	var events []traceEvent
-	if err := json.Unmarshal(eventsRaw, &events); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", filepath.Join(dir, "trace.json"), err)
+	for {
+		ev, ok, err := d.next()
+		if err != nil {
+			return nil, fmt.Errorf("decoding the boundary log of %s: %w", source, err)
+		}
+		if !ok {
+			break
+		}
+		events = append(events, *ev)
+	}
+	if d.pending() > 0 || !d.ended {
+		return nil, fmt.Errorf(
+			"the boundary log of %s is incomplete: it ends without its End frame "+
+				"(%d trailing byte(s)); the recording was not finalised", source, d.pending())
 	}
 
+	rec := recordingFromHeader(d.header, source)
+	for i := range events {
+		if events[i].Path != nil {
+			rec.Paths = append(rec.Paths, *events[i].Path)
+		}
+	}
 	crossings, marked, streamed, err := reconstructCrossings(events)
 	if err != nil {
-		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", dir, err)
+		return nil, fmt.Errorf("recovering boundary crossings from %s: %w", source, err)
 	}
 	rec.Crossings = crossings
 	rec.MarkersIdentifyImports = marked
-
-	// M44b: a recording made by a current producer carries its spec §3.3 /
-	// §3.4 state twice — in the event stream and, rendered from it, in the
-	// `boundary_state.json` sidecar `LoadRecordingMetadata` already read.
-	// They must agree; one carrier alone is also fine, and is what an
-	// older recording and a still-growing one respectively look like.
-	state, err := reconcileHostState(rec.HostState, streamed)
-	if err != nil {
-		return nil, fmt.Errorf("reading host state from %s: %w", dir, err)
-	}
-	rec.HostState = state
+	rec.HostState = streamed
 	return rec, nil
 }
 
-// LoadRecordingMetadata reads everything about a recording *except* its
-// crossings: the program metadata, the source paths and the spec §3.3 / §3.4
-// host state.
-//
-// This is what a streaming replay starts from
-// (`WASM-Replay-Snapshots-And-Slices.md` §2). None of these files describes the
-// execution, so none of them has to have arrived before the first exported call
-// can be driven — and on the browser path they typically have not: the daemon's
-// `JsonFileCtfsWriter` writes them at flush time, after `trace.json` has been
-// growing for a while. Every one of them is therefore optional, exactly as it
-// already is for a finished recording.
-func LoadRecordingMetadata(path string) (*Recording, error) {
-	dir, err := recordingDir(path)
-	if err != nil {
-		return nil, err
+// recordingFromHeader is a Recording carrying a header's metadata and no
+// crossings yet.
+func recordingFromHeader(h *logHeader, source string) *Recording {
+	rec := &Recording{Source: source}
+	if h != nil {
+		rec.Program = h.Program
+		rec.Args = h.Args
+		rec.Workdir = h.Workdir
+		rec.Recorder = h.RecorderName
 	}
-
-	rec := &Recording{Source: dir}
-
-	// trace_metadata.json and trace_paths.json are informational: a
-	// recording without them still replays, so a missing file is not
-	// fatal, but a malformed one is (it means the recording is damaged).
-	metaPath := filepath.Join(dir, "trace_metadata.json")
-	if metaRaw, err := os.ReadFile(metaPath); err == nil {
-		var meta traceMetadata
-		if err := json.Unmarshal(metaRaw, &meta); err != nil {
-			return nil, fmt.Errorf("decoding %s: %w", metaPath, err)
-		}
-		rec.Program = meta.Program
-		rec.Workdir = meta.Workdir
-		rec.Recorder = meta.Recorder.Name
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("reading %s: %w", metaPath, err)
-	}
-
-	pathsPath := filepath.Join(dir, "trace_paths.json")
-	if pathsRaw, err := os.ReadFile(pathsPath); err == nil {
-		if err := json.Unmarshal(pathsRaw, &rec.Paths); err != nil {
-			return nil, fmt.Errorf("decoding %s: %w", pathsPath, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("reading %s: %w", pathsPath, err)
-	}
-
-	state, err := loadHostState(dir)
-	if err != nil {
-		return nil, err
-	}
-	rec.HostState = state
-
-	return rec, nil
-}
-
-// recordingDir normalises a user-supplied `--boundary-log` argument to the
-// directory holding the three trace files.
-func recordingDir(path string) (string, error) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("opening boundary recording %s: %w", path, err)
-	}
-	if st.IsDir() {
-		return path, nil
-	}
-	if filepath.Base(path) != "trace.json" {
-		return "", fmt.Errorf(
-			"boundary recording %s is neither a `.ct` directory nor a `trace.json`; "+
-				"pass the `<program>.ct` directory the CodeTracer backend-manager wrote", path)
-	}
-	return filepath.Dir(path), nil
+	return rec
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +360,7 @@ type openCrossing struct {
 	label string
 }
 
-// reconstructCrossings recovers every crossing from a whole `trace.json`,
+// reconstructCrossings recovers every crossing from a whole boundary log,
 // reports whether the recording's realm markers name the import edge (see
 // `Recording.MarkersIdentifyImports`), and returns the spec §3.3 / §3.4
 // state the event stream carried, or nil if it carried none (M44b).
@@ -497,14 +441,14 @@ func parseImportLabel(label string) (uint32, bool) {
 // produces on each side of a crossing, rendered by the backend-manager's
 // `JsonFileCtfsWriter` into a `RecordEvent`:
 //
-//	{"Event": {"kind": 12,
-//	           "metadata": "{…\"boundary_id\":\"js-wasm-realm\",
-//	                          \"direction\":\"recv\",
-//	                          \"show_value\":\"wasm import #3\"…}",
-//	           "content":  "{\"key\":\"7\",\"payload\":\"wasm import #3\"}"}}
+//	Event{kind: 12,
+//	      metadata: `{…"boundary_id":"js-wasm-realm","direction":"recv",
+//	                  "show_value":"wasm import #3"…}`,
+//	      content:  `{"key":"7","payload":"wasm import #3"}`}
 //
-// Both `metadata` and `content` are JSON *strings* nested inside the JSON,
-// which is the daemon's rendering and not something this package chose.
+// `metadata` is a `MarkerPayload` document, the correlation-marker encoding
+// every CodeTracer recording uses for this record, not something this package
+// chose.
 //
 // The pair is primarily a cross-recording correlation key (the page's own
 // JS recording carries the mirrored half), and the db-backend pairs them by
@@ -536,11 +480,11 @@ const (
 	markerLeaveDirection = "send"
 )
 
-// eventRecord is one `Event` element of `trace.json`.
+// eventRecord is one `Event` record of the boundary log.
 type eventRecord struct {
-	Kind     int    `json:"kind"`
-	Metadata string `json:"metadata"`
-	Content  string `json:"content"`
+	Kind     int
+	Metadata string
+	Content  string
 }
 
 // markerMetadata is the subset of the nested `metadata` string this package
@@ -574,9 +518,8 @@ type realmMarker struct {
 // an unrecognised one must not fail a recording. Nothing is lost by
 // ignoring one, because a marker this package cannot read contributes no
 // crossing — it only delimits value runs, which the caller does anyway.
-func parseRealmMarker(raw json.RawMessage) (realmMarker, bool) {
-	var ev eventRecord
-	if err := json.Unmarshal(raw, &ev); err != nil || ev.Kind != eventKindTraceLogEvent {
+func parseRealmMarker(ev *eventRecord) (realmMarker, bool) {
+	if ev.Kind != eventKindTraceLogEvent {
 		return realmMarker{}, false
 	}
 	var meta markerMetadata

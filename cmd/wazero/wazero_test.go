@@ -703,9 +703,10 @@ Recording:
   to convert the bundle to a human-readable JSON.  The `+"`wazero`"+` binary name
   is the one documented exception to the codetracer-<lang>-recorder pattern.
 
-  Pass `+"`--boundary-log <path>`"+` to materialise a trace from a browser WASM
-  boundary recording by re-executing the ORIGINAL, uninstrumented module
-  against it (WASM-Instrumentation-Layer.md §6).
+  Pass `+"`--boundary-log <program>.ct`"+` to materialise a trace from a browser
+  WASM boundary recording by re-executing the ORIGINAL, uninstrumented
+  module against it (WASM-Instrumentation-Layer.md §6), or
+  `+"`--boundary-stream -`"+` to replay one from stdin while it is being recorded.
 
 `+snapshotHelpBlock+`
 `, stderr)

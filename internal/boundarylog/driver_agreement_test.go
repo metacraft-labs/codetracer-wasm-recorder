@@ -29,7 +29,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,10 +82,10 @@ func streamVerdict(t *testing.T, wasmPath, ctDir string) (verdict, error) {
 	compiled, err := rt.CompileModule(ctx, wasm)
 	require.NoError(t, err)
 
-	rec, err := LoadRecordingMetadata(ctDir)
+	rec, err := LoadTestStreamMetadata(ctDir)
 	require.NoError(t, err)
 
-	raw, err := os.ReadFile(filepath.Join(ctDir, "trace.json"))
+	raw, err := ReadTestLogFile(ctDir)
 	require.NoError(t, err)
 
 	res, err := StreamingReplay(ctx, Options{
@@ -247,7 +246,7 @@ func TestATruncatedStreamCannotSettleTheImportFormat(t *testing.T) {
 	t.Cleanup(func() { _ = rt.Close(ctx) })
 	compiled, err := rt.CompileModule(ctx, wasm)
 	require.NoError(t, err)
-	rec, err := LoadRecordingMetadata(ctDir)
+	rec, err := LoadTestStreamMetadata(ctDir)
 	require.NoError(t, err)
 
 	_, err = StreamingReplay(ctx, Options{
@@ -517,9 +516,9 @@ func TestTheStreamingWitnessEqualsTheBatchWitness(t *testing.T) {
 			t.Cleanup(func() { _ = rt.Close(ctx) })
 			compiled, err := rt.CompileModule(ctx, wasm)
 			require.NoError(t, err)
-			rec, err := LoadRecordingMetadata(ctDir)
+			rec, err := LoadTestStreamMetadata(ctDir)
 			require.NoError(t, err)
-			raw, err := os.ReadFile(filepath.Join(ctDir, "trace.json"))
+			raw, err := ReadTestLogFile(ctDir)
 			require.NoError(t, err)
 			_, _ = StreamingReplay(ctx, Options{
 				Runtime:      rt,
@@ -606,7 +605,7 @@ func TestATruncatedStreamWithASettledWitnessStillDiverges(t *testing.T) {
 	t.Cleanup(func() { _ = rt.Close(ctx) })
 	compiled, err := rt.CompileModule(ctx, wasm)
 	require.NoError(t, err)
-	rec, err := LoadRecordingMetadata(ctDir)
+	rec, err := LoadTestStreamMetadata(ctDir)
 	require.NoError(t, err)
 
 	out, err := StreamingReplay(ctx, Options{
@@ -681,7 +680,7 @@ func TestNoAcceptedStreamingReplayLeavesAClassificationPending(t *testing.T) {
 			t.Cleanup(func() { _ = rt.Close(ctx) })
 			compiled, err := rt.CompileModule(ctx, wasmBytes)
 			require.NoError(t, err)
-			raw, err := os.ReadFile(filepath.Join(ctDir, "trace.json"))
+			raw, err := ReadTestLogFile(ctDir)
 			require.NoError(t, err)
 
 			// The whole document, and then every proper prefix of it by call
@@ -741,7 +740,7 @@ func TestNoAcceptedStreamingReplayLeavesAClassificationPending(t *testing.T) {
 // given.
 func mustReloadMetadata(t *testing.T, ctDir string) *Recording {
 	t.Helper()
-	rec, err := LoadRecordingMetadata(ctDir)
+	rec, err := LoadTestStreamMetadata(ctDir)
 	require.NoError(t, err)
 	return rec
 }

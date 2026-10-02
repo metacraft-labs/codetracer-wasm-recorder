@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/internal/boundarylog"
@@ -29,14 +27,9 @@ type boundaryReplayRequest struct {
 	// logPath is the `--boundary-log` argument.
 	logPath string
 	// streamPath is the `--boundary-stream` argument: "-" to read the
-	// recording's `trace.json` from stdin as the producer writes it, or the
-	// path of a file the producer is appending to. Empty means the recording
-	// is complete and is read from disk in one pass.
+	// boundary log from stdin as the producer writes it. Empty means the
+	// recording is complete and is read from its `.ct` in one pass.
 	streamPath string
-	// streamDone is the `--stream-done` argument: a marker file whose
-	// appearance means the producer has finished. Required when streamPath
-	// names a file, meaningless when it is "-".
-	streamDone string
 	// stdin is the stream source for `--boundary-stream -`.
 	stdin io.Reader
 	// manifestPath is the `--boundary-manifest` argument; empty means
@@ -68,13 +61,22 @@ type boundaryReplayRequest struct {
 func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut io.Writer, stdErr io.Writer) int {
 	streaming := req.streamPath != ""
 
-	// A streaming replay starts from the recording's *metadata* only — the
-	// crossings are what the stream delivers, and waiting for them all would
-	// be the pass at the end that snapshot spec §2 exists to avoid.
 	var recording *boundarylog.Recording
+	var stream *boundarylog.StreamReader
 	var err error
 	if streaming {
-		recording, err = boundarylog.LoadRecordingMetadata(req.logPath)
+		src, serr := openBoundaryStream(req)
+		if serr != nil {
+			fmt.Fprintf(stdErr, "%v\n", serr)
+			return 1
+		}
+		// A streaming replay starts from the recording's *metadata* only —
+		// the crossings are what the stream delivers, and waiting for them
+		// all would be the pass at the end that snapshot spec §2 exists to
+		// avoid. The metadata is the stream's own Header frame, which the
+		// producer sends before anything else.
+		stream = boundarylog.NewStreamReader(src)
+		recording, err = stream.ReadHeader("<stdin>")
 	} else {
 		recording, err = boundarylog.LoadRecording(req.logPath)
 	}
@@ -135,13 +137,7 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 
 	var result boundarylog.Result
 	if streaming {
-		src, closeSrc, err := openBoundaryStream(req)
-		if err != nil {
-			fmt.Fprintf(stdErr, "%v\n", err)
-			return 1
-		}
-		defer closeSrc()
-		streamed, err := boundarylog.StreamingReplay(ctx, opts, boundarylog.NewStreamReader(src))
+		streamed, err := boundarylog.StreamingReplay(ctx, opts, stream)
 		if err != nil {
 			fmt.Fprintf(stdErr, "%v\n", err)
 			return 1
@@ -233,64 +229,26 @@ func doBoundaryLogReplay(ctx context.Context, req boundaryReplayRequest, stdOut 
 // openBoundaryStream resolves `--boundary-stream` into a reader whose `io.EOF`
 // means "the producer has finished".
 //
-// Two shapes are supported, and the difference matters:
-//
-//   - `-` reads the recording's `trace.json` from **stdin**. This is the shape
-//     a daemon-side tee has: the `record-web` receiver writes the same bytes to
-//     the `.ct` and to this process's stdin, and closing the pipe is an
-//     unambiguous end of stream. It also gives backpressure for free — the
-//     replayer reads only between exported calls, so a producer that outruns it
-//     blocks on the pipe rather than queueing without bound.
-//   - a path follows a file the producer is appending to. A file has no end of
-//     stream, so `--stream-done <marker>` must name a file whose appearance
-//     means the producer has stopped. Without it there is no way to tell a
-//     recording still in progress from one that is over, and this refuses
-//     rather than guessing — guessing wrong in one direction hangs forever and
-//     in the other truncates the recording.
-func openBoundaryStream(req boundaryReplayRequest) (io.Reader, func(), error) {
-	if req.streamPath == "-" {
-		if req.stdin == nil {
-			return nil, nil, fmt.Errorf("--boundary-stream - needs stdin")
-		}
-		if req.streamDone != "" {
-			return nil, nil, fmt.Errorf(
-				"--stream-done has no meaning with --boundary-stream -: closing stdin " +
-					"already ends the stream")
-		}
-		return req.stdin, func() {}, nil
+// The only shape is `-`: the CTBL boundary log on **stdin**, which is what
+// `record-web --snapshot-consumer` writes. Closing the pipe is an unambiguous
+// end of stream, and backpressure comes for free — the replayer reads only
+// between exported calls, so a producer that outruns it blocks on the pipe
+// rather than queueing without bound. The stream carries its own Header, so
+// `--boundary-log` is refused alongside it rather than silently ignored.
+func openBoundaryStream(req boundaryReplayRequest) (io.Reader, error) {
+	if req.logPath != "" {
+		return nil, fmt.Errorf(
+			"--boundary-stream reads the whole recording, metadata included, from " +
+				"the stream; drop --boundary-log, which names a finished .ct")
 	}
-	if req.streamDone == "" {
-		return nil, nil, fmt.Errorf(
-			"--boundary-stream %s follows a file the producer is still appending to, "+
-				"which has no end of stream. Pass --stream-done <marker> naming a file "+
-				"the producer creates when it has finished, or use --boundary-stream - "+
-				"and pipe the recording in, where closing the pipe ends it",
-			req.streamPath)
+	if req.streamPath != "-" {
+		return nil, fmt.Errorf(
+			"--boundary-stream %s: a boundary stream is read from stdin "+
+				"(`--boundary-stream -`), where closing the pipe ends it; following a "+
+				"file is not supported", req.streamPath)
 	}
-	done := make(chan struct{})
-	stop := make(chan struct{})
-	go func() {
-		for {
-			if _, err := os.Stat(req.streamDone); err == nil {
-				close(done)
-				return
-			}
-			select {
-			case <-stop:
-				// The replay is over; stop watching. `done` is deliberately
-				// left open — nothing reads it after this.
-				return
-			case <-time.After(boundarylog.FollowPoll):
-			}
-		}
-	}()
-	src, err := boundarylog.FollowFile(req.streamPath, done)
-	if err != nil {
-		close(stop)
-		return nil, nil, err
+	if req.stdin == nil {
+		return nil, fmt.Errorf("--boundary-stream - needs stdin")
 	}
-	return src, func() {
-		close(stop)
-		_ = src.Close()
-	}, nil
+	return req.stdin, nil
 }

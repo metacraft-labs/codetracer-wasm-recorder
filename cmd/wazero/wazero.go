@@ -232,9 +232,10 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	flags.StringVar(&boundaryLogPath, "boundary-log", "",
 		"Re-executes the module against a recorded boundary log, replaying the "+
 			"recorded host results in place of a live host, and materialises a "+
-			"CTFS trace.  The argument is the `<program>.ct` directory the "+
-			"CodeTracer backend-manager wrote for a browser WASM session (or its "+
-			"trace.json).  Pass the ORIGINAL, uninstrumented .wasm.")
+			"CTFS trace.  The argument is the `<program>.ct` the CodeTracer "+
+			"backend-manager's `record-web` wrote for a browser WASM session; its "+
+			"boundary log is stored inside it.  Pass the ORIGINAL, uninstrumented "+
+			".wasm.")
 
 	// Streaming boundary-log replay (WASM-Replay-Snapshots-And-Slices.md §2).
 	// The recording is consumed as it arrives and re-executed in lockstep, so
@@ -242,19 +243,12 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	// derived in a pass afterwards.
 	var boundaryStreamPath string
 	flags.StringVar(&boundaryStreamPath, "boundary-stream", "",
-		"Consumes the --boundary-log recording as it is still being produced, "+
-			"re-executing in lockstep.  `-` reads the recording's trace.json from "+
-			"stdin, which is what a daemon-side tee provides and where closing the "+
-			"pipe ends the stream; a path follows a file the producer is appending "+
-			"to and then needs --stream-done.  The --boundary-log argument still "+
-			"supplies the recording's metadata and host state.")
-
-	var streamDonePath string
-	flags.StringVar(&streamDonePath, "stream-done", "",
-		"With --boundary-stream <file>, the `marker` file whose appearance means "+
-			"the producer has finished writing.  A file has no end of stream, so "+
-			"without this there is no way to tell a recording still in progress from "+
-			"one that is over.")
+		"Consumes a boundary recording as it is still being produced, "+
+			"re-executing in lockstep.  The only accepted value is `-`: the CTBL "+
+			"boundary log is read from stdin, which is what `record-web "+
+			"--snapshot-consumer` provides and where closing the pipe ends the "+
+			"stream.  The stream carries its own metadata, so --boundary-log is not "+
+			"given with it.")
 
 	var boundaryManifestPath string
 	flags.StringVar(&boundaryManifestPath, "boundary-manifest", "",
@@ -442,7 +436,7 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 	// supplies every import from the recording rather than from WASI or a
 	// live host.  It therefore short-circuits the WASI detection and the
 	// ordinary instantiate-and-run path below.
-	if boundaryLogPath != "" {
+	if boundaryLogPath != "" || boundaryStreamPath != "" {
 		if stylusTracePath != "" {
 			fmt.Fprintln(stdErr, "--boundary-log and --stylus are mutually exclusive: "+
 				"each supplies the module's imports from a different recording")
@@ -458,18 +452,10 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			wasmPath:     wasmPath,
 			logPath:      boundaryLogPath,
 			streamPath:   boundaryStreamPath,
-			streamDone:   streamDonePath,
 			stdin:        os.Stdin,
 			manifestPath: boundaryManifestPath,
 			snapshots:    snapshots,
 		}, stdOut, stdErr)
-	}
-
-	if boundaryStreamPath != "" || streamDonePath != "" {
-		fmt.Fprintln(stdErr, "--boundary-stream and --stream-done apply to "+
-			"--boundary-log replay only: they say how the recording arrives, and "+
-			"nothing else consumes a boundary recording")
-		return 1
 	}
 
 	if snapshots.requested() {
@@ -741,9 +727,10 @@ func printUsage(stdErr io.Writer) {
 	fmt.Fprintln(stdErr, "  to convert the bundle to a human-readable JSON.  The `wazero` binary name")
 	fmt.Fprintln(stdErr, "  is the one documented exception to the codetracer-<lang>-recorder pattern.")
 	fmt.Fprintln(stdErr)
-	fmt.Fprintln(stdErr, "  Pass `--boundary-log <path>` to materialise a trace from a browser WASM")
-	fmt.Fprintln(stdErr, "  boundary recording by re-executing the ORIGINAL, uninstrumented module")
-	fmt.Fprintln(stdErr, "  against it (WASM-Instrumentation-Layer.md §6).")
+	fmt.Fprintln(stdErr, "  Pass `--boundary-log <program>.ct` to materialise a trace from a browser")
+	fmt.Fprintln(stdErr, "  WASM boundary recording by re-executing the ORIGINAL, uninstrumented")
+	fmt.Fprintln(stdErr, "  module against it (WASM-Instrumentation-Layer.md §6), or")
+	fmt.Fprintln(stdErr, "  `--boundary-stream -` to replay one from stdin while it is being recorded.")
 	fmt.Fprintln(stdErr)
 	if snapshotsAvailable {
 		fmt.Fprintln(stdErr, "  This build derives replay snapshots (--snapshots) and can materialise a")

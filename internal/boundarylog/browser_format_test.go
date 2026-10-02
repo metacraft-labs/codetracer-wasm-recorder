@@ -3,7 +3,6 @@ package boundarylog
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -303,37 +302,50 @@ func (b *recordingBuilder) legacyImportCall(index int, path string, line int, ar
 	b.marker("send", fmt.Sprintf("wasm export #%d", index), "")
 }
 
-// write materialises the `<program>.ct` directory under `dir` and returns
-// its path.
+// log renders the recording's boundary log, as `record-web` writes it at
+// the end of a cleanly finished session.
+func (b *recordingBuilder) log() []byte {
+	return EncodeTestLog(b.program, b.workdir, b.events, true)
+}
+
+// write materialises `<program>.ct` under `dir` — a CTFS container whose
+// `boundary.log` is this recording — and returns its path.
 func (b *recordingBuilder) write(t *testing.T, dir string) string {
 	t.Helper()
 	ct := filepath.Join(dir, b.program+".ct")
-	require.NoError(t, os.MkdirAll(ct, 0o755))
-
-	events, err := json.Marshal(b.events)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(ct, "trace.json"), events, 0o644))
-
-	meta, err := json.Marshal(map[string]any{
-		"program": b.program, "args": []string{}, "workdir": b.workdir,
-		"recorder": map[string]any{"name": "codetracer-js-recorder-browser", "version": "0.1.0"},
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(ct, "trace_metadata.json"), meta, 0o644))
-
-	paths, err := json.Marshal(b.paths)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(ct, "trace_paths.json"), paths, 0o644))
-
+	WriteTestRecording(t, ct, b.log())
 	return ct
 }
 
-// writeHostState adds the optional `boundary_state.json` sidecar.
-func writeHostState(t *testing.T, ctDir string, state any) {
-	t.Helper()
-	b, err := json.Marshal(state)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(ctDir, HostStateFileName), b, 0o644))
+// withHostState puts the spec §3.3 / §3.4 state described by `state` — a
+// `{version, initial, mutations}` document — into the recording as the
+// host-state records the daemon emits: one initial-state record and one per
+// mutation, ahead of the first exported call, which is where the producer
+// sends §3.3.
+func (b *recordingBuilder) withHostState(state map[string]any) {
+	version := state["version"]
+	marker := func(record, field string, payload any) map[string]any {
+		doc := map[string]any{
+			"boundary_id": hostStateBoundary, "version": version, "record": record,
+		}
+		if payload != nil {
+			doc[field] = payload
+		}
+		meta, _ := json.Marshal(doc)
+		return map[string]any{"Event": map[string]any{
+			"kind": float64(12), "metadata": string(meta), "content": "",
+		}}
+	}
+	initial, _ := state["initial"].(map[string]any)
+	if initial == nil {
+		initial = map[string]any{}
+	}
+	records := []map[string]any{marker(hostStateRecordInitial, "initial", initial)}
+	mutations, _ := state["mutations"].([]any)
+	for _, m := range mutations {
+		records = append(records, marker(hostStateRecordMutation, "mutation", m))
+	}
+	b.events = append(records, b.events...)
 }
 
 // demoRecordingPath is the real, browser-produced recording committed under
@@ -346,14 +358,13 @@ const demoRecordingPath = "../../cmd/wazero/testdata/boundary-log/frontend-wasm.
 //
 // This is the test that makes every other recording built here trustworthy:
 // it rebuilds the demo's single crossing with the builder and asserts the
-// resulting `trace.json` is structurally identical to the one the browser
+// resulting boundary log is record-for-record identical to the one the browser
 // and the backend-manager actually wrote. A drift in the builder — or in
 // this package's understanding of the format — fails here first.
 func TestBuilderReproducesTheCommittedBrowserRecording(t *testing.T) {
-	realRaw, err := os.ReadFile(filepath.Join(demoRecordingPath, "trace.json"))
-	require.NoError(t, err)
-	var real []map[string]any
-	require.NoError(t, json.Unmarshal(realRaw, &real))
+	realLog := ReadTestLog(t, demoRecordingPath)
+	real, realHeader, realEnded := DecodeTestLogEvents(t, realLog)
+	require.True(t, realEnded, "the committed recording's boundary log is complete")
 
 	srcPath := "/home/zahary/m/js-support/codetracer/src/db-backend/tests/fixtures/" +
 		"cross_process/account-balance-with-wasm/wasm-src/lib.rs"
@@ -363,14 +374,13 @@ func TestBuilderReproducesTheCommittedBrowserRecording(t *testing.T) {
 		[]jsValue{jsInt(42), jsInt(100)},
 		[]jsValue{jsInt(620)}, nil)
 
-	built, err := json.Marshal(b.events)
-	require.NoError(t, err)
-	var got []map[string]any
-	require.NoError(t, json.Unmarshal(built, &got))
+	got, gotHeader, _ := DecodeTestLogEvents(t, b.log())
+	require.Equal(t, realHeader.Program, gotHeader.Program)
+	require.Equal(t, realHeader.RecorderName, gotHeader.RecorderName)
 
 	require.Equal(t, len(real), len(got),
-		"the builder emitted %d records, the real browser recording has %d.\n"+
-			"real:  %s\nbuilt: %s", len(got), len(real), string(realRaw), string(built))
+		"the builder emitted %d records, the real browser recording has %d",
+		len(got), len(real))
 	for i := range real {
 		require.Equal(t, real[i], got[i],
 			"record %d differs from the real browser recording", i)

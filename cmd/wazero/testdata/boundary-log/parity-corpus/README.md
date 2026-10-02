@@ -142,10 +142,9 @@ other leg. With the two imports on different names the direct leg needs
 only a memory-defining module and an ordinary `HostModuleBuilder`, and
 shares no code with the replayer.
 
-`vault_apply.ct/trace.json` also carries the M44b in-stream host-state
-records (`boundary_id: "wasm-host-state"`) alongside the
-`boundary_state.json` sidecar. The two must agree; `LoadRecording` refuses
-a recording where they do not.
+`vault_apply.ct` also carries the M44b in-stream host-state records
+(`boundary_id: "wasm-host-state"`); they are the recording's only carrier of
+its spec §3.3 / §3.4 state.
 
 ## How they were made
 

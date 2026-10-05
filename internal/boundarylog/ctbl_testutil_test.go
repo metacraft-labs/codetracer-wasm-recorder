@@ -137,3 +137,32 @@ func CopyTestRecording(t *testing.T, src, dst string, dropIfContains ...string) 
 	WriteTestRecording(t, dst, out)
 	return dst, dropped
 }
+
+// RewriteTestRecordingEvents copies the `.ct` at `src` to `dst`, passing the
+// metadata of every `Event` record through `edit`, which returns the new
+// metadata and whether to keep the record. It reports how many records
+// `edit` changed or dropped.
+func RewriteTestRecordingEvents(t *testing.T, src, dst string, edit func(meta string) (string, bool)) (string, int) {
+	t.Helper()
+	log := ReadTestLog(t, src)
+	h, records, ended, err := ctbltest.Decode(log)
+	require.NoError(t, err)
+	kept := make([]map[string]any, 0, len(records))
+	touched := 0
+	for _, r := range records {
+		if ev, ok := r["Event"].(map[string]any); ok {
+			meta := ev["metadata"].(string)
+			newMeta, keep := edit(meta)
+			if !keep || newMeta != meta {
+				touched++
+			}
+			if !keep {
+				continue
+			}
+			ev["metadata"] = newMeta
+		}
+		kept = append(kept, r)
+	}
+	WriteTestRecording(t, dst, ctbltest.Encode(h, kept, ended))
+	return dst, touched
+}

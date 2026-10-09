@@ -1660,9 +1660,9 @@ func TestRecorderGoldenCollections(t *testing.T) {
 }
 
 // TestRecorderGoldenPanicPath records panic_path.wasm and asserts
-// that the recorder produces an `ioError` io_event (the wazero
-// recorder's `RecordEvent::Error` mapping) when the Rust program
-// panics.
+// that the recorder produces an io event of kind `Error`
+// (`EventLogKind` 11, codetracer-trace-format-spec trace-events.md
+// §"EventLogKind (u8 enum)") when the Rust program panics.
 //
 // Two paired fixes (cmd/wazero/wazero.go + interpreter.go) make
 // this test pass:
@@ -1672,7 +1672,7 @@ func TestRecorderGoldenCollections(t *testing.T) {
 //     actually lands on disk for panicking programs.
 //  2. interpreter.go's recover() now records the actual panic
 //     value (e.g. "unreachable" for Rust panic→trap) as the
-//     ioError text and SKIPS the event for clean *sys.ExitError
+//     `Error` event's text and SKIPS the event for clean *sys.ExitError
 //     exits with code 0 (so normal-exit programs no longer carry
 //     a spurious "runtime error" io_event).
 func TestRecorderGoldenPanicPath(t *testing.T) {
@@ -1709,8 +1709,9 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 		outDir)
 
 	// Per the recorder-test spec §2 ("Exceptions / errors"), the
-	// recorder MUST emit a `RecordEvent::Error` (mapped to
-	// `ioError` in the wazero recorder) when the program panics.
+	// recorder MUST emit a `RecordEvent::Error` when the program
+	// panics.  The trace format stores the kind exactly, and ct-print
+	// reports it by its `EventLogKind` name, `Error`.
 	cmd := exec.Command(ctPrint, "--full", "--strip-paths", candidates[0])
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err,
@@ -1746,17 +1747,21 @@ func TestRecorderGoldenPanicPath(t *testing.T) {
 	// site (panic_path.rs line 18).  The recorder's exact
 	// payload-format choice (text="panicked at ...", text="runtime
 	// error", etc.) is implementation-defined; the assertion target
-	// is "an io_kind = ioError exists, anchored at a step on or
-	// after the panic call".
-	var errIos []goldenEvent
+	// is "an io event with io_kind = Error exists, anchored at a
+	// step on or after the panic call".
+	var ios, errIos []goldenEvent
 	for _, ev := range events {
-		if ev.Kind == "io" && ev.IoKind == "ioError" {
+		if ev.Kind != "io" {
+			continue
+		}
+		ios = append(ios, ev)
+		if ev.IoKind == "Error" {
 			errIos = append(errIos, ev)
 		}
 	}
 	require.True(t, len(errIos) >= 1,
-		"expected at least one ioError event for the panic path; got %d "+
-			"io events", len(errIos))
+		"expected at least one io event of kind Error for the panic "+
+			"path; got io events %+v", ios)
 
 	// Last user-step before the panic should be on or after line 18
 	// (the `panic!()` call site).  This pins the recorder's

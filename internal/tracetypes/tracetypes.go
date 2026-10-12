@@ -288,12 +288,19 @@ type FullValueRecord struct {
 
 // ----- Special-event kinds (I/O, errors, EVM) -----
 
+// RecordEventKind is the `EventLogKind` of a special event: the u8 `kind` of
+// an `events.dat` record (codetracer-trace-format-spec trace-events.md
+// §"EventLogKind (u8 enum)").  The ordinals are the trace format's, so a
+// kind is passed to the writer as is.  A recorder uses the exact kind;
+// WriteOther / ReadOther are only for an operation no other kind describes.
 type RecordEventKind int
 
 const (
+	// EventKindWrite is output to stdout, or a write with no known target.
 	EventKindWrite RecordEventKind = iota
 	EventKindWriteFile
 	EventKindWriteOther
+	// EventKindRead is input from stdin, or a read with no known source.
 	EventKindRead
 	EventKindReadFile
 	EventKindReadOther
@@ -307,4 +314,61 @@ const (
 	// trace events
 	EventKindTraceLogEvent
 	EventKindEvmEvent
+	// EventKindWriteStderr is output to stderr.
+	EventKindWriteStderr
+	// EventKindExec is running a program or spawning a process.
+	EventKindExec
+	// EventKindReadEnv is reading an environment variable or testing
+	// whether one is set.
+	EventKindReadEnv
+	// EventKindWriteEnv is setting or removing an environment variable.
+	EventKindWriteEnv
+	// EventKindStat is an existence or metadata query of a filesystem
+	// entry, including a PATH search.
+	EventKindStat
+	// EventKindCreateDir is creating a directory, including copying a
+	// directory tree.
+	EventKindCreateDir
+	EventKindRemoveDir
+	EventKindRemoveFile
+	// EventKindRename is renaming or moving a file or directory.
+	EventKindRename
+	// EventKindChangeDir is changing the working directory.
+	EventKindChangeDir
 )
+
+// recordEventKindNames are the trace format's names of the assigned kinds,
+// indexed by ordinal.
+var recordEventKindNames = [...]string{
+	"Write", "WriteFile", "WriteOther", "Read", "ReadFile", "ReadOther",
+	"ReadDir", "OpenDir", "CloseDir", "Socket", "Open", "Error",
+	"TraceLogEvent", "EvmEvent", "WriteStderr", "Exec", "ReadEnv",
+	"WriteEnv", "Stat", "CreateDir", "RemoveDir", "RemoveFile", "Rename",
+	"ChangeDir",
+}
+
+// AllRecordEventKinds lists every assigned kind in ordinal order.  Values
+// outside it are unassigned: the writer refuses them rather than storing a
+// substitute kind.
+var AllRecordEventKinds = func() []RecordEventKind {
+	all := make([]RecordEventKind, len(recordEventKindNames))
+	for i := range all {
+		all[i] = RecordEventKind(i)
+	}
+	return all
+}()
+
+// Valid reports whether k is a kind the trace format assigns.
+func (k RecordEventKind) Valid() bool {
+	return k >= 0 && int(k) < len(recordEventKindNames)
+}
+
+// String returns the trace format's name of k, the name readers such as
+// `ct-print` report it under.  An unassigned value is spelled so that it
+// cannot be mistaken for a kind.
+func (k RecordEventKind) String() string {
+	if !k.Valid() {
+		return "RecordEventKind(unassigned " + strconv.Itoa(int(k)) + ")"
+	}
+	return recordEventKindNames[k]
+}

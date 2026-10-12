@@ -182,6 +182,11 @@ type CtfsTraceWriter struct {
 	// calls do not produce duplicate paths.dat entries.  The actual
 	// per-line buffer is held on the buffered event itself.
 	pathsWithLineLengths map[string]struct{}
+
+	// refusedEvent is the first special event whose kind the trace format
+	// does not assign.  ProduceTrace reports it instead of writing a
+	// container, since the event cannot be stored under any other kind.
+	refusedEvent error
 }
 
 // NewCtfsTraceWriter creates a fresh CtfsTraceWriter.  The returned writer
@@ -359,6 +364,15 @@ func (w *CtfsTraceWriter) RegisterVariable(name string, value tracetypes.ValueRe
 }
 
 func (w *CtfsTraceWriter) RegisterRecordEvent(kind tracetypes.RecordEventKind, metadata string, content string) {
+	if !kind.Valid() {
+		if w.refusedEvent == nil {
+			w.refusedEvent = fmt.Errorf(
+				"special event kind %d is not an assigned EventLogKind "+
+					"(the trace format assigns 0-%d); the event is refused",
+				int(kind), len(tracetypes.AllRecordEventKinds)-1)
+		}
+		return
+	}
 	w.events = append(w.events, ctfsBufferedEvent{
 		kind:            ctfsEventRecordEvent,
 		recordEventKind: kind,
@@ -476,6 +490,10 @@ func (w *CtfsTraceWriter) Arg(name string, value tracetypes.ValueRecord) tracety
 // derives from the program path's basename (Nim FFI behaviour: see
 // trace_writer_begin_events in codetracer_trace_writer_ffi.nim).
 func (w *CtfsTraceWriter) ProduceTrace(traceDir string, programName string, workdir string) error {
+	if w.refusedEvent != nil {
+		return w.refusedEvent
+	}
+
 	// The Nim FFI's trace_writer_close opens the `.ct` file with fmWrite,
 	// which fails if the parent directory does not exist.  Match the
 	// behaviour callers expect from `--out-dir=<new path>` by creating the

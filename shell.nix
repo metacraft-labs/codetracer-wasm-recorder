@@ -5,6 +5,7 @@
   preCommit,
   # Runs a snippet only inside this repository; see flake.nix.
   ownRepoOnly,
+  installGitHooks,
 }:
 let
   # Rust toolchain for building the FFI library from the sibling
@@ -96,6 +97,6 @@ mkShell {
     # pure-Go writer will be available (CGO_ENABLED stays at 0).
     source scripts/detect-trace-format.sh
 
-    ${ownRepoOnly preCommit.shellHook}
+    ${ownRepoOnly installGitHooks}
   '';
 }

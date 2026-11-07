@@ -12,7 +12,9 @@
 #   $GITHUB_WORKSPACE/../
 #     codetracer/                  <-- cloned by this workflow
 #     codetracer-wasm-recorder/    <-- checked out by actions/checkout
-#     codetracer-trace-format/     <-- cloned for FFI library
+#     codetracer-trace-format/     <-- cloned for db-backend's trace crates
+#     codetracer-trace-format-nim/ <-- cloned for the CTFS writer (FFI)
+#     codetracer-native-recorder/  <-- cloned for db-backend's MCR emulator
 #
 # POLICY: All CI steps should be reproducible locally via `just` targets.
 # Local equivalent:
@@ -119,15 +121,34 @@ jobs:
           siblings: |
             codetracer=${{ (github.event.inputs.codetracer_ref != 'main' && github.event.inputs.codetracer_ref) || github.event.client_payload.codetracer_ref }}
             codetracer-trace-format
+            # The CTFS writer wazero links through cgo, built from this
+            # sibling by scripts/detect-trace-format.sh in the step below;
+            # codetracer's db-backend also builds it (its default
+            # `nim-reader` feature, codetracer_trace_writer_nim/build.rs).
+            codetracer-trace-format-nim
+            # db-backend's build.rs compiles the Nim MCR emulator from this
+            # sibling's ct_emulator/ and refuses to build without it. These
+            # three are the set codetracer's own CI provisions for a
+            # db-backend build (.github/actions/setup-db-backend-siblings).
+            codetracer-native-recorder
 
       # ------------------------------------------------------------------
       # 3. Build wazero binary
       # ------------------------------------------------------------------
       - name: Build wazero
+        # In THIS repository's dev shell, as `just build` and ci.yml do. Its
+        # shellHook (scripts/detect-trace-format.sh) builds the CTFS writer
+        # from the codetracer-trace-format-nim sibling and points cgo at it;
+        # codetracer's shell does no such wiring, so a cgo link there fails
+        # (`cannot find -lcodetracer_trace_writer`), and a wazero built with
+        # cgo off has only the stub writer and cannot record. `set -e`: the
+        # build used to fail here while the step still passed, because the
+        # `echo` after it was the script's last command.
         run: |
-          nix develop ../codetracer?submodules=1 --command bash -c '
+          nix develop --command bash -c '
+            set -euo pipefail
             go build -o wazero ./cmd/wazero
-            echo "Built wazero: $(./wazero version 2>/dev/null || echo unknown)"
+            echo "Built wazero: $(./wazero version)"
           '
 
       # ------------------------------------------------------------------
@@ -139,6 +160,9 @@ jobs:
           cd ../codetracer
           nix develop .?submodules=1 --command bash -c "
             set -e
+            # A missing prerequisite (wazero, the wasm32-wasip1 target) fails
+            # the test instead of letting it pass having asserted nothing.
+            export CODETRACER_ALLOW_GRACEFUL_TEST_SKIPPING=false
             rustup target add wasm32-wasip1 2>/dev/null || true
             export CODETRACER_WASM_VM_PATH='$WAZERO_PATH'
             echo \"Using wazero: \$CODETRACER_WASM_VM_PATH\"

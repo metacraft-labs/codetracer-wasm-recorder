@@ -1,17 +1,10 @@
 // Host-supplied state over the streaming replay path — M44b.
 //
-// `--boundary-log` (batch) reads the spec §3.3 / §3.4 state from the
-// `boundary_state.json` sidecar at startup. `--boundary-stream` reads
-// `LoadRecordingMetadata` once, at startup too — and while a recording is
-// still being produced the sidecar cannot exist yet, because §3.3 is only
-// known at the module's first exported call, which happens *after* the
-// daemon opened the stream and spawned its consumer. So the streaming path
-// refused every module whose linear memory is imported: every Stylus
-// contract and every `wasm-bindgen`-style glue layer, which is exactly the
-// class of module snapshot derivation during recording exists for.
-//
-// M44b carries the two records in the stream itself. These tests drive the
-// consequence, over the `vault_apply` corpus recording — a real
+// Spec §3.3 state is only known at the module's first exported call, which
+// happens *after* the daemon opened the stream and spawned its consumer, so it
+// cannot be metadata the consumer reads at startup. It rides in the boundary
+// log itself, as host-state records. These tests drive the consequence for a
+// streaming replay, over the `vault_apply` corpus recording — a real
 // headless-Chromium recording of a module that imports its memory, reads
 // its calldata out of it, and calls a host function that answers by
 // writing into it.
@@ -24,9 +17,7 @@ package boundarylog_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -50,66 +41,20 @@ const (
 	vaultApplyImports = 3
 )
 
-// copyRecording copies a `.ct` directory, optionally rewriting
-// `trace.json` and optionally dropping the sidecar.
+// withoutHostStateRecords copies the recording with every host-state record
+// of `kind` removed, and fails if there was none to remove.
 //
-// Dropping the sidecar is how the *live* shape is reproduced from a
-// finished recording: a still-growing `.ct` has a `trace.json` and no
-// `boundary_state.json`, because the daemon writes the sidecar as a
-// rendering of records it has already put into the stream.
-func copyRecording(
-	t *testing.T, src, dst string, dropSidecar bool, rewrite func([]byte) []byte,
-) string {
+// The negative controls below need the replay to diverge on a *missing
+// input*, so the removal works on whole frames and cannot leave a malformed
+// log behind.
+func withoutHostStateRecords(t *testing.T, dst, kind string) string {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(dst, 0o755))
-	entries, err := os.ReadDir(src)
-	require.NoError(t, err)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if dropSidecar && e.Name() == "boundary_state.json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(src, e.Name()))
-		require.NoError(t, err)
-		if e.Name() == "trace.json" && rewrite != nil {
-			data = rewrite(data)
-		}
-		require.NoError(t, os.WriteFile(filepath.Join(dst, e.Name()), data, 0o600))
-	}
-	return dst
-}
-
-// withoutHostStateRecords returns a `trace.json` with every in-stream
-// host-state record of `kind` removed.
-//
-// It works on the decoded record array rather than on the raw bytes so a
-// removal cannot leave a malformed document behind — the point of each
-// negative control is that the replay diverges on a *missing input*, not
-// that it fails to parse.
-func withoutHostStateRecords(t *testing.T, kind string) func([]byte) []byte {
-	t.Helper()
-	return func(raw []byte) []byte {
-		var records []json.RawMessage
-		require.NoError(t, json.Unmarshal(raw, &records))
-		kept := make([]json.RawMessage, 0, len(records))
-		dropped := 0
-		for _, r := range records {
-			if strings.Contains(string(r), `\"boundary_id\":\"wasm-host-state\"`) &&
-				strings.Contains(string(r), `\"record\":\"`+kind+`\"`) {
-				dropped++
-				continue
-			}
-			kept = append(kept, r)
-		}
-		require.True(t, dropped > 0,
-			"no %q host-state record was found to withhold — the fixture has "+
-				"changed and this negative control is no longer testing anything", kind)
-		out, err := json.Marshal(kept)
-		require.NoError(t, err)
-		return out
-	}
+	out, dropped := boundarylog.CopyTestRecording(t, vaultApplyRecording, dst,
+		`"boundary_id":"wasm-host-state"`, `"record":"`+kind+`"`)
+	require.True(t, dropped > 0,
+		"no %q host-state record was found to withhold — the fixture has "+
+			"changed and this negative control is no longer testing anything", kind)
+	return out
 }
 
 // streamContainer materialises a whole recording through the STREAMING
@@ -117,7 +62,7 @@ func withoutHostStateRecords(t *testing.T, kind string) func([]byte) []byte {
 func streamContainer(t *testing.T, ctDir, outDir string) (string, boundarylog.StreamResult) {
 	t.Helper()
 	ctx, rt, compiled, rec := streamHarness(t, vaultApplyWasm, ctDir)
-	raw, err := os.ReadFile(filepath.Join(ctDir, "trace.json"))
+	raw, err := boundarylog.ReadTestLogFile(ctDir)
 	require.NoError(t, err)
 
 	w := tracewriter.NewCtfsTraceWriter()
@@ -147,55 +92,37 @@ func batchContainer(t *testing.T, ctDir, outDir string) string {
 }
 
 // TestStreamingReplayAppliesHostState is M44b's
-// `verify_streaming_replay_applies_host_state`.
-//
-// It asserts the property in the shape `TestStreamAgreesWithTheBatchParser`
-// asserts its own: the container the streaming path materialises from a
-// recording carrying **no sidecar at all** is byte-identical to the one
-// the batch path materialises from the same recording *with* its sidecar.
-//
-// The "no sidecar" copy is the load-bearing half. With the sidecar in
-// place the streaming path already worked, because `LoadRecordingMetadata`
-// reads it — that is what a *finished* recording being streamed from a
-// file looks like. What never worked, and what the whole streaming
-// pipeline was excluded from, is the shape a recording has while it is
-// still being produced: a growing `trace.json` and nothing else.
+// `verify_streaming_replay_applies_host_state`: the container the streaming
+// path materialises is byte-identical to the one the batch path
+// materialises from the same recording. The recording's host state reaches
+// the streaming driver only through the records as they arrive, which is
+// the shape a recording has while it is still being produced.
 func TestStreamingReplayAppliesHostState(t *testing.T) {
 	work := t.TempDir()
 
-	// The batch reference, from the committed recording as it stands.
 	want := batchContainer(t, vaultApplyRecording, filepath.Join(work, "batch"))
-
-	// The live shape: everything but the sidecar.
-	live := copyRecording(t, vaultApplyRecording, filepath.Join(work, "live"), true, nil)
-	require.False(t, fileExists(filepath.Join(live, "boundary_state.json")),
-		"the live copy must not carry a sidecar, or it proves nothing")
-
-	got, res := streamContainer(t, live, filepath.Join(work, "streamed"))
+	got, res := streamContainer(t, vaultApplyRecording, filepath.Join(work, "streamed"))
 	require.Equal(t, vaultApplyExports, res.ExportCalls)
 	require.Equal(t, vaultApplyImports, res.ImportCalls)
 	require.Nil(t, res.Truncation)
 
-	compareContainers(t, want, got,
-		"batch replay with the sidecar", "streaming replay with no sidecar")
+	compareContainers(t, want, got, "batch replay", "streaming replay")
 	requireNonEmptyTraceStreams(t, got)
 }
 
 // TestStreamingReplayWithoutTheInitialStateRecordDiverges is the first of
 // two negative controls, and it is what earns the test above.
 //
-// With the §3.3 record withheld — from the stream *and* from the sidecar —
-// the module reads `key = 0` out of a zeroed memory and passes it to the
+// With the §3.3 record withheld the module reads `key = 0` out of a zeroed memory and passes it to the
 // host, so the very first import call diverges. The same withholding on
 // the batch path produces the same class of failure, which is the point:
 // the two drivers must be equally strict about a missing input.
 func TestStreamingReplayWithoutTheInitialStateRecordDiverges(t *testing.T) {
 	work := t.TempDir()
-	stripped := copyRecording(t, vaultApplyRecording, filepath.Join(work, "no-initial"),
-		true, withoutHostStateRecords(t, "initial"))
+	stripped := withoutHostStateRecords(t, filepath.Join(work, "no-initial.ct"), "initial")
 
 	ctx, rt, compiled, rec := streamHarness(t, vaultApplyWasm, stripped)
-	raw, err := os.ReadFile(filepath.Join(stripped, "trace.json"))
+	raw, err := boundarylog.ReadTestLogFile(stripped)
 	require.NoError(t, err)
 
 	_, err = boundarylog.StreamingReplay(ctx, boundarylog.Options{
@@ -226,11 +153,10 @@ func TestStreamingReplayWithoutTheInitialStateRecordDiverges(t *testing.T) {
 // divergence were a warning.
 func TestStreamingReplayWithoutTheMutationRecordsDiverges(t *testing.T) {
 	work := t.TempDir()
-	stripped := copyRecording(t, vaultApplyRecording, filepath.Join(work, "no-mutations"),
-		true, withoutHostStateRecords(t, "mutation"))
+	stripped := withoutHostStateRecords(t, filepath.Join(work, "no-mutations.ct"), "mutation")
 
 	ctx, rt, compiled, rec := streamHarness(t, vaultApplyWasm, stripped)
-	raw, err := os.ReadFile(filepath.Join(stripped, "trace.json"))
+	raw, err := boundarylog.ReadTestLogFile(stripped)
 	require.NoError(t, err)
 
 	_, err = boundarylog.StreamingReplay(ctx, boundarylog.Options{
@@ -244,42 +170,6 @@ func TestStreamingReplayWithoutTheMutationRecordsDiverges(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "480000"),
 		"the diagnostic must name the wrong-but-plausible answer the module "+
 			"computed from a zero rate; got: %v", err)
-}
-
-// TestTheSidecarIsARenderingOfTheStream pins the invariant that lets both
-// carriers exist at once.
-//
-// A recording made by a current producer carries its host state twice.
-// The sidecar is rendered from the same records the stream carries, so the
-// two must agree — and a recording whose two carriers disagree is refused
-// rather than resolved, because picking one would serve two different
-// programs to the two drivers from one recording.
-func TestTheSidecarIsARenderingOfTheStream(t *testing.T) {
-	work := t.TempDir()
-
-	// (1) As committed: both carriers, and they agree.
-	h := newHarnessFor(t, vaultApplyWasm, vaultApplyRecording)
-	require.NotNil(t, h.rec.HostState)
-	require.Equal(t, 1, len(h.rec.HostState.Initial.Memories))
-	require.Equal(t, vaultApplyImports, len(h.rec.HostState.Mutations))
-
-	// (2) Perturbed sidecar: a hard error naming both renderings.
-	bad := copyRecording(t, vaultApplyRecording, filepath.Join(work, "bad"), false, nil)
-	sidecar := filepath.Join(bad, "boundary_state.json")
-	data, err := os.ReadFile(sidecar)
-	require.NoError(t, err)
-	// Move the first mutation to a different crossing. The document stays
-	// valid, so this is a disagreement rather than a decode failure.
-	perturbed := bytes.Replace(data,
-		[]byte(`"afterCrossing":1`), []byte(`"afterCrossing":3`), 1)
-	require.False(t, bytes.Equal(data, perturbed),
-		"the sidecar no longer contains the anchor this control perturbs")
-	require.NoError(t, os.WriteFile(sidecar, perturbed, 0o600))
-
-	_, err = boundarylog.LoadRecording(bad)
-	require.Error(t, err, "a recording whose two host-state carriers disagree must be refused")
-	require.True(t, strings.Contains(err.Error(), "disagrees with the host-state records"),
-		"expected the reconciliation refusal, got: %v", err)
 }
 
 // TestSnapshotsAreDerivedDuringAnImportedMemoryRecording closes M44b's
@@ -301,10 +191,7 @@ func TestTheSidecarIsARenderingOfTheStream(t *testing.T) {
 // is one that could not previously be taken at all, not merely one taken
 // earlier.
 func TestSnapshotsAreDerivedDuringAnImportedMemoryRecording(t *testing.T) {
-	work := t.TempDir()
-	// The live shape again: a growing `trace.json` and no sidecar.
-	live := copyRecording(t, vaultApplyRecording, filepath.Join(work, "live"), true, nil)
-
+	live := vaultApplyRecording
 	ctx, rt, compiled, rec := streamHarness(t, vaultApplyWasm, live)
 
 	var taken []int
@@ -358,9 +245,4 @@ func TestSnapshotsAreDerivedDuringAnImportedMemoryRecording(t *testing.T) {
 				"derivation is not keeping up with the stream, so it is not "+
 				"happening DURING the recording", k, producer.observed[k])
 	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

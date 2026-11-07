@@ -36,9 +36,16 @@ test-snapshots:
 # Both build variants, tested.
 test-all-variants: test test-snapshots
 
-# Run all Go tests (delegates to Makefile)
+# Run all Go tests (delegates to Makefile), then check that the dev shell
+# links the trace-writer library built from the sibling's current sources.
 test:
     make test
+    just test-detect-trace-format
+
+# `scripts/detect-trace-format.sh` rebuilds a stale trace-writer library and
+# hands the linker exactly the one it chose.
+test-detect-trace-format:
+    bash tests/detect-trace-format-test.sh
 
 # Run tracewriter package tests (CTFS-only — the Rust FFI writer was
 # removed in the 2026-05-08 convention compliance pass; see
@@ -112,7 +119,7 @@ cross-test *ARGS:
 verify-vectors:
     bash scripts/verify-vectors-against-producer.sh
 # --- M13: Packaging UX Standardization ---
-# These recipes implement Repo-Requirements.md §2.8. The OS-packaged
+# These recipes implement Repo-Requirements.md §2.5. The OS-packaged
 # recorders share a uniform packaging surface: `bump-version` rewrites
 # Cargo.toml + packaging/recorder-metadata.yml; `build-package` shells
 # out to packaging/build-all.sh with the requested channel selector;
@@ -303,3 +310,8 @@ verify-scoop:
 
 verify-chocolatey:
     just verify-package chocolatey
+
+# Entering the dev shell from another git repository must write nothing there.
+# Runs `nix develop`, so it is not part of the in-shell test recipes.
+test-dev-shell:
+    bash tests/test_dev_shell_writes_nothing_elsewhere.sh

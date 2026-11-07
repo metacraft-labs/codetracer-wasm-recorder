@@ -1,9 +1,6 @@
 package boundarylog
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/tetratelabs/wazero/internal/testing/require"
@@ -55,20 +52,13 @@ func voidImportRecording() *recordingBuilder {
 // CLI suite starts replaying a recording that is not the format the browser
 // produces.
 func TestCommittedVoidImportRecordingMatchesTheReplica(t *testing.T) {
-	onDisk, err := os.ReadFile(filepath.Join(voidImportRecordingPath, "trace.json"))
-	require.NoError(t, err)
-	var committed []map[string]any
-	require.NoError(t, json.Unmarshal(onDisk, &committed))
-
-	built, err := json.Marshal(voidImportRecording().events)
-	require.NoError(t, err)
-	var rebuilt []map[string]any
-	require.NoError(t, json.Unmarshal(built, &rebuilt))
+	committed, _, ended := DecodeTestLogEvents(t, ReadTestLog(t, voidImportRecordingPath))
+	require.True(t, ended)
+	rebuilt, _, _ := DecodeTestLogEvents(t, voidImportRecording().log())
 
 	require.Equal(t, len(committed), len(rebuilt),
-		"the committed recording has %d records, the replica builds %d.\n"+
-			"committed: %s\nbuilt:     %s",
-		len(committed), len(rebuilt), string(onDisk), string(built))
+		"the committed recording has %d records, the replica builds %d",
+		len(committed), len(rebuilt))
 	for i := range committed {
 		require.Equal(t, committed[i], rebuilt[i],
 			"record %d of the committed recording differs from the replica", i)

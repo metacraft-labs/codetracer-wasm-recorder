@@ -30,29 +30,22 @@
 // # Input format
 //
 // A boundary recording is what the CodeTracer backend-manager's
-// `record-web` receiver writes for a browser WASM session: a `.ct`
-// **directory** in the legacy three-file JSON trace layout —
+// `record-web` receiver writes for a browser WASM session: one CTFS
+// container, `<program>.ct`, whose `boundary.log` internal file is the
+// boundary log in CTBL v1 — a framed binary encoding of the record sequence
+// the daemon translated from the browser's events
+// (`codetracer-specs/Recording-Backends/Browser-Recording-Container.md` §3,
+// decoded by `ctbl.go`). The same bytes reach a `--boundary-stream -`
+// consumer on stdin while the page is still running. `recording.go`
+// documents how the boundary crossings are recovered from those records.
 //
-//	<program>.ct/trace.json           []TraceLowLevelEvent
-//	<program>.ct/trace_metadata.json  {program, args, workdir, recorder}
-//	<program>.ct/trace_paths.json     []string
+// The spec §3.3 host-supplied initial state and §3.4 host mutations ride in
+// the same record sequence, as host-state records (`hoststate.go`).
 //
-// — written by `codetracer/src/backend-manager/src/browser_stream_host.rs`
-// from the newline-delimited JSON stream that
-// `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` sends
-// over a WebSocket. `recording.go` documents how the boundary crossings are
-// recovered from that rendering.
-//
-// Two optional sidecars refine the replay:
-//
-//   - `<module>.wasm.manifest.json` — the `ct-instrument` sidecar manifest
-//     whose `boundaries` table carries each edge's parameter and result
-//     types (spec §3, M35). Parsed by `manifest.go`. When present it is
-//     cross-checked against the module's own type section and a
-//     disagreement is a hard error; when absent the signatures are taken
-//     from the module, which the spec (§6) treats as sufficient.
-//   - `boundary_state.json` inside the `.ct` directory — the spec §3.3
-//     host-supplied initial state and §3.4 host mutations. Parsed by
-//     `hoststate.go`. See that file for the schema and for an explicit
-//     statement of which producer emits it today.
+// One optional sidecar refines the replay: `<module>.wasm.manifest.json`,
+// the `ct-instrument` manifest whose `boundaries` table carries each edge's
+// parameter and result types (spec §3, M35). Parsed by `manifest.go`. When
+// present it is cross-checked against the module's own type section and a
+// disagreement is a hard error; when absent the signatures are taken from
+// the module, which the spec (§6) treats as sufficient.
 package boundarylog

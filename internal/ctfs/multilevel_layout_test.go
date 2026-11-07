@@ -17,7 +17,9 @@ import (
 // writer (`codetracer-trace-format-nim`, `codetracer_ctfs/container.nim` +
 // `block_mapping.nim`) and is committed verbatim, so this test needs no Nim
 // toolchain and no cgo at test time — which is exactly what makes it the
-// dependency-free anchor of the reader.
+// dependency-free anchor of the reader. Its producer is
+// `testdata/gen_nim_multilevel.nim`, whose header gives the command that
+// regenerates it.
 //
 // This file used to carry a second test pinning this package's own *writer*
 // against `nimLookupDataBlock`. That writer is gone (M38b: the canonical one

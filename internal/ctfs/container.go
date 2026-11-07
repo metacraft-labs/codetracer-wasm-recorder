@@ -80,15 +80,23 @@ const (
 	offsetMaxRootE = 12
 )
 
+// SupportedVersion is the one container version this reader reads
+// (`ctfs-container.md` §1, §2 "Older versions are refused").
+const SupportedVersion = 5
+
+// Direct is bit 63 of `FileEntry.MapBlock`: set, the rest of the word is the
+// member's only data block (`ctfs-container.md` §2).
+const Direct = uint64(1) << 63
+
 // magic is `C0 DE 72 AC E2` — "CODE TRACE".
 var magic = [magicLen]byte{0xc0, 0xde, 0x72, 0xac, 0xe2}
 
-// FileEntry is one 24-byte slot of the block-0 entry array.
+// FileEntry is one 24-byte slot of the root entry array.
 type FileEntry struct {
 	Size     uint64
 	MapBlock uint64
 	Name     uint64
-	// Slot is the entry's index in the block-0 array. Nothing here writes an
+	// Slot is the entry's index in the root entry array. Nothing here writes an
 	// entry back, but a diagnostic that says *which* slot is malformed is the
 	// difference between a usable error and "the container is broken".
 	Slot int
@@ -101,13 +109,17 @@ type Container struct {
 	maxShards  uint8
 	version    uint8
 	encryption uint8
-	// entryBase is the byte offset of the first FileEntry in block 0.
+	// entryBase is the byte offset of the first FileEntry in the root region.
 	entryBase int
 	// entryCount is the number of FileEntry slots.
 	entryCount int
-	// block0 is the whole of block 0, held in memory and rewritten on
-	// commit. Block 0 is the only block this package mutates.
-	block0 []byte
+	// root is the root region: block 0 and, when the entry array is larger
+	// than block 0 holds, the contiguous blocks after it (`ctfs-container.md`
+	// §1, `root_blocks`). No member's block lies inside it.
+	root []byte
+	// rootBlocks is the number of blocks the root region spans; mapping and
+	// data blocks are numbered from it.
+	rootBlocks uint64
 	// nextFreeBlock is the bump allocator. `ctfs-container.md` §4 keeps it
 	// as live shared state during recording and does not persist it, so for
 	// a quiescent container it is recovered from the file length — every
@@ -157,6 +169,13 @@ func Open(path string) (*Container, error) {
 				"ctfs: %s does not start with the CTFS magic C0DE72ACE2; it is not a "+
 					"CTFS container", path)
 		}
+	}
+
+	if v := hdr[offsetVersion]; v != SupportedVersion {
+		return nil, fmt.Errorf(
+			"ctfs: %s is CTFS container version %d; this reader reads version %d "+
+				"only (ctfs-container.md §2, \"Older versions are refused\"), so "+
+				"the trace must be re-recorded", path, v, SupportedVersion)
 	}
 
 	c := &Container{
@@ -217,19 +236,19 @@ func Open(path string) (*Container, error) {
 	c.partialTailBytes = c.fileSize % c.blockSize
 	c.nextFreeBlock = c.fileSize / c.blockSize
 
-	c.block0 = make([]byte, c.blockSize)
-	if _, err := f.ReadAt(c.block0, 0); err != nil {
-		return nil, fmt.Errorf("ctfs: reading %s block 0: %w", path, err)
-	}
-
 	maxRootEntries := int(binary.LittleEndian.Uint32(hdr[offsetMaxRootE:]))
-	if err := c.locateEntryArray(maxRootEntries); err != nil {
+	if err := c.locateEntryArray(f, maxRootEntries); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-// locateEntryArray finds the byte offset of the FileEntry array in block 0.
+// locateEntryArray finds the byte offset of the FileEntry array in the root
+// region and reads that region: block 0, plus the contiguous blocks after it
+// when the declared entries do not fit in block 0 (`ctfs-container.md` §1,
+// `root_blocks = ceil((header + R + MaxRootEntries * 24) / BlockSize)`). The
+// canonical writer grows the root that way when a container runs out of
+// entries.
 //
 // `ctfs-container.md` §1 places a free-list root area of
 // `R = 8 * MaxShards * 6` bytes between the header and the entry array — one
@@ -246,7 +265,7 @@ func Open(path string) (*Container, error) {
 // is not a heuristic that lets a wrong guess through, because every non-empty
 // entry must round-trip through base40 (the encoding is not surjective onto
 // u64, so random bytes essentially never do) and must point inside the file.
-func (c *Container) locateEntryArray(maxRootEntries int) error {
+func (c *Container) locateEntryArray(f *os.File, maxRootEntries int) error {
 	candidates := []int{headerSize}
 	if r := 8 * int(c.maxShards) * 6; r > 0 {
 		if c.maxShards <= 1 {
@@ -261,24 +280,29 @@ func (c *Container) locateEntryArray(maxRootEntries int) error {
 		if count == 0 {
 			count = (int(c.blockSize) - base) / fileEntrySize
 		}
-		if base+count*fileEntrySize > int(c.blockSize) {
-			// Entry arrays may overflow into blocks after block 0. Nothing
-			// this package writes does, and supporting it without a sample
-			// to test against would be untested code, so it is refused.
+		rootBlocks := (uint64(base+count*fileEntrySize) + c.blockSize - 1) / c.blockSize
+		if rootBlocks > c.nextFreeBlock {
 			reasons = append(reasons, fmt.Sprintf(
-				"at offset %d the %d declared entries would overflow block 0", base, count))
+				"at offset %d the %d declared entries need a %d-block root, but the "+
+					"container has %d whole blocks", base, count, rootBlocks, c.nextFreeBlock))
 			continue
 		}
-		c.entryBase, c.entryCount = base, count
+		if uint64(len(c.root)) != rootBlocks*c.blockSize {
+			c.root = make([]byte, rootBlocks*c.blockSize)
+			if _, err := f.ReadAt(c.root, 0); err != nil {
+				return fmt.Errorf("ctfs: reading the %d-block root of %s: %w", rootBlocks, c.path, err)
+			}
+		}
+		c.entryBase, c.entryCount, c.rootBlocks = base, count, rootBlocks
 		if err := c.validateEntries(); err != nil {
 			reasons = append(reasons, fmt.Sprintf("at offset %d: %v", base, err))
 			continue
 		}
 		return nil
 	}
-	c.entryBase, c.entryCount = 0, 0
+	c.entryBase, c.entryCount, c.rootBlocks, c.root = 0, 0, 0, nil
 	return fmt.Errorf(
-		"ctfs: cannot locate the file-entry array in %s block 0 (%v)", c.path, reasons)
+		"ctfs: cannot locate the file-entry array in %s's root (%v)", c.path, reasons)
 }
 
 func (c *Container) validateEntries() error {
@@ -297,10 +321,17 @@ func (c *Container) validateEntries() error {
 		if err != nil || back != e.Name {
 			return fmt.Errorf("entry %d's name %#x is not a valid base40 encoding", i, e.Name)
 		}
-		if e.MapBlock >= c.nextFreeBlock {
+		// The block a direct member names is bounded like a mapping root; a
+		// null one is left to the read, which refuses it by member name.
+		if blk := e.MapBlock &^ Direct; blk != 0 && blk < c.rootBlocks {
+			return fmt.Errorf(
+				"entry %d (%q) points at block %d, inside the %d-block root",
+				i, name, blk, c.rootBlocks)
+		}
+		if blk := e.MapBlock &^ Direct; blk >= c.nextFreeBlock {
 			return fmt.Errorf(
 				"entry %d (%q) points at block %d but the container only has %d blocks",
-				i, name, e.MapBlock, c.nextFreeBlock)
+				i, name, blk, c.nextFreeBlock)
 		}
 	}
 	if nonEmpty == 0 {
@@ -312,9 +343,9 @@ func (c *Container) validateEntries() error {
 func (c *Container) entryAt(i int) FileEntry {
 	off := c.entryBase + i*fileEntrySize
 	return FileEntry{
-		Size:     binary.LittleEndian.Uint64(c.block0[off:]),
-		MapBlock: binary.LittleEndian.Uint64(c.block0[off+8:]),
-		Name:     binary.LittleEndian.Uint64(c.block0[off+16:]),
+		Size:     binary.LittleEndian.Uint64(c.root[off:]),
+		MapBlock: binary.LittleEndian.Uint64(c.root[off+8:]),
+		Name:     binary.LittleEndian.Uint64(c.root[off+16:]),
 		Slot:     i,
 	}
 }
@@ -376,14 +407,11 @@ func (c *Container) ReadFile(name string) ([]byte, error) {
 }
 
 func (c *Container) readEntry(f *os.File, e FileEntry) ([]byte, error) {
-	out := make([]byte, e.Size)
-	if e.Size == 0 {
-		return out, nil
-	}
 	blocks, err := c.dataBlocks(f, e)
 	if err != nil {
 		return nil, err
 	}
+	out := make([]byte, e.Size)
 	for i, blk := range blocks {
 		start := uint64(i) * c.blockSize
 		end := start + c.blockSize
@@ -443,24 +471,22 @@ func levelCapacity(usable uint64, level int) uint64 {
 // `ct-print`, `ct-space` and the db-backend, which is the wrong-bytes failure
 // the snapshot design must not have.
 //
-// # The small-file optimisation is deliberately not implemented
+// # Direct members never reach this function
 //
-// §2 of the container spec describes a small-file optimisation: when
-// `Size <= BlockSize`, `MapBlock` "points directly to the single data block"
-// rather than to a mapping block. The CTFS writer that actually produces
-// CodeTracer traces does **not** apply it: `addFile` in
-// `codetracer-trace-format-nim`'s `container.nim` allocates a level-1 mapping
-// block unconditionally, before it knows how large the file will be, so even a
-// 3-byte internal file gets one.
+// Since container version 5 a member of at most one block has no mapping
+// block: its `MapBlock` carries the `Direct` tag (bit 63) and names its only
+// data block (`ctfs-container.md` §2). `dataBlocks` resolves that form, and an
+// empty member's `MapBlock = 0`, itself; only an untagged, non-zero `MapBlock`
+// is a mapping root and comes here.
 //
-// The two conventions cannot be told apart from the bytes. A 4-byte file whose
-// content happens to be a small little-endian integer is indistinguishable
-// from a mapping block pointing at that block number, and `events.idx` in a
-// real trace is exactly such a file. Guessing would therefore mean occasionally
-// returning a block number where a reader asked for content.
-//
-// So this package follows the producer, not the prose: it always resolves
-// through a mapping block.
+// The tag is what makes the small-member layout readable at all. The rule it
+// replaced said "if `Size <= BlockSize`, `MapBlock` is the data block", and it
+// could not be applied to the bytes: a 4-byte member whose content happens to
+// be a small little-endian integer is indistinguishable from a mapping block
+// pointing at that block number (`events.idx` in a real trace is exactly such
+// a member), so this reader declined to guess and always resolved through a
+// mapping block, as every writer then produced. The form is now carried in the
+// same word as the pointer and is decided from `MapBlock`, never from `Size`.
 func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 	block func(uint64) ([]byte, error),
 ) (uint64, error) {
@@ -489,7 +515,7 @@ func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 		if chain == 0 {
 			return 0, fmt.Errorf(
 				"ctfs: %q needs a level-%d mapping block for block index %d but its "+
-					"level-%d block has no chain pointer", name, level, blockIdx, level-1)
+					"level-%d block has a null chain pointer", name, level, blockIdx, level-1)
 		}
 		cur = chain
 	}
@@ -505,7 +531,7 @@ func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 		child := binary.LittleEndian.Uint64(blk[entryIdx*8:])
 		if child == 0 {
 			return 0, fmt.Errorf(
-				"ctfs: %q has a hole in its level-%d mapping block at slot %d",
+				"ctfs: %q has a null child pointer in its level-%d mapping block at slot %d",
 				name, level, entryIdx)
 		}
 		cur, idx, level = child, subIdx, level-1
@@ -535,6 +561,11 @@ func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 	// requirement — "the incomplete final block is then not addressable, so an
 	// entry that named it is refused rather than served short". A reader may
 	// ignore the partial tail; it may not serve it.
+	if dataBlk < c.rootBlocks {
+		return 0, fmt.Errorf(
+			"ctfs: %q data block index %d points at container block %d, inside "+
+				"the %d-block root", name, blockIdx, dataBlk, c.rootBlocks)
+	}
 	if dataBlk >= c.nextFreeBlock {
 		return 0, fmt.Errorf(
 			"ctfs: %q data block index %d points at container block %d, outside "+
@@ -544,9 +575,49 @@ func (c *Container) resolveDataBlock(f *os.File, e FileEntry, blockIdx uint64,
 	return dataBlk, nil
 }
 
-// dataBlocks resolves an entry's whole data-block list. See resolveDataBlock
-// for the layout it follows and why.
+// dataBlocks resolves an entry's whole data-block list from the form of its
+// `MapBlock` (`ctfs-container.md` §2): `0` is an empty member, a value carrying
+// `Direct` names the member's only data block, and anything else is a mapping
+// root, resolved by resolveDataBlock.
 func (c *Container) dataBlocks(f *os.File, e FileEntry) ([]uint64, error) {
+	name := DecodeName(e.Name)
+	switch {
+	case e.MapBlock == 0:
+		if e.Size != 0 {
+			return nil, fmt.Errorf(
+				"ctfs: %q (entry slot %d) has %d bytes but a null block pointer "+
+					"(MapBlock 0); %s is damaged", name, e.Slot, e.Size, c.path)
+		}
+		return nil, nil
+	case e.MapBlock&Direct != 0:
+		blk := e.MapBlock &^ Direct
+		if e.Size > c.blockSize {
+			return nil, fmt.Errorf(
+				"ctfs: %q (entry slot %d) is tagged as stored in one block, but its "+
+					"%d bytes exceed one block of %d", name, e.Slot, e.Size, c.blockSize)
+		}
+		if blk == 0 {
+			return nil, fmt.Errorf(
+				"ctfs: %q (entry slot %d) is tagged as stored in one block, but the "+
+					"block pointer is null; %s is damaged", name, e.Slot, c.path)
+		}
+		if blk < c.rootBlocks {
+			return nil, fmt.Errorf(
+				"ctfs: %q (entry slot %d) data block %d lies inside the %d-block root; "+
+					"%s is damaged", name, e.Slot, blk, c.rootBlocks, c.path)
+		}
+		if blk >= c.nextFreeBlock {
+			return nil, fmt.Errorf(
+				"ctfs: %q data block points at container block %d, outside the "+
+					"container's %d whole blocks; %s is truncated",
+				name, blk, c.nextFreeBlock, c.path)
+		}
+		if e.Size == 0 {
+			return nil, nil
+		}
+		return []uint64{blk}, nil
+	}
+
 	n := (e.Size + c.blockSize - 1) / c.blockSize
 	// Mapping blocks are re-visited once per data block, so cache them; a
 	// 2 GiB file otherwise re-reads its level-2 spine 500k times.
@@ -575,10 +646,10 @@ func (c *Container) dataBlocks(f *os.File, e FileEntry) ([]uint64, error) {
 }
 
 func (c *Container) readBlock(f *os.File, blk uint64) ([]byte, error) {
-	if blk == 0 || blk >= c.nextFreeBlock {
+	if blk < c.rootBlocks || blk >= c.nextFreeBlock {
 		return nil, fmt.Errorf(
-			"ctfs: %s refers to block %d, outside the container's %d blocks",
-			c.path, blk, c.nextFreeBlock)
+			"ctfs: %s refers to block %d, outside the container's data blocks "+
+				"%d..%d", c.path, blk, c.rootBlocks, c.nextFreeBlock-1)
 	}
 	buf := make([]byte, c.blockSize)
 	if _, err := f.ReadAt(buf, int64(blk*c.blockSize)); err != nil {

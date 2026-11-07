@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/internal/boundarylog/ctbltest"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 	"github.com/tetratelabs/wazero/tracewriter"
 )
@@ -415,7 +416,8 @@ func TestVerifyCrossModalityParity(t *testing.T) {
 // ===========================================================================
 
 // corruptRecording copies a `.ct` recording, replacing every occurrence of
-// `old` in trace.json with `new`.
+// `old` in each of its boundary-log records (in their JSON description, see
+// `ctbltest`) with `new`.
 //
 // Replacing EVERY occurrence matters: a recording is internally
 // cross-referenced (a function's name appears in its `Function` record and
@@ -426,18 +428,18 @@ func TestVerifyCrossModalityParity(t *testing.T) {
 func corruptRecording(t *testing.T, src, dstParent, old, new string) string {
 	t.Helper()
 	dst := filepath.Join(dstParent, filepath.Base(src))
-	require.NoError(t, os.MkdirAll(dst, 0o755))
-	for _, name := range []string{"trace.json", "trace_metadata.json", "trace_paths.json"} {
-		data, err := os.ReadFile(filepath.Join(src, name))
-		require.NoError(t, err)
-		if name == "trace.json" {
-			replaced := strings.ReplaceAll(string(data), old, new)
-			require.True(t, replaced != string(data),
-				"corruption target %q not found in %s — the fixture has changed", old, name)
-			data = []byte(replaced)
+	changed := false
+	require.NoError(t, ctbltest.Rewrite(src, dst, func(records []map[string]any) []map[string]any {
+		out := make([]map[string]any, len(records))
+		for i, r := range records {
+			before := ctbltest.JSON(r)
+			after := strings.ReplaceAll(before, old, new)
+			changed = changed || after != before
+			out[i] = ctbltest.FromJSON(after)
 		}
-		require.NoError(t, os.WriteFile(filepath.Join(dst, name), data, 0o600))
-	}
+		return out
+	}))
+	require.True(t, changed, "corruption target %q not found — the fixture has changed", old)
 	return dst
 }
 
@@ -459,8 +461,8 @@ func TestVerifyDivergenceIsAHardError(t *testing.T) {
 			// The recording claims compute_balance returned 621; the module
 			// really computes 620.
 			name: "corrupted export return value",
-			old:  `"kind":"Int","i":"620"`,
-			new:  `"kind":"Int","i":"621"`,
+			old:  `"i":"620","kind":"Int"`,
+			new:  `"i":"621","kind":"Int"`,
 			wantIn: []string{
 				"diverged from the recording",
 				"exported return value 0",
@@ -474,8 +476,8 @@ func TestVerifyDivergenceIsAHardError(t *testing.T) {
 			// one diverges on the RESULT, because the replayed call is
 			// driven by the corrupted argument: 43*10 + 200 = 630.
 			name: "corrupted export argument",
-			old:  `"kind":"Int","i":"42"`,
-			new:  `"kind":"Int","i":"43"`,
+			old:  `"i":"42","kind":"Int"`,
+			new:  `"i":"43","kind":"Int"`,
 			wantIn: []string{
 				"diverged from the recording",
 				"recorded: i32:620",

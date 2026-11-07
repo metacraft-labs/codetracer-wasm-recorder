@@ -34,12 +34,11 @@
 package main
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tetratelabs/wazero/internal/boundarylog/ctbltest"
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
 
@@ -48,8 +47,7 @@ const nanTestdata = "testdata/boundary-log/nan-payloads"
 var (
 	nanModule           = nanTestdata + "/nan_payloads.wasm"
 	nanRecording        = nanTestdata + "/nan-payloads.ct"
-	nanLegacyRecording  = nanTestdata + "/legacy-encoding.ct"
-	nanRecordingTraceJS = nanRecording + "/trace.json"
+	nanLegacyRecording = nanTestdata + "/legacy-encoding.ct"
 )
 
 // The bit patterns the fixture's page asked the module to produce.  They
@@ -189,11 +187,7 @@ func TestVerifyOldFloatRecordingsStillReplay(t *testing.T) {
 	})
 
 	t.Run("the pre-M52 encoding could not carry a NaN at all", func(t *testing.T) {
-		raw, err := os.ReadFile(nanLegacyRecording + "/trace.json")
-		require.NoError(t, err,
-			"the pre-M52 recording is committed as the negative control")
-		require.True(t, strings.Contains(string(raw), `"f":"null"`) ||
-			strings.Contains(string(raw), `"f": "null"`),
+		require.True(t, containsString(nanRecordedFloatPayloadsOf(t, nanLegacyRecording), "null"),
 			"the negative control must actually show the loss it is the "+
 				"control for: a NaN reaching JSON as `null`.  If this no "+
 				"longer holds, the fixture was regenerated with the new "+
@@ -216,42 +210,47 @@ func TestVerifyOldFloatRecordingsStillReplay(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // nanRecordedFloatPayloads returns every `Float` value payload in the
-// recording, in order, straight out of `trace.json`.
+// recording, in order, as the boundary log spells it.
 //
 // Read as text on purpose: decoding to a float would destroy the very
 // distinctions under test.
 func nanRecordedFloatPayloads(t *testing.T) []string {
-	t.Helper()
-	raw, err := os.ReadFile(nanRecordingTraceJS)
-	require.NoError(t, err)
+	return nanRecordedFloatPayloadsOf(t, nanRecording)
+}
 
-	var records []map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &records),
-		"the browser recording's trace.json must be a JSON array of records")
+func nanRecordedFloatPayloadsOf(t *testing.T, recording string) []string {
+	t.Helper()
+	log, err := ctbltest.ReadLog(recording)
+	require.NoError(t, err)
+	_, records, _, err := ctbltest.Decode(log)
+	require.NoError(t, err)
 
 	var out []string
 	for _, rec := range records {
-		body, ok := rec["Value"]
+		body, ok := rec["Value"].(map[string]any)
 		if !ok {
 			continue
 		}
-		var v struct {
-			Value struct {
-				Kind string `json:"kind"`
-				F    string `json:"f"`
-			} `json:"value"`
-		}
-		require.NoError(t, json.Unmarshal(body, &v))
-		if v.Value.Kind == "Float" {
-			out = append(out, v.Value.F)
+		v := body["value"].(map[string]any)
+		if v["kind"] == "Float" {
+			out = append(out, v["f"].(string))
 		}
 	}
 	return out
 }
 
+func containsString(xs []string, x string) bool {
+	for _, s := range xs {
+		if s == x {
+			return true
+		}
+	}
+	return false
+}
+
 // nanRecordingWith copies the recording into a temp directory with one
-// textual substitution applied to `trace.json`, and returns the copy's
-// path.  Used to perturb a single recorded bit pattern.
+// textual substitution applied to its records, and returns the copy's path.
+// Used to perturb a single recorded bit pattern.
 //
 // The committed recording is never modified: it is a real artefact of a
 // real browser run, and a test that edits it in place would leave the
@@ -259,24 +258,20 @@ func nanRecordedFloatPayloads(t *testing.T) []string {
 func nanRecordingWith(t *testing.T, from, to string) string {
 	t.Helper()
 	dst := filepath.Join(t.TempDir(), "perturbed.ct")
-	require.NoError(t, os.MkdirAll(dst, 0o755))
-
-	entries, err := os.ReadDir(nanRecording)
-	require.NoError(t, err)
 	replaced := false
-	for _, e := range entries {
-		body, err := os.ReadFile(filepath.Join(nanRecording, e.Name()))
-		require.NoError(t, err)
-		if e.Name() == "trace.json" {
-			text := string(body)
-			require.True(t, strings.Contains(text, from),
-				"the recording no longer contains %q, so this perturbation "+
-					"would be a no-op and the test would pass vacuously", from)
-			body = []byte(strings.ReplaceAll(text, from, to))
-			replaced = true
+	require.NoError(t, ctbltest.Rewrite(nanRecording, dst, func(records []map[string]any) []map[string]any {
+		out := make([]map[string]any, len(records))
+		for i, r := range records {
+			text := ctbltest.JSON(r)
+			if strings.Contains(text, from) {
+				replaced = true
+			}
+			out[i] = ctbltest.FromJSON(strings.ReplaceAll(text, from, to))
 		}
-		require.NoError(t, os.WriteFile(filepath.Join(dst, e.Name()), body, 0o644))
-	}
-	require.True(t, replaced, "the recording has no trace.json to perturb")
+		return out
+	}))
+	require.True(t, replaced,
+		"the recording no longer contains %q, so this perturbation "+
+			"would be a no-op and the test would pass vacuously", from)
 	return dst
 }

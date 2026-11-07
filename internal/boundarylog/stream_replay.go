@@ -125,14 +125,8 @@ func StreamingReplay(ctx context.Context, opts Options, src *StreamReader) (Stre
 		if guest != nil {
 			return nil
 		}
-		// Whatever the stream has carried so far IS the §3.3 state. A
-		// recording may also have a sidecar — a finished one being streamed
-		// from a file does — and the two must agree.
-		state, err := reconcileHostState(rec.HostState, src.HostState())
-		if err != nil {
-			return fmt.Errorf("boundary streaming replay: %w", err)
-		}
-		rec.HostState = state
+		// Whatever the stream has carried so far IS the §3.3 state.
+		rec.HostState = src.HostState()
 		// `opts` was copied into `r` by value, so the replayer holds its own
 		// pointer to the recording — the same one — and re-reads
 		// `r.opts.Recording.HostState` on every import call. Assigning here

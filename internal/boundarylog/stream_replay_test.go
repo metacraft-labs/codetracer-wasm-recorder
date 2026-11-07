@@ -22,7 +22,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -77,7 +76,7 @@ func streamHarness(t *testing.T, wasmPath, ctDir string) (context.Context, wazer
 	require.NoError(t, err)
 
 	// The metadata only — the crossings are what the stream delivers.
-	rec, err := boundarylog.LoadRecordingMetadata(ctDir)
+	rec, err := boundarylog.LoadTestStreamMetadata(ctDir)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(rec.Crossings))
 	return ctx, rt, compiled, rec
@@ -388,68 +387,3 @@ func TestStreamingReplayRefusesAPrefilledRecording(t *testing.T) {
 type nopReader struct{}
 
 func (nopReader) Read([]byte) (int, error) { return 0, io.EOF }
-
-// TestStreamingReplayFollowsAGrowingFile exercises `FollowFile` — the adapter
-// for a producer that appends to a file rather than offering a pipe — with a
-// real file on disk.
-//
-// **This is not the shape `record-web` has today.** Its
-// `JsonFileCtfsWriter::flush` (`codetracer/src/backend-manager/src/
-// browser_stream_host.rs`) buffers every event in memory and writes
-// `trace.json` with a single `fs::write`, in a one-shot flush guarded by
-// `session_ended`; the file does not exist until the session ends and is never
-// appended to. So `FollowFile` is the adapter for a producer that *could* be
-// changed to append, not a way to consume the daemon as it stands — feeding the
-// streaming path needs the writer to serialise incrementally either way. See
-// the milestone's "What the `record-web` daemon must do" note.
-func TestStreamingReplayFollowsAGrowingFile(t *testing.T) {
-	ctDir := boundarylog.BuildComputeBalanceRecording(t, t.TempDir(), callArgs)
-	chunks := boundarylog.StreamChunksForRecording(t, ctDir)
-
-	live := filepath.Join(t.TempDir(), "live.ct")
-	require.NoError(t, os.MkdirAll(live, 0o755))
-	tracePath := filepath.Join(live, "trace.json")
-	require.NoError(t, os.WriteFile(tracePath, nil, 0o644))
-
-	ctx, rt, compiled, rec := streamHarness(t, balanceCalcWasm, live)
-
-	done := make(chan struct{})
-	src, err := boundarylog.FollowFile(tracePath, done)
-	require.NoError(t, err)
-	defer func() { _ = src.Close() }()
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f, err := os.OpenFile(tracePath, os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer func() { _ = f.Close() }()
-		for _, c := range chunks {
-			if _, err := f.Write(c); err != nil {
-				t.Error(err)
-				return
-			}
-			time.Sleep(2 * time.Millisecond)
-		}
-		close(done)
-	}()
-
-	var points []int
-	res, err := boundarylog.StreamingReplay(ctx, boundarylog.Options{
-		Runtime: rt, Compiled: compiled, Recording: rec,
-		ModuleConfig: wazero.NewModuleConfig().WithStartFunctions(),
-		AtQuiescentPoint: func(p int, mod api.Module) error {
-			points = append(points, p)
-			return nil
-		},
-	}, boundarylog.NewStreamReader(src))
-	wg.Wait()
-	require.NoError(t, err)
-	require.Nil(t, res.Truncation)
-	require.Equal(t, len(callArgs), res.ExportCalls)
-	require.Equal(t, len(callArgs)+1, len(points))
-}

@@ -72,9 +72,13 @@
 ##
 ## ``defaultToolProvisioning "path"`` matches the canonical recorder
 ## recipes: the Nix dev shell (``flake.nix`` → ``shell.nix``) puts ``go``
-## on ``PATH`` on Linux/macOS; on Windows the ``go`` package's tarball
-## catalog entry provisions it. Either way the weak-local PATH resolver
-## is the right default. ``sh`` drives the two ``shell(...)`` edges.
+## on ``PATH`` on Linux/macOS. The mode is ``path`` on Windows too, so
+## there ``go``, ``sh`` and ``git`` resolve from the runner's ``PATH``,
+## not from the ``go`` package's tarball catalog entry: Windows is not
+## switched to ``tarball`` because reprobuild's stdlib has no Windows
+## arm64 tarball for ``sh`` (PortableGit is x86_64-only) or
+## ``chocolatey``, and CI runs a Windows arm64 leg. ``sh`` drives the two
+## ``shell(...)`` edges.
 
 import repro_project_dsl
 import repro_dsl_stdlib/foreign_env
@@ -86,12 +90,18 @@ package codetracer_wasm_recorder:
   uses:
     # Go toolchain floor — mirrors ``go.mod``'s ``go 1.22.0`` directive.
     # On Linux/macOS the nix dev shell supplies ``go_1_24``; on Windows
-    # the ``go`` package's versioned tarball catalog provisions it.
+    # it comes from the runner's PATH (``path`` mode, see the header).
     "go >=1.22"
     # POSIX shell — runs the two wrapped ``go`` commands below (it is the
     # tool every ``shell(...)`` edge invokes). ``CGO_ENABLED=0`` is set
     # inline in each command string.
     "sh"
+    # Git — `go build` stamps the module's VCS revision into the binary
+    # (`-buildvcs=auto`) by running `git`, and `wazero version` reports that
+    # revision. Without `git` the stamp is silently omitted and the binary
+    # reports `dev`, so the `repro build` artefact would differ from the one
+    # `just build` produces.
+    "git"
 
     # Chocolatey — `choco pack` / `choco push` in this repo's
     # .github/workflows/publish-chocolatey.yml. Declared here rather than
@@ -174,4 +184,22 @@ package codetracer_wasm_recorder:
         "tracewriter",
         "internal",
       ])
+
+    # ---- Tools the wrapped commands run --------------------------------
+    #
+    # ``shell(...)`` attaches no tool to the edge it creates: the command
+    # string is opaque to the engine, so the ``go`` (and the ``git`` that
+    # ``go build`` runs for VCS stamping) are neither part of the action's
+    # tool identity nor provisioned for it. Under the ``path`` mode in a
+    # dev shell that goes unnoticed, because the action inherits the whole
+    # shell ``PATH`` -- but the action's cache key then ignores which Go
+    # compiled it, and a mode that provisions tools per action (``tarball``)
+    # would hand the command no ``go`` at all. Name them on both edges so
+    # they are resolved through the ``uses:`` declaration above, as
+    # ``codetracer-evm-recorder/repro.nim`` does for its cargo/nim edges.
+    # Naming them also narrows the action's ``PATH`` to exactly these
+    # tools, which is why ``git`` must be listed: without it the binary is
+    # built unstamped and ``wazero version`` reports ``dev``.
+    for action in [wazeroBuild, writerTest]:
+      appendRegisteredActionToolIdentityRefs(action.id, ["go", "sh", "git"])
     discard collect("test", @[writerTest])

@@ -42,7 +42,7 @@ just verify-vectors     # scripts/verify-vectors-against-producer.sh
 records the same demos from the sibling's current tree and compares what
 the two recordings *mean* — every recovered crossing, its kind, name,
 index, depth, argument and result values, and the `MarkersIdentifyImports`
-format witness. Not bytes: `trace_metadata.json` carries the absolute
+format witness. Not bytes: the recording carries the absolute
 directory the run happened in, so byte equality is unachievable and a check
 that demanded it would be switched off within a week. The comparison lives
 in `internal/boundarylog/vector_freshness_crossrepo_test.go` behind the
@@ -92,7 +92,14 @@ instrumented module ran in a browser under
 streamed newline-delimited JSON over a WebSocket to the backend-manager's
 `record-web` receiver
 (`codetracer/src/backend-manager/src/browser_stream_host.rs`), which wrote
-the three-file `.ct` directory. Nothing in it was authored by hand.
+the recording. Nothing in it was authored by hand.
+
+Every `.ct` here was captured when `record-web` still wrote the three-file
+JSON layout, and was carried over to the single-file CTFS `.ct` it writes
+now by re-encoding the same record sequence, record for record, as the
+container's CTBL `boundary.log`. No record was added, removed or edited, and
+`TestTheCommittedDemoVectorStillDescribesTheProducer` (above) was run
+against a recording made by the current `record-web` and agrees.
 
 It records exactly one export crossing:
 

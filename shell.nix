@@ -3,6 +3,9 @@
   self',
   inputs',
   preCommit,
+  # Runs a snippet only inside this repository; see flake.nix.
+  ownRepoOnly,
+  installGitHooks,
 }:
 let
   # Rust toolchain for building the FFI library from the sibling
@@ -27,6 +30,13 @@ with pkgs;
 mkShell {
 
   hardeningDisable = [ "all" ];
+
+  # The CTFS writer links `-lzstd` (tracewriter/ctfs_writer.go). The library
+  # comes from this flake's pinned nixpkgs, as it does in `wazero.nix`;
+  # scripts/detect-trace-format.sh folds it into CGO_LDFLAGS. It used to
+  # resolve `<nixpkgs>` with `nix-build`, which needs a NIX_PATH channel: a CI
+  # runner without one linked with no zstd at all ("cannot find -lzstd").
+  CODETRACER_WASM_ZSTD_LIB_DIR = "${zstd.out}/lib";
 
   packages = [
 
@@ -94,6 +104,6 @@ mkShell {
     # pure-Go writer will be available (CGO_ENABLED stays at 0).
     source scripts/detect-trace-format.sh
 
-    ${preCommit.shellHook}
+    ${ownRepoOnly installGitHooks}
   '';
 }

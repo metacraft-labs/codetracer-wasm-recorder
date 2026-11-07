@@ -497,7 +497,7 @@ through `ct-print`, an independent CTFS implementation).
   rather than mis-walk it as a B-tree, which is the same property `WPG1` was
   chosen for while the page store was a flat table.
 
-### Streaming replay — `--boundary-stream`, `--stream-done`
+### Streaming replay — `--boundary-stream -`
 
 `WASM-Replay-Snapshots-And-Slices.md` §2 requires snapshots to be derived
 **during** recording, not in a pass afterwards: "the browser streams boundary
@@ -506,41 +506,31 @@ in lockstep, emitting snapshots as it goes. When the page stops, the snapshots
 are already there."
 
 ```
-# a daemon-side tee pipes the recording's trace.json in; closing the pipe ends it
-record-web … | wazero-snapshots run --boundary-log <program>.ct \
-    --boundary-stream - --slice-dir <dir> --slice-every 10 <original>.wasm
+# record-web spawns the consumer and writes the boundary log to its stdin;
+# closing the pipe ends it
+record-web --snapshot-consumer wazero-snapshots --snapshot-consumer run \
+    --snapshot-consumer --boundary-stream --snapshot-consumer - … <original>.wasm
 
-# or follow a file the producer is appending to, until it drops a marker
-wazero-snapshots run --boundary-log <program>.ct \
-    --boundary-stream <program>.ct/trace.json --stream-done <program>.ct/.complete \
-    --slice-dir <dir> <original>.wasm
+# a finished recording
+wazero-snapshots run --boundary-log <program>.ct --slice-dir <dir> <original>.wasm
 ```
 
-**Both shapes now have a producer** (M38c). `record-web`'s
-`JsonFileCtfsWriter` (`codetracer/src/backend-manager/src/browser_stream_host.rs`)
-used to buffer every event in memory and write `trace.json` with a single
-`fs::write` inside a one-shot `flush`, so the file did not exist until the
-session ended and there was no byte stream to tee — a gap larger than a tee,
-since it was a change to a producer. It now appends each record as it is
-translated (`[` on the first, `,` before each later one, `]` at session end),
-and offers both shapes:
-
-* `record-web --snapshot-consumer <word> …` spawns a command per recording and
-  tees the exact `trace.json` bytes into its stdin — the `-` shape, and the
-  preferable one: EOF is unambiguous and backpressure is real.
-* `record-web --stream-done-marker .complete` creates the marker
-  `--stream-done` waits for, for the file-following shape.
-
-Both are off by default. Two properties of that producer are what the pins
-here rest on, and both are tested on its side: the appended rendering is
-**byte-identical** to the old single-shot one (positional `Function` /
-`VariableName` / `Path` tables mean anything else would silently renumber
-every lookup), and a recording cut off mid-session ends on a whole record, so
-it lands in `TruncatedUnterminated` rather than `TruncatedMidRecord`.
+The recording is a single CTFS `.ct`; its boundary log is the internal file
+`boundary.log`, in CTBL v1 — a framed binary encoding of the record sequence
+(`codetracer-specs/Recording-Backends/Browser-Recording-Container.md`,
+decoded by `internal/boundarylog/ctbl.go`). `record-web` writes exactly those
+bytes to the consumer's stdin, frame by frame, as records are translated, and
+an `End` frame when the session ends cleanly. Each frame is written whole, so
+a recording cut off mid-session ends on a whole frame and lands in
+`TruncatedUnterminated` rather than `TruncatedMidRecord`.
 `stream-snapshots-demo.sh` in codetracer's cross-process demo fixture drives
-the whole path from a headless browser and times each slice against
-`trace.json`'s mtime — the write of the `]` closing its array, and so the
-instant the recording stopped being produced.
+the whole path from a headless browser and times each slice against the
+`.ct`'s mtime, which is the instant the recording was finalised.
+
+The stream carries its own metadata (the `Header` frame), so
+`--boundary-stream -` takes no `--boundary-log`. The retired three-file JSON
+layout (`trace.json` + sidecars), and following it as a growing file with
+`--stream-done`, are gone; a `trace.json` is refused by name.
 
 **The producers stream by default** (M38d). They used to not: both browser
 producers (`@codetracer/runtime-browser` and the instrumenter's browser

@@ -8,10 +8,11 @@
 # The recording path lives in `tracewriter/ctfs_writer.go` and links against
 # the Nim C FFI from `codetracer-trace-format-nim`
 # (`libcodetracer_trace_writer.a` + `include/codetracer_trace_writer.h`).
-# Building without the FFI input still produces a runnable binary, but the
-# CTFS writer's stub fallback (`tracewriter/ctfs_writer_stub.go`) returns an
-# error from ProduceTrace, so recording is non-functional.  Production
-# builds always pass `codetracer-trace-format-nim` from the workspace flake.
+# `codetracer-trace-format-nim` is that FFI as built by its flake's
+# `packages.trace-writer-ffi` (`lib/libcodetracer_trace_writer.a`,
+# `include/*.h`).  Without it the binary still runs modules, but the CTFS
+# writer's stub (`tracewriter/ctfs_writer_stub.go`) refuses to write a trace
+# and every `--out-dir` run exits non-zero.
 pkgs.buildGoModule rec {
   name = "wazero";
   pname = name;
@@ -33,10 +34,8 @@ pkgs.buildGoModule rec {
     pkgs.zstd
   ];
 
-  # Point cgo at the Nim FFI's include and lib directories.  The Nim
-  # `buildStaticLib` task drops `libcodetracer_trace_writer.a` next to the source
-  # tree, so the upstream package should expose `${out}/lib` and
-  # `${out}/include` mirroring those locations.
+  # Point cgo at the FFI's include and lib directories.  The package ships
+  # only the static archive, so the writer is linked into the binary.
   preBuild = pkgs.lib.optionalString (codetracer-trace-format-nim != null) ''
     export CGO_CFLAGS="-I${codetracer-trace-format-nim}/include"
     export CGO_LDFLAGS="-L${codetracer-trace-format-nim}/lib -L${pkgs.zstd.out}/lib -Wl,-rpath,${pkgs.zstd.out}/lib"

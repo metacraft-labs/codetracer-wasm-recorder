@@ -2,7 +2,6 @@ package wasmsnapshot
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/internal/boundarylog"
+	"github.com/tetratelabs/wazero/internal/boundarylog/ctbltest"
 	"github.com/tetratelabs/wazero/internal/ctfs"
 	"github.com/tetratelabs/wazero/internal/ctfsffi"
 	"github.com/tetratelabs/wazero/internal/wasm"
@@ -26,16 +26,14 @@ import (
 // Quiescent points
 // ---------------------------------------------------------------------------
 
-// writeRecording emits a minimal but *real* browser-shaped `.ct` directory
-// with `n` top-level export crossings. It is the same three-file JSON layout
-// `browser_stream_host.rs` writes; the richer producer replica lives in
-// `internal/boundarylog` and is used by the end-to-end tests there.
+// writeRecording emits a minimal but *real* browser-shaped `.ct` with `n`
+// top-level export crossings: a CTFS container whose boundary log is the
+// record sequence `browser_stream_host.rs` writes. The richer producer
+// replica lives in `internal/boundarylog` and is used by the end-to-end
+// tests there.
 func writeRecording(t *testing.T, n int) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "prog.ct")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(t.TempDir(), "prog.ct")
 	var events []map[string]any
 	events = append(events, map[string]any{"Path": "/src/x.rs"})
 	events = append(events, map[string]any{
@@ -48,22 +46,11 @@ func writeRecording(t *testing.T, n int) string {
 				"return_value": map[string]any{"kind": "None", "type_id": float64(0)}}},
 		)
 	}
-	write := func(name string, v any) {
-		b, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-			t.Fatal(err)
-		}
+	log := ctbltest.Encode(ctbltest.DefaultHeader("prog", "/w"), events, true)
+	if err := ctbltest.WriteRecording(path, log); err != nil {
+		t.Fatal(err)
 	}
-	write("trace.json", events)
-	write("trace_metadata.json", map[string]any{
-		"program": "prog", "args": []string{}, "workdir": "/w",
-		"recorder": map[string]any{"name": "codetracer-js-recorder-browser", "version": "0.1.0"},
-	})
-	write("trace_paths.json", []string{"/src/x.rs"})
-	return dir
+	return path
 }
 
 func TestQuiescentPointsAreDerivedFromTheLogAlone(t *testing.T) {

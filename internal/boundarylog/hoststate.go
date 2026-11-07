@@ -1,60 +1,26 @@
 package boundarylog
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
 
-// HostStateFileName is the sidecar, inside the `.ct` directory, that
-// carries the spec §3.3 host-supplied initial state and the spec §3.4 host
-// mutations. It is optional: a module that defines its own memory and
-// globals needs none of it, because the `.wasm` already contains them.
+// hostStateLabel names the spec §3.3 / §3.4 state in diagnostics.
 //
-// PRODUCER STATUS: as of M44 this file **is** produced by the browser
-// pipeline. `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js`
-// captures the state (`host_state.js` explains why by snapshot-and-diff from
-// the host side and not by a bytecode hook — a host write happens in
-// JavaScript, outside the module, where no instruction of the module runs),
-// emits it as `HostInitialState` / `HostMutation` browser events, and
-// `codetracer/src/backend-manager/src/browser_stream_host.rs` renders those
-// into this schema. A recording whose module defines its own memory and
-// globals still carries no such file, and replays exactly as before.
-//
-// The end-to-end fixture is
-// `codetracer/src/db-backend/tests/fixtures/wasm-memory-calldata/`, whose
-// `verify.sh` replays a real browser recording and shows that withholding
-// either record produces a `DivergenceError` rather than a wrong trace.
-//
-// Two limits of the producer, both reported at the cause rather than
-// dropped (spec §8), and neither of them this package's to fix:
-//
-//   - A host write made *between* two top-level exported calls has no
-//     anchor in this schema — §3.3 is "before the FIRST call" and §3.4 is
-//     "during crossing N". The producer refuses to invent one. This covers
-//     an imported global the host reassigns between calls as well as a
-//     memory write: `applyMutations` only ever sets a provider global from
-//     a mutation, so an assignment anchored to neither record would simply
-//     never be applied.
-//   - A `() -> ()` import leaves no value run, so no crossing is recovered
-//     for it (see `recording.go`) and a mutation made during it has no
-//     `AfterCrossing` that would be true. Likewise refused.
-//
-// A third case is refused *here* rather than by the producer, and it is
-// what makes the producer's capture windows exact. §3.4's window is the
-// span between an import's two hooks, on the reasoning that only the host
-// runs inside it. The one way a module store can land there is a host
-// function calling back into an exported function — and such a recording
-// carries an export crossing at non-zero depth, which `refuseNestedExports`
-// rejects on both the batch and the streaming path. So a host write and a
-// module write to overlapping addresses cannot reach a materialised trace:
-// the recording is refused, not mis-attributed.
-const HostStateFileName = "boundary_state.json"
+// The state is carried by host-state records in the boundary log itself
+// (see "The in-stream host-state channel" below):
+// `codetracer-wasm-instrumenter/recorder-runtime/browser_session.js` captures
+// it (`host_state.js` explains why by snapshot-and-diff from the host side and
+// not by a bytecode hook — a host write happens in JavaScript, outside the
+// module, where no instruction of the module runs) and emits
+// `HostInitialState` / `HostMutation` browser events, which
+// `codetracer/src/backend-manager/src/browser_stream_host.rs` renders into
+// `Event` records of this schema. A recording whose module defines its own
+// memory and globals carries none, and replays exactly as before.
+const hostStateLabel = "the recording's host-state records"
 
 // hostStateVersion is the schema version this package understands. An
 // unrecognised version is a hard error rather than a best-effort read: the
@@ -266,58 +232,58 @@ func (h *HostState) validate() error {
 		return fmt.Errorf(
 			"%s declares version %d but this recorder implements version %d; "+
 				"refusing to guess at an unknown schema (spec §8)",
-			HostStateFileName, h.Version, hostStateVersion)
+			hostStateLabel, h.Version, hostStateVersion)
 	}
 	if len(h.Initial.Tables) > 0 {
 		return fmt.Errorf(
 			"%s carries imported-table state, which this recorder does not "+
 				"replay. Spec §8 lists imported tables mutated by the host among "+
 				"the constructs that are refused rather than silently degraded",
-			HostStateFileName)
+			hostStateLabel)
 	}
 	for _, m := range h.Initial.Memories {
 		if m.Name == "" {
-			return fmt.Errorf("%s: imported memory entry has no name", HostStateFileName)
+			return fmt.Errorf("%s: imported memory entry has no name", hostStateLabel)
 		}
 		if m.MaxPages != nil && *m.MaxPages < m.MinPages {
 			return fmt.Errorf(
 				"%s: imported memory %s.%s declares maxPages %d below minPages %d",
-				HostStateFileName, m.Module, m.Name, *m.MaxPages, m.MinPages)
+				hostStateLabel, m.Module, m.Name, *m.MaxPages, m.MinPages)
 		}
 		for _, d := range m.Data {
 			if _, err := d.decode(); err != nil {
 				return fmt.Errorf("%s: imported memory %s.%s: %w",
-					HostStateFileName, m.Module, m.Name, err)
+					hostStateLabel, m.Module, m.Name, err)
 			}
 		}
 	}
 	for _, g := range h.Initial.Globals {
 		if g.Name == "" {
-			return fmt.Errorf("%s: imported global entry has no name", HostStateFileName)
+			return fmt.Errorf("%s: imported global entry has no name", hostStateLabel)
 		}
 		if _, _, err := g.decode(); err != nil {
-			return fmt.Errorf("%s: %w", HostStateFileName, err)
+			return fmt.Errorf("%s: %w", hostStateLabel, err)
 		}
 	}
 	for _, mu := range h.Mutations {
 		if mu.AfterCrossing < 0 {
 			return fmt.Errorf("%s: mutation anchored to negative crossing %d",
-				HostStateFileName, mu.AfterCrossing)
+				hostStateLabel, mu.AfterCrossing)
 		}
 		for _, w := range mu.MemoryWrites {
 			if _, err := w.decode(); err != nil {
-				return fmt.Errorf("%s: %w", HostStateFileName, err)
+				return fmt.Errorf("%s: %w", hostStateLabel, err)
 			}
 		}
 		for _, s := range mu.GlobalSets {
 			if _, err := s.decode(); err != nil {
-				return fmt.Errorf("%s: %w", HostStateFileName, err)
+				return fmt.Errorf("%s: %w", hostStateLabel, err)
 			}
 			if !h.globalIsMutable(s.Module, s.Name) {
 				return fmt.Errorf(
 					"%s: mutation at crossing %d assigns global %s.%s, which the "+
 						"initial state does not declare as a mutable imported global",
-					HostStateFileName, mu.AfterCrossing, s.Module, s.Name)
+					hostStateLabel, mu.AfterCrossing, s.Module, s.Name)
 			}
 		}
 	}
@@ -333,109 +299,27 @@ func (h *HostState) globalIsMutable(module, name string) bool {
 	return false
 }
 
-// normalise replaces every nil slice with an empty one.
-//
-// It exists for `reconcileHostState`, which compares two independently
-// built descriptions of one document by their JSON rendering: `nil`
-// renders as `null` and an empty slice as `[]`, and the two carriers
-// disagree about which they produce for an absent list purely because one
-// is decoded whole and the other accumulated. Nothing downstream can tell
-// the two apart — every consumer of these fields ranges over them.
-func (h *HostState) normalise() {
-	if h == nil {
-		return
-	}
-	if h.Mutations == nil {
-		h.Mutations = []HostMutation{}
-	}
-	if h.Initial.Memories == nil {
-		h.Initial.Memories = []ImportedMemory{}
-	}
-	if h.Initial.Globals == nil {
-		h.Initial.Globals = []ImportedGlobal{}
-	}
-	if h.Initial.Tables == nil {
-		h.Initial.Tables = []json.RawMessage{}
-	}
-	for i := range h.Initial.Memories {
-		if h.Initial.Memories[i].Data == nil {
-			h.Initial.Memories[i].Data = []MemoryRegion{}
-		}
-	}
-	for i := range h.Mutations {
-		if h.Mutations[i].MemoryWrites == nil {
-			h.Mutations[i].MemoryWrites = []MemoryWrite{}
-		}
-		if h.Mutations[i].GlobalSets == nil {
-			h.Mutations[i].GlobalSets = []GlobalSet{}
-		}
-	}
-}
-
-// loadHostState reads the optional `boundary_state.json` sidecar from a
-// recording directory. A missing file yields (nil, nil); a malformed or
-// unsupported one is an error.
-func loadHostState(dir string) (*HostState, error) {
-	path := filepath.Join(dir, HostStateFileName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	var h HostState
-	if err := json.Unmarshal(data, &h); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", path, err)
-	}
-	if err := h.validate(); err != nil {
-		return nil, err
-	}
-	return &h, nil
-}
-
 // ---------------------------------------------------------------------------
 // The in-stream host-state channel (M44b)
 // ---------------------------------------------------------------------------
 //
-// The sidecar above is a *file*, and a file is exactly what a streaming
-// consumer cannot use. `--boundary-stream` opens the recording while the
-// page is still running, and spec §3.3 state is only known at the module's
-// first exported call — which happens after the daemon has opened the
-// stream and spawned its consumer. `LoadRecordingMetadata` runs once, at
-// startup, so on that path the sidecar is reliably absent and
-// `checkImportedMemories` refuses the recording: every Stylus contract and
-// every `wasm-bindgen` glue layer was excluded from the streaming pipeline.
-//
-// M44b closes that by carrying the same two records **in the event stream
-// itself**, as `Event` records the daemon appends to `trace.json` at the
-// moment they arrive. That is the milestone's preferred shape, and three
+// Spec §3.3 state is only known at the module's first exported call, after
+// the daemon has opened the stream and spawned its consumer, so it cannot be
+// metadata read at startup. It is carried **in the record stream itself**, as
+// `Event` records the daemon appends the moment they arrive, and three
 // properties are why:
 //
-//  1. **One ordered stream carries everything.** A sidecar the consumer
-//     re-reads reintroduces exactly the ordering ambiguity the stream
-//     exists to remove: nothing would relate "the file changed" to "the
-//     crossing it describes". Here §3.3 arrives immediately before the
-//     first `Call` record and each §3.4 mutation arrives inside the
-//     crossing it belongs to, because `browser_session.js` sends them
+//  1. **One ordered stream carries everything.** §3.3 arrives immediately
+//     before the first `Call` record and each §3.4 mutation arrives inside
+//     the crossing it belongs to, because `browser_session.js` sends them
 //     through the same queue as every other event.
-//  2. **A re-read protocol would be racy, not merely late.** The daemon's
-//     `write_host_state` calls `open_stream`, and `open_stream` is what
-//     spawns the §2 consumer — so the consumer's first read races the
-//     sidecar's first write. In-stream carriage has no such window: the
-//     record cannot be read before it is written.
+//  2. **There is nothing to race.** A record cannot be read before it is
+//     written; a side file re-read by the consumer could be.
 //  3. **Nothing else has to learn anything.** `Event` is already an open
 //     extension point on this path — `parseRealmMarker` returns ok=false
-//     for a `boundary_id` it does not know, and the JS recorder already
-//     puts HTTP and other domain markers into its recordings — so an
-//     older `wazero`, `ct-print` and the db-backend all skip these
-//     records rather than failing on them.
-//
-// The sidecar is still written, unchanged, and is still what a *batch*
-// replay of an older recording reads. It is now a rendering of the stream
-// rather than the only copy, and `LoadRecording` cross-checks the two when
-// a recording carries both — a producer that let them disagree would be
-// serving two different programs to the two drivers.
+//     for a `boundary_id` it does not know — so `ct print` and the
+//     db-backend skip these records in the recording rather than failing on
+//     them.
 
 // hostStateBoundary is the `boundary_id` under which the daemon marks a
 // host-state record. It is deliberately not `js-wasm-realm`: a reader of
@@ -462,7 +346,7 @@ const (
 type hostStateMarker struct {
 	BoundaryID string `json:"boundary_id"`
 	// Version mirrors `HostState.Version`; an unrecognised one is a hard
-	// error for the same reason it is in the sidecar.
+	// error (spec §8).
 	Version int    `json:"version"`
 	Record  string `json:"record"`
 	// Initial is set for a `hostStateRecordInitial` record.
@@ -480,9 +364,8 @@ type hostStateMarker struct {
 // skipped, but a recognised input that cannot be honoured is refused
 // rather than dropped, because dropping it would produce a divergence
 // later, at a point unrelated to the cause.
-func parseHostStateMarker(raw json.RawMessage) (*hostStateMarker, bool, error) {
-	var ev eventRecord
-	if err := json.Unmarshal(raw, &ev); err != nil || ev.Kind != eventKindTraceLogEvent {
+func parseHostStateMarker(ev *eventRecord) (*hostStateMarker, bool, error) {
+	if ev.Kind != eventKindTraceLogEvent {
 		return nil, false, nil
 	}
 	// Cheap pre-filter so the common case — a realm marker, or a domain
@@ -544,7 +427,7 @@ func foldHostStateMarker(state *HostState, m *hostStateMarker) (*HostState, erro
 			// exported call. A second one would mean two recordings were
 			// spliced together; keeping the first is the only reading
 			// that stays true to the calls already replayed, and it is
-			// what the daemon's sidecar does with the same input.
+			// what the daemon does with the same input.
 			return state, nil
 		}
 		state.initialSeen = true
@@ -556,50 +439,4 @@ func foldHostStateMarker(state *HostState, m *hostStateMarker) (*HostState, erro
 		return nil, err
 	}
 	return state, nil
-}
-
-// reconcileHostState decides which of a recording's two possible carriers
-// of spec §3.3 / §3.4 state to believe, and refuses a recording whose two
-// carriers disagree.
-//
-//   - Only the sidecar: a recording made before M44b, or one replayed in
-//     batch. Believed as it always was.
-//   - Only the stream: a recording still being produced, whose sidecar has
-//     not been written yet — or one produced by a daemon that writes only
-//     the stream.
-//   - Both: they must agree. The sidecar IS a rendering of the stream, so
-//     a difference means a producer bug, and the two drivers would
-//     otherwise replay two different programs from one recording.
-func reconcileHostState(sidecar, streamed *HostState) (*HostState, error) {
-	switch {
-	case streamed == nil:
-		return sidecar, nil
-	case sidecar == nil:
-		return streamed, nil
-	}
-	// Both carriers describe the same document but reach it differently —
-	// the sidecar is decoded whole, the stream is accumulated record by
-	// record — so an absent list is a nil slice on one side and an empty
-	// one on the other. `normalise` makes that difference unrepresentable
-	// before the comparison, so the comparison is about content.
-	sidecar.normalise()
-	streamed.normalise()
-	a, err := json.Marshal(sidecar)
-	if err != nil {
-		return nil, fmt.Errorf("re-encoding the %s sidecar: %w", HostStateFileName, err)
-	}
-	b, err := json.Marshal(streamed)
-	if err != nil {
-		return nil, fmt.Errorf("re-encoding the streamed host state: %w", err)
-	}
-	if !bytes.Equal(a, b) {
-		return nil, fmt.Errorf(
-			"the recording's %s disagrees with the host-state records carried in "+
-				"its event stream. The sidecar is a rendering of the stream, so a "+
-				"difference means the producer wrote two descriptions of one "+
-				"program; refusing rather than picking one (spec §8).\n"+
-				"  sidecar: %s\n  stream:  %s",
-			HostStateFileName, a, b)
-	}
-	return sidecar, nil
 }

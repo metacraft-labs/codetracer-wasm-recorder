@@ -1,67 +1,50 @@
 package boundarylog
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/tetratelabs/wazero/internal/testing/require"
 )
 
-// StreamChunksForRecording splits a recording's `trace.json` into the pieces a
-// producer would emit call by call.
+// StreamChunksForRecording splits a recording's boundary log into the pieces
+// a producer would emit call by call.
 //
-// Concatenating every chunk reproduces the file exactly. Chunk *i* (for i less
-// than the number of exported calls) ends with the `Return` record that closes
+// Concatenating every chunk reproduces the log exactly. Chunk *i* (for i less
+// than the number of exported calls) ends with the `Return` frame that closes
 // call *i*, so feeding chunks one at a time to a `StreamReader` yields exactly
-// one call group per chunk; the last chunk is the document's tail and its
-// closing bracket.
+// one call group per chunk; the last chunk is the log's tail and its `End`
+// frame.
 //
 // It exists so the streaming tests can drive a producer at a granularity the
 // replay can be observed against, without a second renderer of the browser
 // format: the bytes are the ones `recordingBuilder` wrote, which
 // `TestBuilderReproducesTheCommittedBrowserRecording` pins against the real
 // browser output.
-func StreamChunksForRecording(t *testing.T, ctDir string) [][]byte {
+func StreamChunksForRecording(t *testing.T, ctPath string) [][]byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(ctDir, "trace.json"))
-	require.NoError(t, err)
-	var records []json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &records))
+	raw := ReadTestLog(t, ctPath)
+	prefix, frames, tags := SplitTestLogFrames(t, raw)
 
 	var (
 		chunks [][]byte
-		cur    bytes.Buffer
-		first  = true
+		cur    = append([]byte(nil), prefix...)
 	)
-	flush := func() {
-		chunks = append(chunks, append([]byte(nil), cur.Bytes()...))
-		cur.Reset()
-	}
-	cur.WriteByte('[')
-	for _, r := range records {
-		if !first {
-			cur.WriteByte(',')
-		}
-		first = false
-		cur.Write(r)
+	for i, f := range frames {
+		cur = append(cur, f...)
 		// Only an *export* crossing emits a `Return`, and it is the record
 		// that closes the crossing — so this is one chunk per exported call.
-		if bytes.Contains(r, []byte(`"Return"`)) {
-			flush()
+		if tags[i] == tagReturn {
+			chunks = append(chunks, cur)
+			cur = nil
 		}
 	}
-	cur.WriteByte(']')
-	flush()
+	chunks = append(chunks, cur)
 
 	var joined []byte
 	for _, c := range chunks {
 		joined = append(joined, c...)
 	}
-	require.Equal(t, len(raw), len(joined),
-		"the chunks do not reassemble into the recording")
+	require.Equal(t, raw, joined, "the chunks do not reassemble into the recording")
 	return chunks
 }
 
@@ -77,7 +60,7 @@ func StreamChunksForRecording(t *testing.T, ctDir string) [][]byte {
 
 // BuildComputeBalanceRecording writes a boundary recording of `len(args)`
 // successive top-level `compute_balance` calls, in the exact on-disk shape
-// the browser pipeline produces, and returns the `.ct` directory.
+// the browser pipeline produces, and returns the `.ct`.
 //
 // The module is the committed `balance_calc.wasm`, whose exported
 // `compute_balance(user_id, amount)` returns `user_id*10 + amount*2` — a

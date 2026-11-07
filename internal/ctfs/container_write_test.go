@@ -167,9 +167,13 @@ func TestAppendRefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// TestEntryArrayExhaustionIsReported: a container whose entry array is full
-// must fail loudly rather than silently dropping a stream.
-func TestEntryArrayExhaustionIsReported(t *testing.T) {
+// TestAnAppendPastTheEntryArrayGrowsIt: an append that needs more entries
+// than the container's root holds grows the root (`ctfs-container.md` §1,
+// `root_blocks`), and every member -- the ones that fit and the ones past the
+// old capacity -- reads back through this reader. A stream the root had no
+// room for must not be dropped, and a root that spans several blocks must not
+// be refused by the reader.
+func TestAnAppendPastTheEntryArrayGrowsIt(t *testing.T) {
 	path := newContainer(t)
 	// One file first, so the container can be opened and its entry-array
 	// capacity read off the header rather than assumed.
@@ -180,15 +184,33 @@ func TestEntryArrayExhaustionIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	capacity := c.entryCount
 	files := map[string][]byte{}
-	for i := 0; i < c.entryCount; i++ {
-		files[fmt.Sprintf("f%06d.dat", i)] = []byte{byte(i)}
+	for i := 0; i < capacity; i++ {
+		files[fmt.Sprintf("f%06d.dat", i)] = deterministicBytes(int64(i), 1+i%300)
 	}
-	err = ctfsffi.Append(path, files)
-	if err == nil {
-		t.Fatal("filling the entry array past capacity was allowed")
+	if err := ctfsffi.Append(path, files); err != nil {
+		t.Fatalf("an append past the %d-entry root was refused: %v", capacity, err)
 	}
-	if !bytes.Contains([]byte(err.Error()), []byte("free file entry")) {
-		t.Errorf("unhelpful error: %v", err)
+	grown, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after the root grew: %v", err)
+	}
+	if grown.entryCount <= capacity {
+		t.Fatalf("the root holds %d entries after %d members were appended to a %d-entry root",
+			grown.entryCount, len(files)+1, capacity)
+	}
+	if got := len(grown.Names()); got != len(files)+1 {
+		t.Fatalf("%d members are listed, want %d", got, len(files)+1)
+	}
+	files["first.dat"] = []byte{1}
+	for name, want := range files {
+		got, err := grown.ReadFile(name)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", name, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%q read back %d bytes that differ from the %d appended", name, len(got), len(want))
+		}
 	}
 }

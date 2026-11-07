@@ -12,7 +12,9 @@
 #   $GITHUB_WORKSPACE/../
 #     codetracer/                  <-- cloned by this workflow
 #     codetracer-wasm-recorder/    <-- checked out by actions/checkout
-#     codetracer-trace-format/     <-- cloned for FFI library
+#     codetracer-trace-format/     <-- cloned for db-backend's trace crates
+#     codetracer-trace-format-nim/ <-- cloned for the CTFS writer (FFI)
+#     codetracer-native-recorder/  <-- cloned for db-backend's MCR emulator
 #
 # POLICY: All CI steps should be reproducible locally via `just` targets.
 # Local equivalent:
@@ -119,26 +121,149 @@ jobs:
           siblings: |
             codetracer=${{ (github.event.inputs.codetracer_ref != 'main' && github.event.inputs.codetracer_ref) || github.event.client_payload.codetracer_ref }}
             codetracer-trace-format
+            # The CTFS writer wazero links through cgo, built from this
+            # sibling by scripts/detect-trace-format.sh in the step below;
+            # codetracer's db-backend also builds it (its default
+            # `nim-reader` feature, codetracer_trace_writer_nim/build.rs).
+            codetracer-trace-format-nim
+            # db-backend's build.rs compiles the Nim MCR emulator from this
+            # sibling's ct_emulator/ and refuses to build without it. These
+            # three are the set codetracer's own CI provisions for a
+            # db-backend build (.github/actions/setup-db-backend-siblings).
+            codetracer-native-recorder
+
+      - name: Fetch every flake input and tool later steps evaluate, while the token is valid
+        # THE JOB'S ONE GITHUB CREDENTIAL DIES 60 MINUTES AFTER IT IS MINTED,
+        # AND THIS JOB OUTLIVES IT. setup-dev-env hands the installation token
+        # minted above to nix as `access-tokens = github.com=<token>` (through
+        # the `!include` NIX_CONFIG names). GitHub installation tokens "expire
+        # one hour from the time you create them", and a job mints its token
+        # in exactly one step: a second mint step later in the job is not
+        # allowed, so the token cannot be refreshed. After that hour nix still
+        # presents the dead token on every github.com fetch it has not cached,
+        # and GitHub answers `401 Bad credentials`, for public repos too.
+        #
+        # PR #38 job 128403454993 is what that costs: minted 12:27:24, and at
+        # 13:37:00 (+70 min), an hour into the cargo build below, db-backend's
+        # build.rs ran `repro exec ../codetracer-native-recorder -- bash
+        # ct_emulator/build_native_api.sh`; repro provisioned its pinned
+        # bootstrap C compiler (nixpkgs#gcc at nixpkgs addf7cf5) and nix got
+        # `HTTP error 401 "Bad credentials"` from
+        # api.github.com/repos/NixOS/nixpkgs/tarball/addf7cf5. "Bad
+        # credentials" rather than a rate-limit 403 is the tell: nix sent a
+        # token and GitHub rejected it.
+        #
+        # This is the fix codetracer's launcher-recorder-e2e.yml applies
+        # ("Fetch every flake input later steps evaluate, while the token is
+        # valid"): do every authenticated fetch near the top of the job, so a
+        # later evaluation of the same locked revision is answered from nix's
+        # fetcher cache under this job's $HOME (which repro's nix shares: the
+        # 401 above proves it read the same nix.conf). Re-minting the token
+        # before the long step (refresh-build-auth) would need a second mint
+        # step, which the one-mint-per-job rule above rules out.
+        #
+        # Two halves, because a flake evaluation alone does not cover repro:
+        #   1. `nix eval` of each dev shell a later step enters, spelled the
+        #      way that step spells it, with `--no-write-lock-file` so the
+        #      lock resolution here is the one it repeats: codetracer as
+        #      `.?submodules=1` (the `nix develop` below), this repo as `.`
+        #      (Build wazero; actions/checkout does not fetch this repo's
+        #      submodules, so `.?submodules=1` would fail on
+        #      site/themes/hello-friend), and codetracer-native-recorder as
+        #      `.?submodules=1` (repro's useFlakeDevShell()). Evaluation only:
+        #      no dev shell is built.
+        #   2. `repro exec ../codetracer-native-recorder -- true`, from
+        #      codetracer's dev shell, which supplies the `repro` db-backend's
+        #      build.rs calls. That provisions what repro itself fetches and
+        #      no flake lock names -- the bootstrap compiler at reprobuild's
+        #      own nixpkgs pin, which is what failed above -- without this
+        #      workflow hard-coding that revision. It lands in repro's tool
+        #      store, so build.rs reuses it rather than repeating it. That is
+        #      the only `repro exec` the WASM flow test reaches: its harness
+        #      runs wazero directly (record_wasm_trace), not through
+        #      `repro exec` on this repo.
+        #
+        # NO CREDENTIAL IS HANDLED HERE: nix reads the token from the file
+        # setup-nix wrote, and its diagnostics carry the URL, never the header.
+        run: |
+          set -euo pipefail
+          SYSTEM="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          CT_DIR="$(cd ../codetracer && pwd)"
+          NATIVE_DIR="$(cd ../codetracer-native-recorder && pwd)"
+          attr="devShells.${SYSTEM}.default"
+          dirs=("${CT_DIR}" "$(pwd)" "${NATIVE_DIR}")
+          flakes=('.?submodules=1' '.' '.?submodules=1')
+          for i in "${!dirs[@]}"; do
+            dir="${dirs[$i]}"
+            started="${SECONDS}"
+            if ! (cd "${dir}" && nix eval --raw --no-write-lock-file "${flakes[$i]}#${attr}.drvPath" >/dev/null); then
+              echo "::error::could not evaluate ${attr} of ${dir} while this job's GitHub token is still valid; nix's own diagnostic is above this line and names the input. A later step evaluates exactly this after the token has expired, so it would fail the same way or worse."
+              exit 1
+            fi
+            echo "fetched: ${dir} #${attr} ($((SECONDS - started))s)"
+          done
+          started="${SECONDS}"
+          if ! (cd "${CT_DIR}" && nix develop '.?submodules=1' --command repro exec "${NATIVE_DIR}" -- true); then
+            echo "::error::could not provision the repro environment of ${NATIVE_DIR} while this job's GitHub token is still valid; repro's diagnostic is above this line. db-backend's build.rs runs the same 'repro exec' after the token has expired."
+            exit 1
+          fi
+          echo "provisioned: repro exec ${NATIVE_DIR} ($((SECONDS - started))s)"
 
       # ------------------------------------------------------------------
       # 3. Build wazero binary
       # ------------------------------------------------------------------
       - name: Build wazero
+        # In THIS repository's dev shell, as `just build` and ci.yml do. Its
+        # shellHook (scripts/detect-trace-format.sh) builds the CTFS writer
+        # from the codetracer-trace-format-nim sibling and points cgo at it;
+        # codetracer's shell does no such wiring, so a cgo link there fails
+        # (`cannot find -lcodetracer_trace_writer`), and a wazero built with
+        # cgo off has only the stub writer and cannot record. `set -e`: the
+        # build used to fail here while the step still passed, because the
+        # `echo` after it was the script's last command.
         run: |
-          nix develop ../codetracer?submodules=1 --command bash -c '
+          nix develop --command bash -c '
+            set -euo pipefail
             go build -o wazero ./cmd/wazero
-            echo "Built wazero: $(./wazero version 2>/dev/null || echo unknown)"
+            echo "Built wazero: $(./wazero version)"
           '
 
       # ------------------------------------------------------------------
       # 6. Run WASM flow integration tests in the codetracer repo
       # ------------------------------------------------------------------
       - name: Run WASM flow integration tests
+        # db-backend's build.rs compiles codetracer-native-recorder's Nim MCR
+        # emulator with ct_emulator/build_native_api.sh, which imports the
+        # nimble packages `results` and `stew` (ct_emulator.nimble `requires`
+        # them). On a developer machine nim finds them in ~/.nimble; a fresh
+        # runner has no nimble store, and the build failed with
+        # `memory_model.nim(36, 8) Error: cannot open file: results` (PR #38
+        # job 128434278908). build_native_api.sh's contract for this case is
+        # CT_EMULATOR_EXTRA_NIM_PATHS, a colon-separated list it turns into
+        # `--path:` flags: "CI and Nix-sandbox callers set this to inject
+        # paths for nimble-distributed packages". The value is the one
+        # codetracer's own CI uses for every db-backend build
+        # (.github/workflows/codetracer.yml): codetracer's pinned submodules
+        # libs/nim-stew and libs/nim-result. Here codetracer is the sibling
+        # clone, whose submodules setup-dev-env initialises. The env var
+        # passes through nix develop, cargo and `repro exec` unchanged.
         run: |
+          set -euo pipefail
           WAZERO_PATH="$(pwd)/wazero"
           cd ../codetracer
+          CT_DIR="$(pwd)"
+          for f in libs/nim-result/results.nim libs/nim-stew/stew/endians2.nim; do
+            if [ ! -f "${f}" ]; then
+              echo "::error::${CT_DIR}/${f} is missing: codetracer's submodules were not initialised, and db-backend's MCR emulator build needs them on its Nim path (CT_EMULATOR_EXTRA_NIM_PATHS)."
+              exit 1
+            fi
+          done
+          export CT_EMULATOR_EXTRA_NIM_PATHS="${CT_DIR}/libs/nim-stew/stew:${CT_DIR}/libs/nim-stew:${CT_DIR}/libs/nim-result"
           nix develop .?submodules=1 --command bash -c "
             set -e
+            # A missing prerequisite (wazero, the wasm32-wasip1 target) fails
+            # the test instead of letting it pass having asserted nothing.
+            export CODETRACER_ALLOW_GRACEFUL_TEST_SKIPPING=false
             rustup target add wasm32-wasip1 2>/dev/null || true
             export CODETRACER_WASM_VM_PATH='$WAZERO_PATH'
             echo \"Using wazero: \$CODETRACER_WASM_VM_PATH\"
@@ -156,13 +281,24 @@ jobs:
       # ------------------------------------------------------------------
       # 7. Upload test logs on failure
       # ------------------------------------------------------------------
+      # upload-artifact refuses a path containing `..` ("Relative pathing '.'
+      # and '..' is not allowed"), and the logs are in the codetracer sibling,
+      # outside this checkout. Copy them into the workspace first.
+      - name: Stage test logs
+        if: failure()
+        run: |
+          rm -rf cross-repo-test-logs
+          mkdir -p cross-repo-test-logs
+          if [ -d ../codetracer/target ]; then
+            cp -a ../codetracer/target/. cross-repo-test-logs/
+          fi
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: cross-repo-test-logs
-          path: |
-            ../codetracer/target/
+          path: cross-repo-test-logs/
           retention-days: 1
           if-no-files-found: ignore
 
@@ -171,7 +307,7 @@ jobs:
         continue-on-error: true
         uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
-          path: ../codetracer/target/
+          path: cross-repo-test-logs/
           prefix: cross-repo-test-logs/${{ github.run_id }}
           endpoint: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
           bucket: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}

@@ -610,9 +610,9 @@ func (r *replayer) checkImportedMemories() error {
 				"no initial contents for it. An imported memory's initial contents "+
 				"are host-supplied state the recording must capture (spec §3.3); "+
 				"replaying against a zeroed memory would diverge later, at a point "+
-				"unrelated to the cause, so it is refused (spec §8). Expected a %q "+
-				"sidecar in the recording declaring it",
-			module, name, HostStateFileName)
+				"unrelated to the cause, so it is refused (spec §8). Expected a "+
+				"%q initial-state record in the boundary log declaring it",
+			module, name, hostStateBoundary)
 	}
 	return nil
 }

@@ -132,6 +132,83 @@ jobs:
             # db-backend build (.github/actions/setup-db-backend-siblings).
             codetracer-native-recorder
 
+      - name: Fetch every flake input and tool later steps evaluate, while the token is valid
+        # THE JOB'S ONE GITHUB CREDENTIAL DIES 60 MINUTES AFTER IT IS MINTED,
+        # AND THIS JOB OUTLIVES IT. setup-dev-env hands the installation token
+        # minted above to nix as `access-tokens = github.com=<token>` (through
+        # the `!include` NIX_CONFIG names). GitHub installation tokens "expire
+        # one hour from the time you create them", and a job may mint only one
+        # (metacraft-dev-guidelines policies/ci-workflow-standards.md, "Two
+        # token-mint steps in one job"). After that hour nix still presents
+        # the dead token on every github.com fetch it has not already cached,
+        # and GitHub answers `401 Bad credentials`, for public repos too.
+        #
+        # PR #38 job 128403454993 is what that costs: minted 12:27:24, and at
+        # 13:37:00 (+70 min), an hour into the cargo build below, db-backend's
+        # build.rs ran `repro exec ../codetracer-native-recorder -- bash
+        # ct_emulator/build_native_api.sh`; repro provisioned its pinned
+        # bootstrap C compiler (nixpkgs#gcc at nixpkgs addf7cf5) and nix got
+        # `HTTP error 401 "Bad credentials"` from
+        # api.github.com/repos/NixOS/nixpkgs/tarball/addf7cf5. "Bad
+        # credentials" rather than a rate-limit 403 is the tell: nix sent a
+        # token and GitHub rejected it.
+        #
+        # This is the fix codetracer's launcher-recorder-e2e.yml applies
+        # ("Fetch every flake input later steps evaluate, while the token is
+        # valid"): do every authenticated fetch near the top of the job, so a
+        # later evaluation of the same locked revision is answered from nix's
+        # fetcher cache under this job's $HOME (which repro's nix shares: the
+        # 401 above proves it read the same nix.conf). Re-minting the token
+        # before the long step (refresh-build-auth) would need a second mint
+        # step, which the policy above forbids.
+        #
+        # Two halves, because a flake evaluation alone does not cover repro:
+        #   1. `nix eval` of each dev shell a later step enters, spelled the
+        #      way that step spells it, with `--no-write-lock-file` so the
+        #      lock resolution here is the one it repeats: codetracer as
+        #      `.?submodules=1` (the `nix develop` below), this repo as `.`
+        #      (Build wazero; actions/checkout does not fetch this repo's
+        #      submodules, so `.?submodules=1` would fail on
+        #      site/themes/hello-friend), and codetracer-native-recorder as
+        #      `.?submodules=1` (repro's useFlakeDevShell()). Evaluation only:
+        #      no dev shell is built.
+        #   2. `repro exec ../codetracer-native-recorder -- true`, from
+        #      codetracer's dev shell, which supplies the `repro` db-backend's
+        #      build.rs calls. That provisions what repro itself fetches and
+        #      no flake lock names -- the bootstrap compiler at reprobuild's
+        #      own nixpkgs pin, which is what failed above -- without this
+        #      workflow hard-coding that revision. It lands in repro's tool
+        #      store, so build.rs reuses it rather than repeating it. That is
+        #      the only `repro exec` the WASM flow test reaches: its harness
+        #      runs wazero directly (record_wasm_trace), not through
+        #      `repro exec` on this repo.
+        #
+        # NO CREDENTIAL IS HANDLED HERE: nix reads the token from the file
+        # setup-nix wrote, and its diagnostics carry the URL, never the header.
+        run: |
+          set -euo pipefail
+          SYSTEM="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          CT_DIR="$(cd ../codetracer && pwd)"
+          NATIVE_DIR="$(cd ../codetracer-native-recorder && pwd)"
+          attr="devShells.${SYSTEM}.default"
+          dirs=("${CT_DIR}" "$(pwd)" "${NATIVE_DIR}")
+          flakes=('.?submodules=1' '.' '.?submodules=1')
+          for i in "${!dirs[@]}"; do
+            dir="${dirs[$i]}"
+            started="${SECONDS}"
+            if ! (cd "${dir}" && nix eval --raw --no-write-lock-file "${flakes[$i]}#${attr}.drvPath" >/dev/null); then
+              echo "::error::could not evaluate ${attr} of ${dir} while this job's GitHub token is still valid; nix's own diagnostic is above this line and names the input. A later step evaluates exactly this after the token has expired, so it would fail the same way or worse."
+              exit 1
+            fi
+            echo "fetched: ${dir} #${attr} ($((SECONDS - started))s)"
+          done
+          started="${SECONDS}"
+          if ! (cd "${CT_DIR}" && nix develop '.?submodules=1' --command repro exec "${NATIVE_DIR}" -- true); then
+            echo "::error::could not provision the repro environment of ${NATIVE_DIR} while this job's GitHub token is still valid; repro's diagnostic is above this line. db-backend's build.rs runs the same 'repro exec' after the token has expired."
+            exit 1
+          fi
+          echo "provisioned: repro exec ${NATIVE_DIR} ($((SECONDS - started))s)"
+
       # ------------------------------------------------------------------
       # 3. Build wazero binary
       # ------------------------------------------------------------------

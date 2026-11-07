@@ -137,10 +137,10 @@ jobs:
         # AND THIS JOB OUTLIVES IT. setup-dev-env hands the installation token
         # minted above to nix as `access-tokens = github.com=<token>` (through
         # the `!include` NIX_CONFIG names). GitHub installation tokens "expire
-        # one hour from the time you create them", and a job may mint only one
-        # (metacraft-dev-guidelines policies/ci-workflow-standards.md, "Two
-        # token-mint steps in one job"). After that hour nix still presents
-        # the dead token on every github.com fetch it has not already cached,
+        # one hour from the time you create them", and a job mints its token
+        # in exactly one step: a second mint step later in the job is not
+        # allowed, so the token cannot be refreshed. After that hour nix still
+        # presents the dead token on every github.com fetch it has not cached,
         # and GitHub answers `401 Bad credentials`, for public repos too.
         #
         # PR #38 job 128403454993 is what that costs: minted 12:27:24, and at
@@ -160,7 +160,7 @@ jobs:
         # fetcher cache under this job's $HOME (which repro's nix shares: the
         # 401 above proves it read the same nix.conf). Re-minting the token
         # before the long step (refresh-build-auth) would need a second mint
-        # step, which the policy above forbids.
+        # step, which the one-mint-per-job rule above rules out.
         #
         # Two halves, because a flake evaluation alone does not cover repro:
         #   1. `nix eval` of each dev shell a later step enters, spelled the
@@ -232,9 +232,33 @@ jobs:
       # 6. Run WASM flow integration tests in the codetracer repo
       # ------------------------------------------------------------------
       - name: Run WASM flow integration tests
+        # db-backend's build.rs compiles codetracer-native-recorder's Nim MCR
+        # emulator with ct_emulator/build_native_api.sh, which imports the
+        # nimble packages `results` and `stew` (ct_emulator.nimble `requires`
+        # them). On a developer machine nim finds them in ~/.nimble; a fresh
+        # runner has no nimble store, and the build failed with
+        # `memory_model.nim(36, 8) Error: cannot open file: results` (PR #38
+        # job 128434278908). build_native_api.sh's contract for this case is
+        # CT_EMULATOR_EXTRA_NIM_PATHS, a colon-separated list it turns into
+        # `--path:` flags: "CI and Nix-sandbox callers set this to inject
+        # paths for nimble-distributed packages". The value is the one
+        # codetracer's own CI uses for every db-backend build
+        # (.github/workflows/codetracer.yml): codetracer's pinned submodules
+        # libs/nim-stew and libs/nim-result. Here codetracer is the sibling
+        # clone, whose submodules setup-dev-env initialises. The env var
+        # passes through nix develop, cargo and `repro exec` unchanged.
         run: |
+          set -euo pipefail
           WAZERO_PATH="$(pwd)/wazero"
           cd ../codetracer
+          CT_DIR="$(pwd)"
+          for f in libs/nim-result/results.nim libs/nim-stew/stew/endians2.nim; do
+            if [ ! -f "${f}" ]; then
+              echo "::error::${CT_DIR}/${f} is missing: codetracer's submodules were not initialised, and db-backend's MCR emulator build needs them on its Nim path (CT_EMULATOR_EXTRA_NIM_PATHS)."
+              exit 1
+            fi
+          done
+          export CT_EMULATOR_EXTRA_NIM_PATHS="${CT_DIR}/libs/nim-stew/stew:${CT_DIR}/libs/nim-stew:${CT_DIR}/libs/nim-result"
           nix develop .?submodules=1 --command bash -c "
             set -e
             # A missing prerequisite (wazero, the wasm32-wasip1 target) fails

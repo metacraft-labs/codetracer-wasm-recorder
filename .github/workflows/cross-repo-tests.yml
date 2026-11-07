@@ -180,13 +180,24 @@ jobs:
       # ------------------------------------------------------------------
       # 7. Upload test logs on failure
       # ------------------------------------------------------------------
+      # upload-artifact refuses a path containing `..` ("Relative pathing '.'
+      # and '..' is not allowed"), and the logs are in the codetracer sibling,
+      # outside this checkout. Copy them into the workspace first.
+      - name: Stage test logs
+        if: failure()
+        run: |
+          rm -rf cross-repo-test-logs
+          mkdir -p cross-repo-test-logs
+          if [ -d ../codetracer/target ]; then
+            cp -a ../codetracer/target/. cross-repo-test-logs/
+          fi
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: cross-repo-test-logs
-          path: |
-            ../codetracer/target/
+          path: cross-repo-test-logs/
           retention-days: 1
           if-no-files-found: ignore
 
@@ -195,7 +206,7 @@ jobs:
         continue-on-error: true
         uses: metacraft-labs/metacraft-github-actions/mirror-artifacts-s3@dev
         with:
-          path: ../codetracer/target/
+          path: cross-repo-test-logs/
           prefix: cross-repo-test-logs/${{ github.run_id }}
           endpoint: ${{ vars.MCL_S3_ARTIFACTS_ENDPOINT }}
           bucket: ${{ vars.MCL_S3_ARTIFACTS_BUCKET }}

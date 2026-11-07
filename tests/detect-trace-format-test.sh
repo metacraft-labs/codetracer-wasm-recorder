@@ -9,7 +9,11 @@
 #      sibling directory takes the `.so`);
 #   4. a library whose content changes yields a different CGO_LDFLAGS, so Go's
 #      build cache, which keys a link on the flags rather than on the
-#      libraries they name, relinks.
+#      libraries they name, relinks;
+#   5. the libzstd directory the dev shell names (CODETRACER_WASM_ZSTD_LIB_DIR)
+#      reaches CGO_LDFLAGS as a -L and an rpath, with no NIX_PATH to help — a
+#      runner without a nixpkgs channel used to link with no zstd at all — and
+#      a named directory that does not exist is refused rather than ignored.
 #
 # Mock justification: the sibling is a scratch directory and `nimble` is a stub
 # that writes a library file and logs that it ran. What is under test is the
@@ -104,5 +108,26 @@ dir="$(link_dir "$flags4")"
 [ ! -e "$dir/libcodetracer_trace_writer.so" ] || fail "the -L directory $dir offers the linker a .so"
 cmp -s "$dir/libcodetracer_trace_writer.a" "$NIM/libcodetracer_trace_writer.a" ||
   fail "the -L directory's library is not the sibling's current one"
+
+# The dev shell's libzstd directory: in CGO_LDFLAGS, no NIX_PATH needed.
+mkdir -p "$WORK/zstd/lib"
+zflags="$(env -i HOME="$WORK" XDG_CACHE_HOME="$WORK/cache" PATH="$WORK/bin" \
+  CODETRACER_WASM_ZSTD_LIB_DIR="$WORK/zstd/lib" \
+  bash -c "source '$WORK/rec/scripts/detect-trace-format.sh' >/dev/null 2>&1; printf '%s' \"\$CGO_LDFLAGS\"")"
+case " $zflags " in
+*" -L$WORK/zstd/lib "*) ;;
+*) fail "CODETRACER_WASM_ZSTD_LIB_DIR is not a -L in CGO_LDFLAGS ('$zflags')" ;;
+esac
+case " $zflags " in
+*" -Wl,-rpath,$WORK/zstd/lib "*) ;;
+*) fail "CODETRACER_WASM_ZSTD_LIB_DIR is not an rpath in CGO_LDFLAGS ('$zflags')" ;;
+esac
+
+# A named libzstd directory that does not exist: refused, not dropped.
+if env -i HOME="$WORK" XDG_CACHE_HOME="$WORK/cache" PATH="$WORK/bin" \
+  CODETRACER_WASM_ZSTD_LIB_DIR="$WORK/no-such-zstd" \
+  bash -c "source '$WORK/rec/scripts/detect-trace-format.sh'" >/dev/null 2>&1; then
+  fail "a CODETRACER_WASM_ZSTD_LIB_DIR that does not exist must fail the script"
+fi
 
 echo "detect-trace-format: all assertions held"

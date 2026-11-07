@@ -159,23 +159,29 @@ export CGO_LDFLAGS="-L${_FFI_LINK_DIR}"
 
 # ---------------------------------------------------------------------------
 # Locate libzstd — the Nim FFI links against zstd for CTFS chunk
-# compression.  Inside the Nix dev shell, libzstd is not pulled in by
-# default, so we resolve it via nix-build and fold the path into the cgo
-# linker / runtime environment.  Outside Nix (CI on bare distros), the
-# system loader will find libzstd via /etc/ld.so.conf and the loop is a
-# no-op.
+# compression (`-lzstd` in tracewriter/ctfs_writer.go).  The Nix dev shell
+# names the library from the flake's pinned nixpkgs in
+# CODETRACER_WASM_ZSTD_LIB_DIR (shell.nix), and it is folded into the cgo
+# linker / runtime environment here.  Outside Nix (bare distros) the variable
+# is unset and the system linker finds libzstd in its default search path.
+#
+# This used to ask `nix-build '<nixpkgs>' -A zstd.out` instead, with errors
+# discarded.  That resolves whatever nixpkgs the host's NIX_PATH names — not
+# the flake's pin — and on a host with no channel it silently resolved
+# nothing, so the link failed with "cannot find -lzstd".
 # ---------------------------------------------------------------------------
-if command -v nix-build >/dev/null 2>&1; then
-  _ZSTD_OUT="$(nix-build --no-out-link '<nixpkgs>' -A zstd.out 2>/dev/null || true)"
-  if [ -n "$_ZSTD_OUT" ] && [ -d "$_ZSTD_OUT/lib" ]; then
-    export CGO_LDFLAGS="${CGO_LDFLAGS} -L${_ZSTD_OUT}/lib -Wl,-rpath,${_ZSTD_OUT}/lib"
-    case "$(uname -s)" in
-      Linux*)  export LD_LIBRARY_PATH="${_ZSTD_OUT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
-      Darwin*) export DYLD_LIBRARY_PATH="${_ZSTD_OUT}/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
-    esac
-    echo "  detect-trace-format: linking against libzstd at $_ZSTD_OUT" >&2
+if [ -n "${CODETRACER_WASM_ZSTD_LIB_DIR:-}" ]; then
+  if [ ! -d "$CODETRACER_WASM_ZSTD_LIB_DIR" ]; then
+    echo "  detect-trace-format: ERROR: CODETRACER_WASM_ZSTD_LIB_DIR=$CODETRACER_WASM_ZSTD_LIB_DIR is not a directory." >&2
+    unset _SCRIPT_DIR _REPO_ROOT _TRACE_FORMAT_NIM_DIR _candidate _FFI_LIB _FFI_INCLUDE_DIR _FFI_SUM _FFI_LINK_DIR
+    return 1 2>/dev/null || exit 1
   fi
-  unset _ZSTD_OUT
+  export CGO_LDFLAGS="${CGO_LDFLAGS} -L${CODETRACER_WASM_ZSTD_LIB_DIR} -Wl,-rpath,${CODETRACER_WASM_ZSTD_LIB_DIR}"
+  case "$(uname -s)" in
+    Linux*)  export LD_LIBRARY_PATH="${CODETRACER_WASM_ZSTD_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+    Darwin*) export DYLD_LIBRARY_PATH="${CODETRACER_WASM_ZSTD_LIB_DIR}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+  esac
+  echo "  detect-trace-format: linking against libzstd in $CODETRACER_WASM_ZSTD_LIB_DIR" >&2
 fi
 
 # Platform-specific dynamic library path for the Nim FFI itself (only

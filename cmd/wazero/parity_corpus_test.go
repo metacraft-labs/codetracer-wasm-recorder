@@ -134,8 +134,30 @@ var parityCorpus = []corpusModule{
 		recording: "tick-ledger.ct",
 		export:    "tick",
 		calls: [][]uint64{
-			{17}, {4}, {250}, {33}, {8}, {91}, {17}, {512}, {6}, {44}, {120}, {3},
-			{77}, {17}, {900}, {21}, {5}, {64}, {1000}, {12}, {38}, {7}, {256}, {19},
+			{17},
+			{4},
+			{250},
+			{33},
+			{8},
+			{91},
+			{17},
+			{512},
+			{6},
+			{44},
+			{120},
+			{3},
+			{77},
+			{17},
+			{900},
+			{21},
+			{5},
+			{64},
+			{1000},
+			{12},
+			{38},
+			{7},
+			{256},
+			{19},
 		},
 		guard: [][]uint64{{17}, {4}, {17}},
 	},
@@ -367,7 +389,8 @@ func TestVerifyParityOverTheWholeCorpus(t *testing.T) {
 			outA := filepath.Join(tmp, "from-boundary-log")
 			exitCode, _, stderr := runMain(t, "", []string{
 				"run", "--boundary-log=" + m.recordingPath(),
-				"--out-dir=" + outA, m.wasmPath()})
+				"--out-dir=" + outA, m.wasmPath(),
+			})
 			require.Equal(t, 0, exitCode,
 				"boundary-log replay of %s failed; stderr:\n%s", m.name, stderr)
 			docA := dumpFull(t, outA)
@@ -484,7 +507,8 @@ func TestVerifyTheCorpusModulesCarryDwarfAndState(t *testing.T) {
 			out := filepath.Join(tmp, "traces")
 			exitCode, _, stderr := runMain(t, "", []string{
 				"run", "--boundary-log=" + m.recordingPath(),
-				"--out-dir=" + out, m.wasmPath()})
+				"--out-dir=" + out, m.wasmPath(),
+			})
 			require.Equal(t, 0, exitCode,
 				"replaying %s failed; stderr:\n%s", m.name, stderr)
 

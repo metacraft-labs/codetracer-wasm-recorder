@@ -105,7 +105,8 @@ func TestVerifyNoStepLandsOutsideItsSourceFile(t *testing.T) {
 	t.Run("boundary_log_demo", func(t *testing.T) {
 		outDir := filepath.Join(t.TempDir(), "traces")
 		exitCode, _, stderr := runMain(t, "", []string{
-			"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
+			"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm,
+		})
 		require.Equal(t, 0, exitCode, "replay should succeed; stderr:\n%s", stderr)
 		doc := dumpFull(t, outDir)
 		// The demo's DWARF names the wasm-src `lib.rs` in the codetracer

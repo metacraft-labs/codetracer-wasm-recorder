@@ -25,7 +25,8 @@ import (
 // pipeline is responsible for finalising the partial trace before exit.
 func exportFunc(mb wazero.HostModuleBuilder, trace *StylusTrace, name string,
 	params, results []api.ValueType,
-	fn func(m api.Module, stack []uint64, event evmEvent)) wazero.HostModuleBuilder {
+	fn func(m api.Module, stack []uint64, event evmEvent),
+) wazero.HostModuleBuilder {
 	// trace.errorRecord is set by exportSylusFunctions via the package-level
 	// wiring below.  Capturing it on the closure here keeps the existing 34
 	// call sites unchanged while still routing failures through the recorder.

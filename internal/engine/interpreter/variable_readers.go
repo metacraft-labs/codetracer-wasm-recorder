@@ -287,7 +287,6 @@ func bytesToStruct(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstanc
 }
 
 func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
-
 	dereferencedType := typ.Type
 
 	mem := m.Memory()
@@ -329,11 +328,9 @@ func bytesToPointer(rawBytes []byte, typ *dwarf.PtrType, m *wasm.ModuleInstance)
 	// TODO: Record pointer Type info
 
 	return tracetypes.ReferenceValue(dereferencedValueRecord, uint64(addr), false, typeId), typeId, nil
-
 }
 
 func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
-
 	elemSize := typ.Type.Size()
 
 	arrayLen := typ.Count
@@ -364,5 +361,4 @@ func bytesToArray(rawBytes []byte, typ *dwarf.ArrayType, m *wasm.ModuleInstance)
 	}
 
 	return tracetypes.SequenceValue(elems, false, typeId), typeId, nil
-
 }

@@ -11,7 +11,6 @@ import (
 )
 
 func bytesToStringRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
-
 	typeName := typ.String()
 
 	mem := m.Memory()
@@ -92,7 +91,6 @@ func bytesToTupleRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 }
 
 func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
-
 	typeName := typ.String()
 
 	mem := m.Memory()
@@ -160,7 +158,6 @@ func bytesToSliceRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInst
 	}
 
 	return tracetypes.SequenceValue(elems, true, typeId), typeId, nil
-
 }
 
 func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstance) (tracetypes.ValueRecord, tracetypes.TypeId, error) {
@@ -265,7 +262,6 @@ func bytesToVecRust(rawBytes []byte, typ *dwarf.StructType, m *wasm.ModuleInstan
 	}
 
 	return tracetypes.SequenceValue(elems, true, typeId), typeId, nil
-
 }
 
 // TODO: maybe this is not Rust specific?

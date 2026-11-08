@@ -1304,9 +1304,14 @@ func TestRecorderGoldenNestedCalls(t *testing.T) {
 		kind string // "Int" for natural returns; "Void" for the close-time drain
 	}
 	wantExits := []fnRet{
-		{"level3", 6, "Int"}, {"level2", 12, "Int"}, {"level1", 22, "Int"},
-		{"factorial", 1, "Int"}, {"factorial", 2, "Int"}, {"factorial", 6, "Int"},
-		{"factorial", 24, "Int"}, {"factorial", 120, "Int"},
+		{"level3", 6, "Int"},
+		{"level2", 12, "Int"},
+		{"level1", 22, "Int"},
+		{"factorial", 1, "Int"},
+		{"factorial", 2, "Int"},
+		{"factorial", 6, "Int"},
+		{"factorial", 24, "Int"},
+		{"factorial", 120, "Int"},
 		// `main` and the `<toplevel>` frame around it are both still open at
 		// end-of-execution, so the writer's close-time PendingCall drain
 		// closes them LIFO: `main` first, then the outer `<toplevel>` that

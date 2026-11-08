@@ -170,8 +170,10 @@ func TestProviderTypeSectionIsDeduplicated(t *testing.T) {
 	_, err := b.Instantiate(ctx)
 	require.NoError(t, err)
 
-	spec := &providerSpec{module: "env", stubModule: stubs,
-		globals: []ImportedGlobal{{Module: "env", Name: "g", Type: "i32", Value: "0"}}}
+	spec := &providerSpec{
+		module: "env", stubModule: stubs,
+		globals: []ImportedGlobal{{Module: "env", Name: "g", Type: "i32", Value: "0"}},
+	}
 	for i, n := range []string{"a", "b", "c"} {
 		spec.funcs = append(spec.funcs, &importPlan{
 			index: uint32(i), module: "env", name: n,

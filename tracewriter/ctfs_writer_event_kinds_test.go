@@ -98,7 +98,8 @@ func TestCtfsWriterStoresEveryEventKindExactly(t *testing.T) {
 func TestCtfsWriterRefusesAnUnassignedEventKind(t *testing.T) {
 	for _, v := range []int{24, 255} {
 		dir, err := writeTraceWithEvents(t, []tracetypes.RecordEventKind{
-			tracetypes.EventKindWrite, tracetypes.RecordEventKind(v)})
+			tracetypes.EventKindWrite, tracetypes.RecordEventKind(v),
+		})
 		if err == nil {
 			t.Fatalf("ProduceTrace accepted event kind %d", v)
 		}

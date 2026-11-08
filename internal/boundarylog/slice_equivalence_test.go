@@ -46,9 +46,18 @@ const growMemWasm = "../wasmsnapshot/testdata/grow_mem.wasm"
 // exports. Six `bump`s grow the memory from one page to seven, inside the
 // module's declared maximum of eight.
 var growMemCalls = []boundarylog.GrowMemCall{
-	{Fn: "bump", Arg: 0x11}, {Fn: "size"}, {Fn: "bump", Arg: 0x22}, {Fn: "calls"},
-	{Fn: "bump", Arg: 0x33}, {Fn: "size"}, {Fn: "bump", Arg: 0x44}, {Fn: "calls"},
-	{Fn: "bump", Arg: 0x55}, {Fn: "size"}, {Fn: "bump", Arg: 0x66}, {Fn: "calls"},
+	{Fn: "bump", Arg: 0x11},
+	{Fn: "size"},
+	{Fn: "bump", Arg: 0x22},
+	{Fn: "calls"},
+	{Fn: "bump", Arg: 0x33},
+	{Fn: "size"},
+	{Fn: "bump", Arg: 0x44},
+	{Fn: "calls"},
+	{Fn: "bump", Arg: 0x55},
+	{Fn: "size"},
+	{Fn: "bump", Arg: 0x66},
+	{Fn: "calls"},
 }
 
 // newHarnessFor is `newHarness` for an arbitrary module.

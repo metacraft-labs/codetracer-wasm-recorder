@@ -177,7 +177,7 @@ func TestAnAppendPastTheEntryArrayGrowsIt(t *testing.T) {
 	path := newContainer(t)
 	// One file first, so the container can be opened and its entry-array
 	// capacity read off the header rather than assumed.
-	if err := ctfsffi.Append(path, map[string][]byte{"first.dat": []byte{1}}); err != nil {
+	if err := ctfsffi.Append(path, map[string][]byte{"first.dat": {1}}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Open(path)

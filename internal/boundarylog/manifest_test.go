@@ -82,8 +82,10 @@ func TestUnsupportedTypeBoundaryIsRejected(t *testing.T) {
 }
 
 func TestSignatureRejectsAnUnknownTypeSpelling(t *testing.T) {
-	b := ManifestBoundary{FnKind: FuncKindExport, FnIndex: 0, Name: "f",
-		Params: []string{"i32", "v128"}}
+	b := ManifestBoundary{
+		FnKind: FuncKindExport, FnIndex: 0, Name: "f",
+		Params: []string{"i32", "v128"},
+	}
 	_, err := b.Signature()
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "param 1"), "got: %v", err)

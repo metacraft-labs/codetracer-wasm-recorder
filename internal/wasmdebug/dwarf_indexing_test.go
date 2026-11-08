@@ -17,7 +17,6 @@ import (
 )
 
 func TestIndexDwarfData_InlinedSubroutines(t *testing.T) {
-
 	if len(dwarftestdata.RustWasm) == 0 {
 		t.Skip("rust wasm not available")
 	}

@@ -261,8 +261,10 @@ func TestMissingExportIsNamed(t *testing.T) {
 func TestManifestSignatureMismatchIsRejected(t *testing.T) {
 	dir := importsDemoRecording(t).write(t, t.TempDir())
 	manifest := &Manifest{Boundaries: []ManifestBoundary{
-		{FnKind: FuncKindImport, FnIndex: 0, Name: "host_add", Module: "env",
-			Params: []string{"i32"}, Results: []string{"i32"}}, // module says (i32,i32)
+		{
+			FnKind: FuncKindImport, FnIndex: 0, Name: "host_add", Module: "env",
+			Params: []string{"i32"}, Results: []string{"i32"},
+		}, // module says (i32,i32)
 	}}
 	_, err := replayFixture(t, importsDemoWasm, dir, manifest)
 	require.Error(t, err)
@@ -274,8 +276,10 @@ func TestManifestSignatureMismatchIsRejected(t *testing.T) {
 func TestManifestUnsupportedTypeIsRejected(t *testing.T) {
 	dir := importsDemoRecording(t).write(t, t.TempDir())
 	manifest := &Manifest{Boundaries: []ManifestBoundary{
-		{FnKind: FuncKindImport, FnIndex: 0, Name: "host_add", Module: "env",
-			UnsupportedType: "a reference type"},
+		{
+			FnKind: FuncKindImport, FnIndex: 0, Name: "host_add", Module: "env",
+			UnsupportedType: "a reference type",
+		},
 	}}
 	_, err := replayFixture(t, importsDemoWasm, dir, manifest)
 	require.Error(t, err)

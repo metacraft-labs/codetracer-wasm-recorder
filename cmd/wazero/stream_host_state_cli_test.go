@@ -44,7 +44,8 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 	outBatch := filepath.Join(tmp, "batch")
 	exitCode, _, stderr := runMain(t, "", []string{
 		"run", "--boundary-log=" + vaultCorpusRecording,
-		"--out-dir=" + outBatch, vaultCorpusWasm})
+		"--out-dir=" + outBatch, vaultCorpusWasm,
+	})
 	require.Equal(t, 0, exitCode, "batch replay failed; stderr:\n%s", stderr)
 	want := dumpFull(t, outBatch)
 
@@ -54,7 +55,8 @@ func TestBoundaryStreamServesAnImportedMemoryModule(t *testing.T) {
 
 	outStream := filepath.Join(tmp, "streamed")
 	exitCode, stdout, stderr := runMainStreaming(t, raw, []string{
-		"run", "--boundary-stream=-", "--out-dir=" + outStream, vaultCorpusWasm})
+		"run", "--boundary-stream=-", "--out-dir=" + outStream, vaultCorpusWasm,
+	})
 	require.Equal(t, 0, exitCode,
 		"streaming replay of an imported-memory recording failed; stderr:\n%s", stderr)
 	require.True(t, len(stdout) > 0, "the CLI should report what it replayed")
@@ -114,7 +116,8 @@ func TestBoundaryStreamStillRefusesAModuleWhoseStateNeverArrives(t *testing.T) {
 
 	outDir := filepath.Join(tmp, "traces")
 	exitCode, _, stderr := runMainStreaming(t, stripped, []string{
-		"run", "--boundary-stream=-", "--out-dir=" + outDir, vaultCorpusWasm})
+		"run", "--boundary-stream=-", "--out-dir=" + outDir, vaultCorpusWasm,
+	})
 	require.Equal(t, 1, exitCode,
 		"a recording that never supplies its §3.3 state must still be refused")
 	require.True(t, containsAll(stderr, "env.memory", "no initial contents for it"),

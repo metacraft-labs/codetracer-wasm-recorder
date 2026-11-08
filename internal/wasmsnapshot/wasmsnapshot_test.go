@@ -43,7 +43,8 @@ func writeRecording(t *testing.T, n int) string {
 		events = append(events,
 			map[string]any{"Call": map[string]any{"function_id": float64(0), "args": []any{}}},
 			map[string]any{"Return": map[string]any{
-				"return_value": map[string]any{"kind": "None", "type_id": float64(0)}}},
+				"return_value": map[string]any{"kind": "None", "type_id": float64(0)},
+			}},
 		)
 	}
 	log := ctbltest.Encode(ctbltest.DefaultHeader("prog", "/w"), events, true)
@@ -321,8 +322,10 @@ func TestRegionStreamRoundTripsEveryKind(t *testing.T) {
 	h := func(n uint64) xxh3.Uint128 { return xxh3.Uint128{Lo: n, Hi: n * 7} }
 	regions := []Region{
 		{Base: 0, Size: PageSize, Kind: KindFull, FileOffset: 4096},
-		{Base: PageSize, Size: 2 * PageSize, Kind: KindHashRef,
-			Hashes: []xxh3.Uint128{h(1), h(2)}},
+		{
+			Base: PageSize, Size: 2 * PageSize, Kind: KindHashRef,
+			Hashes: []xxh3.Uint128{h(1), h(2)},
+		},
 		{Base: 3 * PageSize, Size: 3 * PageSize, Kind: KindRunHashRef, Runs: []HashRun{
 			{CacheID: CacheIDPerTrace, Hashes: []xxh3.Uint128{h(3)}},
 			{CacheID: CacheIDSystem, Hashes: []xxh3.Uint128{h(4), h(5)}},
@@ -383,8 +386,10 @@ func TestGlobalAndTableStreamsRoundTrip(t *testing.T) {
 
 func TestIndexStreamRoundTrips(t *testing.T) {
 	recs := []IndexRecord{
-		{Ordinal: 0, ExportsBefore: 0, CrossingSeq: 0, Flags: flagHasSnapshot | flagBaseSnapshot,
-			MemoryBytes: PageSize, LayLength: 12},
+		{
+			Ordinal: 0, ExportsBefore: 0, CrossingSeq: 0, Flags: flagHasSnapshot | flagBaseSnapshot,
+			MemoryBytes: PageSize, LayLength: 12,
+		},
 		{Ordinal: 1, ExportsBefore: 1, CrossingSeq: -1},
 	}
 	back, err := decodeIndex(encodeIndex(recs))
@@ -437,13 +442,17 @@ func TestBuilderAttachesAdditiveNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	mem := memoryOf(1, 2)
-	if err := b.Add(&Snapshot{Point: 0, MemoryBytes: uint64(len(mem)), Memory: mem,
-		Globals: []GlobalValue{{ValueType: api.ValueTypeI32, Mutable: true, Lo: 5}}}); err != nil {
+	if err := b.Add(&Snapshot{
+		Point: 0, MemoryBytes: uint64(len(mem)), Memory: mem,
+		Globals: []GlobalValue{{ValueType: api.ValueTypeI32, Mutable: true, Lo: 5}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	mem2 := memoryOf(1, 3)
-	if err := b.Add(&Snapshot{Point: 1, MemoryBytes: uint64(len(mem2)), Memory: mem2,
-		Globals: []GlobalValue{{ValueType: api.ValueTypeI32, Mutable: true, Lo: 9}}}); err != nil {
+	if err := b.Add(&Snapshot{
+		Point: 1, MemoryBytes: uint64(len(mem2)), Memory: mem2,
+		Globals: []GlobalValue{{ValueType: api.ValueTypeI32, Mutable: true, Lo: 9}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.MarkBase(0); err != nil {

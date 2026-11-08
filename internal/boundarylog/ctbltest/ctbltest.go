@@ -177,11 +177,13 @@ func Decode(log []byte) (Header, []map[string]any, bool, error) {
 			out = append(out, map[string]any{"VariableName": r.str()})
 		case TagStep:
 			out = append(out, map[string]any{"Step": map[string]any{
-				"path_id": float64(r.u32()), "line": float64(r.i64())}})
+				"path_id": float64(r.u32()), "line": float64(r.i64()),
+			}})
 		case TagFunction:
 			name := r.str()
 			out = append(out, map[string]any{"Function": map[string]any{
-				"name": name, "path_id": float64(r.u32()), "line": float64(r.i64())}})
+				"name": name, "path_id": float64(r.u32()), "line": float64(r.i64()),
+			}})
 		case TagCall:
 			fid := r.u32()
 			n := r.u32()
@@ -191,18 +193,21 @@ func Decode(log []byte) (Header, []map[string]any, bool, error) {
 				args = append(args, map[string]any{"variable_id": float64(vid), "value": r.value()})
 			}
 			out = append(out, map[string]any{"Call": map[string]any{
-				"function_id": float64(fid), "args": args}})
+				"function_id": float64(fid), "args": args,
+			}})
 		case TagReturn:
 			out = append(out, map[string]any{"Return": map[string]any{"return_value": r.value()}})
 		case TagValue:
 			vid := r.u32()
 			out = append(out, map[string]any{"Value": map[string]any{
-				"variable_id": float64(vid), "value": r.value()}})
+				"variable_id": float64(vid), "value": r.value(),
+			}})
 		case TagEvent:
 			kind := int32(r.u32())
 			meta := r.str()
 			out = append(out, map[string]any{"Event": map[string]any{
-				"kind": float64(kind), "metadata": meta, "content": r.str()}})
+				"kind": float64(kind), "metadata": meta, "content": r.str(),
+			}})
 		default:
 			return h, nil, false, fmt.Errorf("unknown record tag 0x%02x", tag)
 		}
@@ -365,15 +370,18 @@ func (r *reader) u32() uint32 {
 	r.i += 4
 	return binary.LittleEndian.Uint32(r.b[r.i-4:])
 }
+
 func (r *reader) i64() int64 {
 	r.i += 8
 	return int64(binary.LittleEndian.Uint64(r.b[r.i-8:]))
 }
+
 func (r *reader) str() string {
 	n := int(r.u32())
 	r.i += n
 	return string(r.b[r.i-n : r.i])
 }
+
 func (r *reader) value() map[string]any {
 	switch r.u8() {
 	case 0x01:

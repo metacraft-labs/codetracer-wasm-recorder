@@ -45,8 +45,8 @@ import (
 const nanTestdata = "testdata/boundary-log/nan-payloads"
 
 var (
-	nanModule           = nanTestdata + "/nan_payloads.wasm"
-	nanRecording        = nanTestdata + "/nan-payloads.ct"
+	nanModule          = nanTestdata + "/nan_payloads.wasm"
+	nanRecording       = nanTestdata + "/nan-payloads.ct"
 	nanLegacyRecording = nanTestdata + "/legacy-encoding.ct"
 )
 
@@ -113,7 +113,8 @@ func TestVerifyANanPayloadSurvivesTheBrowserPath(t *testing.T) {
 	// ----- 2. the replay agrees ----------------------------------------
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, stdout, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + nanRecording, "--out-dir=" + outDir, nanModule})
+		"run", "--boundary-log=" + nanRecording, "--out-dir=" + outDir, nanModule,
+	})
 	require.Equal(t, 0, exitCode,
 		"replaying a recording of payload-carrying NaNs must not diverge.\n"+
 			"stdout:\n%s\nstderr:\n%s", stdout, stderr)
@@ -134,7 +135,8 @@ func TestVerifyANanPayloadSurvivesTheBrowserPath(t *testing.T) {
 		perturbed := nanRecordingWith(t, nanSignallingF32, "f32:0x7f800003")
 		outDir := filepath.Join(t.TempDir(), "traces")
 		exitCode, _, stderr := runMain(t, "", []string{
-			"run", "--boundary-log=" + perturbed, "--out-dir=" + outDir, nanModule})
+			"run", "--boundary-log=" + perturbed, "--out-dir=" + outDir, nanModule,
+		})
 		require.True(t, exitCode != 0,
 			"a recorded NaN whose payload differs from the re-executed one "+
 				"is a divergence (spec §7), not a tolerable quirk.  The "+
@@ -180,7 +182,8 @@ func TestVerifyOldFloatRecordingsStillReplay(t *testing.T) {
 		// internal/boundarylog.
 		outDir := filepath.Join(t.TempDir(), "traces")
 		exitCode, _, stderr := runMain(t, "", []string{
-			"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
+			"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm,
+		})
 		require.Equal(t, 0, exitCode,
 			"a recording made before M52 must not be rejected for its age; "+
 				"stderr:\n%s", stderr)
@@ -196,7 +199,8 @@ func TestVerifyOldFloatRecordingsStillReplay(t *testing.T) {
 		outDir := filepath.Join(t.TempDir(), "traces")
 		exitCode, _, stderr := runMain(t, "", []string{
 			"run", "--boundary-log=" + nanLegacyRecording,
-			"--out-dir=" + outDir, nanModule})
+			"--out-dir=" + outDir, nanModule,
+		})
 		require.True(t, exitCode != 0,
 			"a recording whose NaN reached disk as `null` carries no value "+
 				"to replay; accepting it would mean inventing one")

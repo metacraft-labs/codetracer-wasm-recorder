@@ -12,8 +12,10 @@ import (
 	"github.com/rdleal/intervalst/interval"
 )
 
-type LocationType uint8
-type DwarfPC uint64
+type (
+	LocationType uint8
+	DwarfPC      uint64
+)
 
 const (
 	LocationTypeLocal LocationType = iota
@@ -183,7 +185,6 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 
 	for ent.Children {
 		child, err := sr.Next()
-
 		// End of subprogram's children
 		if err != nil {
 			return err
@@ -199,7 +200,6 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 			templateName := child.AttrField(dwarf.AttrName).Val.(string)
 
 			paramType, err := d.Type(typOffset)
-
 			if err != nil {
 				continue
 			}
@@ -218,7 +218,6 @@ func indexStructType(d *dwarf.Data, ent *dwarf.Entry, ret *PCRecord) error {
 }
 
 func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, lowPC uint64, highPC uint64) error {
-
 	varTypeField := varEntry.AttrField(dwarf.AttrType)
 
 	varNameField := varEntry.AttrField(dwarf.AttrName)
@@ -339,7 +338,6 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 
 	for lexEntry.Children {
 		child, err := r.Next()
-
 		// The reader returns a nil entry together with its error.
 		if err != nil {
 			return entryOffset, err
@@ -381,11 +379,9 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 	}
 
 	return entryOffset, nil
-
 }
 
 func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files []*dwarf.LineFile, ret *PCRecord, offset2function map[dwarf.Offset]*FunctionRecord) error {
-
 	functionOffset := ent.Offset
 
 	if specWrapped := ent.AttrField(dwarf.AttrSpecification); specWrapped != nil {
@@ -481,7 +477,6 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 		for ent.Children {
 
 			child, err := r.Next()
-
 			// The reader returns a nil entry together with its error, so
 			// the error is checked first: otherwise a decoding failure
 			// reads as the end of the function's children.
@@ -605,7 +600,6 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 
 	for inlinedEnt.Children {
 		child, err := r.Next()
-
 		// The reader returns a nil entry together with its error, so the
 		// error is checked before the entry is touched.
 		if err != nil {

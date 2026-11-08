@@ -52,7 +52,8 @@ func TestCTBLFramesDecodeExactlyAsTheProducerEncodesThem(t *testing.T) {
 	// And the test-side encoder agrees with the same vectors.
 	require.Equal(t, frames[0], EncodeTestRecord(map[string]any{"Path": "a.js"}))
 	require.Equal(t, frames[1], EncodeTestRecord(map[string]any{
-		"Step": map[string]any{"path_id": 1, "line": -2}}))
+		"Step": map[string]any{"path_id": 1, "line": -2},
+	}))
 }
 
 // TestCTBLRefusesAFrameWithTrailingBytes: a frame is consumed exactly, so a

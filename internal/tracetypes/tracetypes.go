@@ -20,13 +20,15 @@ import (
 
 // ----- ID newtypes -----
 
-type FunctionId uint64
-type CallId uint64
-type VariableId uint64
-type StepId uint64
-type PathId uint64
-type Line int64
-type TypeId uint64
+type (
+	FunctionId uint64
+	CallId     uint64
+	VariableId uint64
+	StepId     uint64
+	PathId     uint64
+	Line       int64
+	TypeId     uint64
+)
 
 // ----- Type kinds -----
 

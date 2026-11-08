@@ -168,8 +168,10 @@ func TestRejectsAReturnWithNoOpenFrame(t *testing.T) {
 
 func TestRejectsADanglingVariableID(t *testing.T) {
 	events := []map[string]any{
-		{"Value": map[string]any{"variable_id": 3,
-			"value": map[string]any{"kind": "Int", "i": "1", "type_id": 0}}},
+		{"Value": map[string]any{
+			"variable_id": 3,
+			"value":       map[string]any{"kind": "Int", "i": "1", "type_id": 0},
+		}},
 	}
 	dir := writeRawRecording(t, events)
 	_, err := LoadRecording(dir)
@@ -183,8 +185,10 @@ func TestRejectsAnOutOfOrderValueRun(t *testing.T) {
 		{"Function": map[string]any{"name": "run", "path_id": 0, "line": 1}},
 		{"Call": map[string]any{"function_id": 0, "args": []any{}}},
 		{"VariableName": "run:arg1"},
-		{"Value": map[string]any{"variable_id": 0,
-			"value": map[string]any{"kind": "Int", "i": "1", "type_id": 0}}},
+		{"Value": map[string]any{
+			"variable_id": 0,
+			"value":       map[string]any{"kind": "Int", "i": "1", "type_id": 0},
+		}},
 	}
 	dir := writeRawRecording(t, events)
 	_, err := LoadRecording(dir)
@@ -202,11 +206,15 @@ func TestIgnoresNonBoundaryBindings(t *testing.T) {
 		{"Function": map[string]any{"name": "run", "path_id": 0, "line": 1}},
 		{"Call": map[string]any{"function_id": 0, "args": []any{}}},
 		{"VariableName": "some_local"},
-		{"Value": map[string]any{"variable_id": 0,
-			"value": map[string]any{"kind": "Int", "i": "7", "type_id": 0}}},
+		{"Value": map[string]any{
+			"variable_id": 0,
+			"value":       map[string]any{"kind": "Int", "i": "7", "type_id": 0},
+		}},
 		{"VariableName": "run:ret0"},
-		{"Value": map[string]any{"variable_id": 1,
-			"value": map[string]any{"kind": "Int", "i": "3", "type_id": 0}}},
+		{"Value": map[string]any{
+			"variable_id": 1,
+			"value":       map[string]any{"kind": "Int", "i": "3", "type_id": 0},
+		}},
 		{"Return": map[string]any{"return_value": map[string]any{"kind": "Int", "i": "3", "type_id": 0}}},
 	}
 	dir := writeRawRecording(t, events)

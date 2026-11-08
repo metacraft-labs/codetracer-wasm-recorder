@@ -31,14 +31,16 @@ func NewCtfsTraceWriter() *CtfsTraceWriter {
 func (w *CtfsTraceWriter) RegisterStep(string, tracetypes.Line) {}
 func (w *CtfsTraceWriter) RegisterStepWithPathId(tracetypes.PathId, tracetypes.Line) {
 }
+
 func (w *CtfsTraceWriter) RegisterStepWithColumn(string, tracetypes.Line, *tracetypes.Line) {
 }
 func (w *CtfsTraceWriter) EnableColumnAwareSteps()                      {}
-func (w *CtfsTraceWriter) EnableColumnBreakpointsSupport()               {}
-func (w *CtfsTraceWriter) EnableColumnMotionsSupport()                   {}
+func (w *CtfsTraceWriter) EnableColumnBreakpointsSupport()              {}
+func (w *CtfsTraceWriter) EnableColumnMotionsSupport()                  {}
 func (w *CtfsTraceWriter) RegisterPathWithLineLengths(string, []uint32) {}
 func (w *CtfsTraceWriter) RegisterCall(string, string, tracetypes.Line, []tracetypes.FullValueRecord) {
 }
+
 func (w *CtfsTraceWriter) RegisterCallWithPathId(string, tracetypes.PathId, tracetypes.Line, []tracetypes.FullValueRecord) {
 }
 func (w *CtfsTraceWriter) RegisterReturn(tracetypes.ValueRecord)                           {}
@@ -49,6 +51,7 @@ func (w *CtfsTraceWriter) RegisterFullValue(tracetypes.VariableId, tracetypes.Va
 func (w *CtfsTraceWriter) EnsureFunctionId(string, tracetypes.PathId, tracetypes.Line) tracetypes.FunctionId {
 	return 0
 }
+
 func (w *CtfsTraceWriter) RegisterFunctionWithNewId(string, tracetypes.PathId, tracetypes.Line) tracetypes.FunctionId {
 	return 0
 }
@@ -59,6 +62,7 @@ func (w *CtfsTraceWriter) RegisterPathWithNewId(string) tracetypes.PathId       
 func (w *CtfsTraceWriter) EnsureTypeId(string, tracetypes.TypeRecord) tracetypes.TypeId {
 	return 0
 }
+
 func (w *CtfsTraceWriter) RegisterTypeWithNewId(string, tracetypes.TypeRecord) tracetypes.TypeId {
 	return 0
 }

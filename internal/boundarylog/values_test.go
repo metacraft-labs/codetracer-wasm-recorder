@@ -143,7 +143,8 @@ func TestSignatureRendering(t *testing.T) {
 	require.Equal(t, "(i32, f64) -> (i64)", s.String())
 	require.Equal(t, "() -> ()", Signature{}.String())
 	require.True(t, s.Equal(Signature{
-		Params: []ScalarType{TypeI32, TypeF64}, Results: []ScalarType{TypeI64}}))
+		Params: []ScalarType{TypeI32, TypeF64}, Results: []ScalarType{TypeI64},
+	}))
 	require.False(t, s.Equal(Signature{Params: []ScalarType{TypeI32}, Results: []ScalarType{TypeI64}}))
 }
 

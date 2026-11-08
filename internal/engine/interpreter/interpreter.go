@@ -13,8 +13,6 @@ import (
 	"sync"
 	"unsafe"
 
-	// Dwarf
-
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/internal/expctxkeys"
@@ -884,7 +882,6 @@ func isUserRustSourcePath(fileName string) bool {
 }
 
 func ensureSize[T any](s []T, index int) []T {
-
 	if index < len(s) {
 		return s
 	}
@@ -993,14 +990,12 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 			inlinedEntries, _ := index.InlinedRoutines.AllIntersections(offset, offset)
 
 			for stack.Len() > 0 {
-
 				if ie, ok := stack.Peek(); ok && ie.HighPC <= offset {
 					m.Record.RegisterReturn(tracetypes.NilValue())
 					stack.Pop()
 				} else {
 					break
 				}
-
 			}
 
 			if len(lineRecords) == 1 {
@@ -1037,11 +1032,9 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 											if stack.Len() == 0 {
 												traceInlineEntry(m, v, functionRecord, locals, offset, &functionRecord.Locals)
 											} else {
-
 												if elem, ok := stack.Peek(); ok {
 													traceInlineEntry(m, v, functionRecord, locals, offset, &elem.Locals)
 												}
-
 											}
 
 											stack.Push(v)
@@ -1075,7 +1068,7 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 							// Offset does not matter, function parameters come without information about their lexical scope
 
 							if stack.Len() > 0 {
-								//TODO: log inlined function variables
+								// TODO: log inlined function variables
 								inlineRecord, _ := stack.Peek()
 
 								traceCurrentLocals(&inlineRecord.Locals, offset, m, &functionRecord, locals)
@@ -4740,12 +4733,11 @@ func (ce *callEngine) callNativeFunc(ctx context.Context, m *wasm.ModuleInstance
 
 		traceReturnType(functionRecord, m, ce, &functionParams)
 	}
-
 }
 
 func traceReturnType(functionRecord wasmdebug.FunctionRecord,
-	m *wasm.ModuleInstance, ce *callEngine, functionParams *[]uint64) {
-
+	m *wasm.ModuleInstance, ce *callEngine, functionParams *[]uint64,
+) {
 	if functionRecord.ReturnType == nil {
 		typeName := "void"
 		_, seen := m.TypesIndex[typeName]
@@ -4770,7 +4762,6 @@ func traceReturnType(functionRecord wasmdebug.FunctionRecord,
 			// TODO: handle errors
 			value, _, _ = bytesToValueRecord(rawBytes, *functionRecord.ReturnType, m)
 		} else {
-
 			switch rt := (*functionRecord.ReturnType).(type) {
 			case *dwarf.StructType:
 				// TODO: This is broken 🥹. Must fix.
@@ -4833,8 +4824,8 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 }
 
 func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
-	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64) {
-
+	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64,
+) {
 	for _, v := range *localRecords {
 		if v.LowPC <= offset && offset <= v.HighPC {
 			val, err := readVariable(m, v, *functionRecord, locals)
@@ -4846,7 +4837,6 @@ func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 			}
 		}
 	}
-
 }
 
 func traceInlineEntry(m *wasm.ModuleInstance, rec wasmdebug.InlineRecord, functionRecord wasmdebug.FunctionRecord, locals []uint64, offset uint64, currLocals *[]wasmdebug.VariableRecord) {

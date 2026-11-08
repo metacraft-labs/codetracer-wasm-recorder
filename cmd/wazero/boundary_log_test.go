@@ -124,7 +124,8 @@ func TestVerifyBoundaryLogMaterialisesATrace(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 
 	exitCode, stdout, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
+		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 0, exitCode, "replay should succeed; stderr:\n%s", stderr)
 	require.True(t, strings.Contains(stdout, "replayed 1 exported call(s)"),
 		"the CLI should report what it replayed; stdout:\n%s", stdout)
@@ -257,7 +258,8 @@ func TestBoundaryLogWorksWithoutAManifest(t *testing.T) {
 
 	outDir := filepath.Join(tmp, "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, lonely})
+		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, lonely,
+	})
 	require.Equal(t, 0, exitCode, "replay should succeed without a manifest; stderr:\n%s", stderr)
 
 	doc := dumpFull(t, outDir)
@@ -277,7 +279,8 @@ func TestManifestFromADifferentBuildIsRejected(t *testing.T) {
 	outDir := filepath.Join(tmp, "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
 		"run", "--boundary-log=" + demoRecording, "--boundary-manifest=" + bogus,
-		"--out-dir=" + outDir, demoWasm})
+		"--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 1, exitCode, "a mismatched manifest must fail")
 	require.True(t, strings.Contains(stderr, "disagree about export"),
 		"stderr should name the disagreement; got:\n%s", stderr)
@@ -349,7 +352,8 @@ func TestVerifyCrossModalityParity(t *testing.T) {
 	// --- trace A: materialised from the browser boundary recording -------
 	outA := filepath.Join(tmp, "from-boundary-log")
 	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outA, demoWasm})
+		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outA, demoWasm,
+	})
 	require.Equal(t, 0, exitCode, "boundary-log replay failed; stderr:\n%s", stderr)
 	docA := dumpFull(t, outA)
 
@@ -503,7 +507,8 @@ func TestVerifyDivergenceIsAHardError(t *testing.T) {
 			outDir := filepath.Join(tmp, "traces")
 
 			exitCode, stdout, stderr := runMain(t, "", []string{
-				"run", "--boundary-log=" + bad, "--out-dir=" + outDir, demoWasm})
+				"run", "--boundary-log=" + bad, "--out-dir=" + outDir, demoWasm,
+			})
 
 			// (1) a hard error, not a warning
 			require.Equal(t, 1, exitCode,
@@ -533,7 +538,8 @@ func TestVerifyDivergenceIsAHardError(t *testing.T) {
 func TestSuccessfulReplayDoesWriteATrace(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
+		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)
 
 	candidates, _ := filepath.Glob(filepath.Join(outDir, "*.ct"))
@@ -618,7 +624,8 @@ func TestVerifyZeroArityImportDivergenceIsAHardError(t *testing.T) {
 			outDir := filepath.Join(tmp, "traces")
 
 			exitCode, stdout, stderr := runMain(t, "", []string{
-				"run", "--boundary-log=" + bad, "--out-dir=" + outDir, voidImportWasm})
+				"run", "--boundary-log=" + bad, "--out-dir=" + outDir, voidImportWasm,
+			})
 
 			require.Equal(t, 1, exitCode,
 				"a divergence must exit non-zero; stdout:\n%s\nstderr:\n%s", stdout, stderr)
@@ -651,7 +658,8 @@ func TestVerifyZeroArityImportDivergenceIsAHardError(t *testing.T) {
 func TestZeroArityImportReplayIsCheckedNotCounted(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, stdout, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + voidImportRecording, "--out-dir=" + outDir, voidImportWasm})
+		"run", "--boundary-log=" + voidImportRecording, "--out-dir=" + outDir, voidImportWasm,
+	})
 	require.Equal(t, 0, exitCode, "stderr:\n%s", stderr)
 	require.True(t, strings.Contains(stdout, "replayed 1 exported call(s) and 2 imported call(s)"),
 		"both `() -> ()` crossings must be counted as imported calls serviced "+
@@ -692,7 +700,8 @@ func TestVerifyUninstrumentedModuleIsUsed(t *testing.T) {
 	// (2) And replaying it succeeds.
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm})
+		"run", "--boundary-log=" + demoRecording, "--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 0, exitCode,
 		"replay of the uninstrumented module must succeed; stderr:\n%s", stderr)
 
@@ -701,7 +710,8 @@ func TestVerifyUninstrumentedModuleIsUsed(t *testing.T) {
 	//     replaying against shifted import indices.
 	exitCode, _, stderr = runMain(t, "", []string{
 		"run", "--boundary-log=" + demoRecording,
-		"--out-dir=" + filepath.Join(t.TempDir(), "traces2"), hookImportsWasm})
+		"--out-dir=" + filepath.Join(t.TempDir(), "traces2"), hookImportsWasm,
+	})
 	require.Equal(t, 1, exitCode, "the instrumented module must be refused")
 	require.True(t, strings.Contains(stderr, "__codetracer"),
 		"the diagnostic must name the hook import; stderr:\n%s", stderr)
@@ -731,7 +741,8 @@ func TestVerifyStylusReplayStillPasses(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 
 	exitCode, _, stderr := runMain(t, "", []string{
-		"run", "--stylus=" + stylusEntryTracePath, "--out-dir=" + outDir, stylusEntrypoint})
+		"run", "--stylus=" + stylusEntryTracePath, "--out-dir=" + outDir, stylusEntrypoint,
+	})
 	require.Equal(t, 0, exitCode, "stylus replay should succeed; stderr:\n%s", stderr)
 	require.False(t, strings.Contains(stderr, "mismatched return result"),
 		"the recorded user_returned value must match what the module returned; "+
@@ -770,7 +781,8 @@ func TestStylusAndBoundaryLogAreMutuallyExclusive(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
 		"run", "--stylus=" + stylusEntryTracePath, "--boundary-log=" + demoRecording,
-		"--out-dir=" + outDir, demoWasm})
+		"--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 1, exitCode)
 	require.True(t, strings.Contains(stderr, "mutually exclusive"), "stderr:\n%s", stderr)
 	require.Equal(t, 0, len(tracePaths(t, outDir)), "no trace may be written")
@@ -782,7 +794,8 @@ func TestBoundaryLogReportsAMissingRecordingClearly(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "traces")
 	exitCode, _, stderr := runMain(t, "", []string{
 		"run", "--boundary-log=" + filepath.Join(t.TempDir(), "nope.ct"),
-		"--out-dir=" + outDir, demoWasm})
+		"--out-dir=" + outDir, demoWasm,
+	})
 	require.Equal(t, 1, exitCode)
 	require.True(t, strings.Contains(stderr, "error reading boundary log"), "stderr:\n%s", stderr)
 	require.Equal(t, 0, len(tracePaths(t, outDir)))

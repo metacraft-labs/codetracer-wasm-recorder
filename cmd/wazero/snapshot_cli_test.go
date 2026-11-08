@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +53,9 @@ func materialiseBoundaryLog(t *testing.T, outDir string) string {
 // being observed rather than the thing doing the work.
 func attachSnapshotsTo(t *testing.T, containerPath string) {
 	t.Helper()
-	ctx := t.Context()
+	// Not t.Context(): go.mod declares go 1.22, which CI still tests, and
+	// testing.T.Context arrived in Go 1.24.
+	ctx := context.Background()
 	bin, err := os.ReadFile("testdata/boundary-log/balance_calc.wasm")
 	require.NoError(t, err)
 

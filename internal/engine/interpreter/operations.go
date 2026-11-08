@@ -857,7 +857,6 @@ type unionOperation struct {
 	U1, U2              uint64
 	U3                  uint64
 	Us                  []uint64
-	offsetInCodeSection uint64
 }
 
 // String implements fmt.Stringer.

@@ -16,8 +16,13 @@ type evmEvent struct {
 }
 
 func (e *evmEvent) UnmarshalJSON(data []byte) error {
+	// An event that is not a JSON object leaves `obj` nil, and every field
+	// check below would then misreport it as a missing "name"; the decoder's
+	// own error says what was found instead.
 	var obj map[string]interface{}
-	json.Unmarshal(data, &obj)
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
 
 	var ok bool
 	e.name, ok = obj["name"].(string)

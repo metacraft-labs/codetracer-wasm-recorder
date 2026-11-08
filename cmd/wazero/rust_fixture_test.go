@@ -189,9 +189,9 @@ func rustFixtureStamp(rustc string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)) + "\n", nil
 }
 
-// TestRustFixtureBuilds is the guard that replaces the old "is the
-// go:embed directive still valid" check. The embed was a compile-time
-// error when the file went missing; a path read is not, so the
+// TestRustFixtureBuilds is the guard that replaces the old check that
+// the fixture's go:embed directive was still valid. The embed was a
+// compile-time error when the file went missing; a path read is not, so the
 // buildability of the fixture — and the presence of its source — is
 // asserted explicitly.
 func TestRustFixtureBuilds(t *testing.T) {

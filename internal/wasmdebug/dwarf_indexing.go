@@ -96,9 +96,14 @@ func newPCRecord() PCRecord {
 		}
 	}
 
+	// Every interval in these trees is closed, [LowPC, HighPC-1], so a range
+	// covering a single byte is a point. A one-byte line-table row is common
+	// in WebAssembly, where `end`, `drop` and `return` are one-byte
+	// instructions, and without TreeWithIntervalPoint the tree refuses such
+	// a row and the instruction it covers has no source line.
 	return PCRecord{
-		Line:            interval.NewSearchTree[LineRecord](cmpFn),
-		Function:        interval.NewSearchTree[FunctionRecord](cmpFn),
+		Line:            interval.NewSearchTreeWithOptions[LineRecord](cmpFn, interval.TreeWithIntervalPoint()),
+		Function:        interval.NewSearchTreeWithOptions[FunctionRecord](cmpFn, interval.TreeWithIntervalPoint()),
 		InlinedRoutines: interval.NewSearchTreeWithOptions[[]InlineRecord](cmpFn, interval.TreeWithIntervalPoint()),
 		Locals:          interval.NewSearchTree[[]VariableRecord](cmpFn),
 		TypeParamMap:    make(map[string]TemplateParamMap),
@@ -164,7 +169,9 @@ func IndexDwarfData(d *dwarf.Data) (ret PCRecord, err error) {
 			continue
 		}
 
-		ret.Function.Insert(record.LowPC, record.HighPC-1, *record)
+		if err := ret.Function.Insert(record.LowPC, record.HighPC-1, *record); err != nil {
+			fmt.Fprintf(os.Stderr, "error indexing function %s [%#x,%#x]: %v\n", record.Name, record.LowPC, record.HighPC-1, err)
+		}
 	}
 
 	return
@@ -297,6 +304,27 @@ func indexVariable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, 
 	return nil
 }
 
+// reportNestedIndexError reports an inlined subroutine or lexical block that
+// could not be indexed. Such an entry is nested inside a function, and the
+// index is best effort: the rest of the function is still worth indexing, so
+// the failure is reported and the walk goes on, as `IndexDwarfData` does for
+// a top-level entry. These failures come from malformed DWARF, not from
+// ordinary compiler output, so reporting each one does not flood stderr.
+func reportNestedIndexError(what string, ent *dwarf.Entry, err error) {
+	fmt.Fprintf(os.Stderr, "error indexing %s at DWARF offset %#x: %v\n", what, ent.Offset, err)
+}
+
+// indexVariableIfRepresentable indexes a variable or parameter entry when the
+// index can represent it, and leaves it out otherwise. Leaving one out is
+// routine rather than a defect: an optimised-out variable has no
+// DW_AT_location, and a variable whose location is a location list
+// (DW_FORM_sec_offset / DW_FORM_loclistx) is not modelled (see
+// `indexVariable`). Optimised code produces such entries in every function, so
+// they are not reported; the variable is simply absent from the trace.
+func indexVariableIfRepresentable(arr *[]VariableRecord, varEntry *dwarf.Entry, d *dwarf.Data, lowPC uint64, highPC uint64) {
+	_ = indexVariable(arr, varEntry, d, lowPC, highPC)
+}
+
 func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFile, d *dwarf.Data, locals *[]VariableRecord, params *[]VariableRecord, ret *PCRecord) (DwarfPC, error) {
 	entryOffset := DwarfPC(lexEntry.Offset)
 
@@ -312,8 +340,9 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 	for lexEntry.Children {
 		child, err := r.Next()
 
+		// The reader returns a nil entry together with its error.
 		if err != nil {
-			return DwarfPC(child.Offset), err
+			return entryOffset, err
 		}
 
 		if child == nil || child.Tag == 0 {
@@ -323,30 +352,26 @@ func indexLexBlock(r dwarf.Reader, lexEntry *dwarf.Entry, files []*dwarf.LineFil
 		switch child.Tag {
 		case dwarf.TagInlinedSubroutine:
 			if _, err := indexInlinedEntry(r, child, d, files, ret); err != nil {
-				// TODO: Error message
+				reportNestedIndexError("inlined subroutine", child, err)
 			}
 			r.SkipChildren()
 		case dwarf.TagLexDwarfBlock:
 			if _, err := indexLexBlock(r, child, files, d, locals, params, ret); err != nil {
-				// TODO: Error message
+				reportNestedIndexError("lexical block", child, err)
 			}
 			r.SkipChildren()
 		case dwarf.TagVariable:
 			// if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
 			// }
 			for _, pcs := range ranges {
-				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
-					// TODO: Error message
-				}
+				indexVariableIfRepresentable(locals, child, d, pcs[0], pcs[1])
 			}
 			r.SkipChildren()
 		case dwarf.TagFormalParameter:
 			// if err := indexVariable(locals, child, d, lowPC, highPC); err != nil {
 			// }
 			for _, pcs := range ranges {
-				if err := indexVariable(locals, child, d, pcs[0], pcs[1]); err != nil {
-					// TODO: Error message
-				}
+				indexVariableIfRepresentable(locals, child, d, pcs[0], pcs[1])
 			}
 			r.SkipChildren()
 		default:
@@ -457,34 +482,33 @@ func indexFunctionEntry(r *dwarf.Reader, ent *dwarf.Entry, d *dwarf.Data, files 
 
 			child, err := r.Next()
 
-			if child == nil || child.Tag == 0 {
-				break
-			}
-
+			// The reader returns a nil entry together with its error, so
+			// the error is checked first: otherwise a decoding failure
+			// reads as the end of the function's children.
 			if err != nil {
 				return err
+			}
+
+			if child == nil || child.Tag == 0 {
+				break
 			}
 
 			switch t := child.Tag; t {
 			case dwarf.TagInlinedSubroutine:
 				if _, err := indexInlinedEntry(*r, child, d, files, ret); err != nil {
-					// TODO: Error message
+					reportNestedIndexError("inlined subroutine", child, err)
 				}
 				r.SkipChildren()
 			case dwarf.TagLexDwarfBlock:
 				if _, err := indexLexBlock(*r, child, files, d, &locals, &params, ret); err != nil {
-					// TODO: Error message
+					reportNestedIndexError("lexical block", child, err)
 				}
 				r.SkipChildren()
 			case dwarf.TagVariable:
-				if err := indexVariable(&locals, child, d, 0, math.MaxUint64); err != nil {
-					// TODO: Error message
-				}
+				indexVariableIfRepresentable(&locals, child, d, 0, math.MaxUint64)
 				r.SkipChildren()
 			case dwarf.TagFormalParameter:
-				if err := indexVariable(&params, child, d, 0, math.MaxUint64); err != nil {
-					// TODO: Error message
-				}
+				indexVariableIfRepresentable(&params, child, d, 0, math.MaxUint64)
 				r.SkipChildren()
 			default:
 				r.SkipChildren()
@@ -582,42 +606,44 @@ func indexInlinedEntry(r dwarf.Reader, inlinedEnt *dwarf.Entry, d *dwarf.Data, f
 	for inlinedEnt.Children {
 		child, err := r.Next()
 
-		childOffset := DwarfPC(child.Offset)
+		// The reader returns a nil entry together with its error, so the
+		// error is checked before the entry is touched.
+		if err != nil {
+			return entryOffset, err
+		}
 
-		// We've reached the end of the dwarf information
-		if child == nil || child.Tag == 0 {
-			exitOffset = childOffset
+		// A nil entry is the end of the DWARF data: the children were cut
+		// off before the null entry that closes them.
+		if child == nil {
 			break
 		}
 
-		if err != nil {
-			return childOffset, err
+		// The null entry closing the children.
+		if child.Tag == 0 {
+			exitOffset = DwarfPC(child.Offset)
+			break
 		}
 
 		switch child.Tag {
 		case dwarf.TagInlinedSubroutine:
 			if _, err := indexInlinedEntry(r, child, d, files, ret); err != nil {
-				// TODO: Error message
+				reportNestedIndexError("inlined subroutine", child, err)
 			}
 			r.SkipChildren()
 
 		case dwarf.TagLexDwarfBlock:
 			if _, err := indexLexBlock(r, child, files, d, &rec.Locals, &rec.Params, ret); err != nil {
-				// TODO: Error message
+				reportNestedIndexError("lexical block", child, err)
 			}
 			r.SkipChildren()
 
 		case dwarf.TagVariable:
 			// Here, we suppose that a variable entry CAN NOT have any children.
 			// PLEASE CORRECT IF NOT TRUE
-			if err := indexVariable(&rec.Locals, child, d, 0, math.MaxUint64); err != nil {
-				// TODO: Error message
-			}
+			indexVariableIfRepresentable(&rec.Locals, child, d, 0, math.MaxUint64)
 			r.SkipChildren()
 		case dwarf.TagFormalParameter:
-			if err := indexVariable(&rec.Params, child, d, 0, math.MaxUint64); err != nil {
-				// TODO: Error message
-			}
+			indexVariableIfRepresentable(&rec.Params, child, d, 0, math.MaxUint64)
 			r.SkipChildren()
 		default:
 			r.SkipChildren()
@@ -720,11 +746,14 @@ func indexCompileUnit(cu *dwarf.Entry, d *dwarf.Data, tree *PCRecord) ([]*dwarf.
 			// Information") for the is_stmt + column semantics.
 			columnRefinement := prevLe.Column != le.Column
 			if le.Address > prevLe.Address && prevLe.Line > 0 && (prevLe.IsStmt || columnRefinement) {
-				tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
+				if err := tree.Line.Insert(prevLe.Address, le.Address-1, LineRecord{
 					FileName: prevLe.File.Name,
 					Line:     int64(prevLe.Line),
 					Column:   int64(prevLe.Column),
-				})
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "error indexing line %s:%d [%#x,%#x]: %v\n",
+						prevLe.File.Name, prevLe.Line, prevLe.Address, le.Address-1, err)
+				}
 			}
 		} else {
 			prevLe = &dwarf.LineEntry{}

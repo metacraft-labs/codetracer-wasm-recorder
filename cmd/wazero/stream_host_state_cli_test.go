@@ -8,7 +8,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,11 +21,6 @@ const (
 	vaultCorpusWasm      = vaultCorpusDir + "/vault_apply.wasm"
 	vaultCorpusRecording = vaultCorpusDir + "/vault-apply.ct"
 )
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
 
 // TestBoundaryStreamServesAnImportedMemoryModule is the CLI half of
 // M44b's `verify_streaming_replay_applies_host_state`.

@@ -203,7 +203,10 @@ lint: $(golangci_lint_path)
 format:
 	@go run $(gofumpt) -l -w .
 	@go run $(gosimports) -local github.com/tetratelabs/ -w $(shell find . -name '*.go' -type f)
-	@go run $(asmfmt) -w $(shell find . -name '*.s' -type f)
+# asmfmt formats Go assembly only. A `.s` under testdata is a fixture's source
+# in another assembler's syntax (pair_stats/wrap.s is LLVM WebAssembly
+# assembly), which asmfmt would rewrite.
+	@go run $(asmfmt) -w $(shell find . -name '*.s' -type f -not -path '*/testdata/*')
 
 .PHONY: check  # Pre-flight check for pull requests
 check:

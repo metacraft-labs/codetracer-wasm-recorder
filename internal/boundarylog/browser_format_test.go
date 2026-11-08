@@ -80,9 +80,6 @@ func jsBigInt(v int64) jsValue {
 	return jsValue{value: fmt.Sprintf("%d", v), typeKind: "BigInt"}
 }
 
-// jsFloat is the encoding for an f32/f64.
-func jsFloat(v float64) jsValue { return jsValue{value: v, typeKind: "Float"} }
-
 // onDisk applies `browser_stream_receiver.rs::translate_value`, which maps
 // "Int"→Int, "Float"→Float and EVERYTHING ELSE — including "BigInt" — to
 // Raw. `type_id` is always 0 on this path.

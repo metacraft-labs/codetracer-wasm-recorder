@@ -2,7 +2,6 @@ package ctfs
 
 import (
 	"bytes"
-	"encoding/binary"
 	"path/filepath"
 	"testing"
 )
@@ -25,8 +24,9 @@ import (
 // against `nimLookupDataBlock`. That writer is gone (M38b: the canonical one
 // gained an append entry point, see `internal/ctfsffi`), and the obligation
 // moved with it to `ffi_crossread_test.go`, which drives `nimLookupDataBlock`
-// over a container the FFI wrote. The transcription stays here because both
-// files use it and because it belongs next to the fixture it explains.
+// over a container the FFI wrote. The transcription lives there, next to its
+// only caller: that file is built only with cgo, and a helper defined here
+// would be dead code in every build without it.
 
 const (
 	// The fixture uses a 512-byte block, so `usable` is 127 and a 130-block
@@ -70,54 +70,4 @@ func TestReadsAMultiLevelFileWrittenByTheNimWriter(t *testing.T) {
 			fixtureName, len(got), len(want), commonPrefix(got, want),
 			commonPrefix(got, want)/fixtureBlockSize)
 	}
-}
-
-// nimLookupDataBlock is `lookupDataBlock` from
-// `codetracer-trace-format-nim/src/codetracer_ctfs/block_mapping.nim`,
-// transcribed. Kept deliberately literal so it stays diffable against that
-// source: the levels are cumulative, the walk up subtracts each level's
-// capacity, and the chain pointer lives in slot `usable` of every level.
-func nimLookupDataBlock(t *testing.T, raw []byte, blockSize int, rootBlock, blockIndex uint64) uint64 {
-	t.Helper()
-	usable := uint64(blockSize/8 - 1)
-	readPtr := func(blk, i uint64) uint64 {
-		off := int(blk)*blockSize + int(i)*8
-		if off+8 > len(raw) {
-			t.Fatalf("pointer at block %d slot %d is outside the %d-byte container", blk, i, len(raw))
-		}
-		return binary.LittleEndian.Uint64(raw[off:])
-	}
-	capacity := func(level uint32) uint64 {
-		c := uint64(1)
-		for i := uint32(0); i < level; i++ {
-			c *= usable
-		}
-		return c
-	}
-
-	idx, cur, level := blockIndex, rootBlock, uint32(1)
-	for {
-		if idx < capacity(level) {
-			break
-		}
-		idx -= capacity(level)
-		level++
-		if level > 5 {
-			return 0
-		}
-		chain := readPtr(cur, usable)
-		if chain == 0 {
-			return 0
-		}
-		cur = chain
-	}
-	for level > 1 {
-		subCap := capacity(level - 1)
-		child := readPtr(cur, idx/subCap)
-		if child == 0 {
-			return 0
-		}
-		cur, idx, level = child, idx%subCap, level-1
-	}
-	return readPtr(cur, idx)
 }

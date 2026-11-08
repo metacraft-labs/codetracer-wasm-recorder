@@ -553,9 +553,9 @@ func doRun(args []string, stdOut io.Writer, stdErr logging.Writer) int {
 			produceTrace(outDir, wasmFile, recorder, stdErr)
 			return 1
 		}
-	} else {
-		// We're done, _start was called as part of instantiating the module.
 	}
+	// Without --stylus there is nothing left to call: instantiating the module
+	// already ran _start.
 
 	if !produceTrace(outDir, wasmFile, recorder, stdErr) {
 		return 1

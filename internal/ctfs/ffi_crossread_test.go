@@ -4,6 +4,7 @@ package ctfs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -406,4 +407,54 @@ func TestAppendExtendsRatherThanRewrites(t *testing.T) {
 	if !bytes.Equal(before[:16], after[:16]) {
 		t.Error("the append rewrote the container header")
 	}
+}
+
+// nimLookupDataBlock is `lookupDataBlock` from
+// `codetracer-trace-format-nim/src/codetracer_ctfs/block_mapping.nim`,
+// transcribed. Kept deliberately literal so it stays diffable against that
+// source: the levels are cumulative, the walk up subtracts each level's
+// capacity, and the chain pointer lives in slot `usable` of every level.
+func nimLookupDataBlock(t *testing.T, raw []byte, blockSize int, rootBlock, blockIndex uint64) uint64 {
+	t.Helper()
+	usable := uint64(blockSize/8 - 1)
+	readPtr := func(blk, i uint64) uint64 {
+		off := int(blk)*blockSize + int(i)*8
+		if off+8 > len(raw) {
+			t.Fatalf("pointer at block %d slot %d is outside the %d-byte container", blk, i, len(raw))
+		}
+		return binary.LittleEndian.Uint64(raw[off:])
+	}
+	capacity := func(level uint32) uint64 {
+		c := uint64(1)
+		for i := uint32(0); i < level; i++ {
+			c *= usable
+		}
+		return c
+	}
+
+	idx, cur, level := blockIndex, rootBlock, uint32(1)
+	for {
+		if idx < capacity(level) {
+			break
+		}
+		idx -= capacity(level)
+		level++
+		if level > 5 {
+			return 0
+		}
+		chain := readPtr(cur, usable)
+		if chain == 0 {
+			return 0
+		}
+		cur = chain
+	}
+	for level > 1 {
+		subCap := capacity(level - 1)
+		child := readPtr(cur, idx/subCap)
+		if child == 0 {
+			return 0
+		}
+		cur, idx, level = child, idx%subCap, level-1
+	}
+	return readPtr(cur, idx)
 }

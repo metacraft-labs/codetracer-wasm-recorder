@@ -4832,12 +4832,6 @@ func traceFunctionEntry(m *wasm.ModuleInstance, loggedCall *bool, functionRecord
 	m.Record.RegisterCall(functionRecord.Name, functionRecord.FileName, tracetypes.Line(functionRecord.Line), args)
 }
 
-func inlineKey(rec wasmdebug.InlineRecord) string {
-	return fmt.Sprintf("%s|%s|%d|%s|%d|%d",
-		rec.Name, rec.FileName, rec.Line,
-		rec.CallFileName, rec.CallLine, rec.CallColumn)
-}
-
 func traceCurrentLocals(localRecords *[]wasmdebug.VariableRecord, offset uint64,
 	m *wasm.ModuleInstance, functionRecord *wasmdebug.FunctionRecord, locals []uint64) {
 

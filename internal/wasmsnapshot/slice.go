@@ -393,8 +393,7 @@ func (w *SliceWriter) seal(endPoint int) error {
 	}
 	file := sliceContainerName(w.opts.Program, s.index)
 	path := filepath.Join(w.opts.Dir, file)
-	st, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf(
 			"wasmsnapshot: the trace writer was expected to produce slice %d at %s: %w",
 			s.index, path, err)
@@ -406,7 +405,8 @@ func (w *SliceWriter) seal(endPoint int) error {
 	if err := s.builder.AttachTo(path); err != nil {
 		return fmt.Errorf("wasmsnapshot: attaching slice %d's snapshots: %w", s.index, err)
 	}
-	if st, err = os.Stat(path); err != nil {
+	st, err := os.Stat(path)
+	if err != nil {
 		return err
 	}
 

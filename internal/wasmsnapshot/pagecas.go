@@ -378,9 +378,8 @@ func EncodeMemory(memory []byte, tiers *Tiers, memBase uint64, opts EncodeOption
 	// One region spans the whole memory in the common case; it is split only
 	// where a `kind=0` run interrupts the hash runs.
 	var (
-		cur      *Region
-		curRun   *HashRun
-		regionAt uint64
+		cur    *Region
+		curRun *HashRun
 	)
 	flushRegion := func() {
 		if cur != nil {
@@ -407,7 +406,6 @@ func EncodeMemory(memory []byte, tiers *Tiers, memBase uint64, opts EncodeOption
 					FileOffset: uint64(len(inline)),
 				})
 				inline = append(inline, page...)
-				regionAt = off + PageSize
 				continue
 			}
 			if err := tiers.PerTrace.Insert(h, page); err != nil {
@@ -424,8 +422,7 @@ func EncodeMemory(memory []byte, tiers *Tiers, memBase uint64, opts EncodeOption
 		}
 
 		if cur == nil {
-			regionAt = off
-			cur = &Region{Base: regionAt, Kind: KindRunHashRef}
+			cur = &Region{Base: off, Kind: KindRunHashRef}
 		}
 		if curRun == nil || curRun.CacheID != tier {
 			cur.Runs = append(cur.Runs, HashRun{CacheID: tier})

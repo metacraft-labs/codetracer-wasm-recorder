@@ -247,8 +247,9 @@ func Open(path string) (*Container, error) {
 // region and reads that region: block 0, plus the contiguous blocks after it
 // when the declared entries do not fit in block 0 (`ctfs-container.md` §1,
 // `root_blocks = ceil((header + R + MaxRootEntries * 24) / BlockSize)`). The
-// canonical writer grows the root that way when a container runs out of
-// entries.
+// root is as many blocks as the writer declared (§5: "The root may be any
+// number of blocks the writer declared"); an append to a closed container
+// never grows it.
 //
 // `ctfs-container.md` §1 places a free-list root area of
 // `R = 8 * MaxShards * 6` bytes between the header and the entry array — one

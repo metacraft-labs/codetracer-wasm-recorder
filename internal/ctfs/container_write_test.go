@@ -4,9 +4,12 @@ package ctfs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tetratelabs/wazero/internal/ctfsffi"
@@ -167,13 +170,15 @@ func TestAppendRefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// TestAnAppendPastTheEntryArrayGrowsIt: an append that needs more entries
-// than the container's root holds grows the root (`ctfs-container.md` §1,
-// `root_blocks`), and every member -- the ones that fit and the ones past the
-// old capacity -- reads back through this reader. A stream the root had no
-// room for must not be dropped, and a root that spans several blocks must not
-// be refused by the reader.
-func TestAnAppendPastTheEntryArrayGrowsIt(t *testing.T) {
+// TestAnAppendTheRootCannotHoldIsRefusedWhole: a closed container's root
+// directory does not grow. `ctfs-container.md` §5, "Adding Members To A
+// Closed Container", requires the appender to refuse a batch the root region
+// cannot hold whole, before it writes anything, naming the first member that
+// does not fit and the occupancy, and never to attach part of the batch (§1,
+// rule 2: the root is fixed at creation). This reader must therefore keep
+// reading exactly what was there before the refused append, and a batch that
+// does fit -- the positive control -- must still be accepted and read back.
+func TestAnAppendTheRootCannotHoldIsRefusedWhole(t *testing.T) {
 	path := newContainer(t)
 	// One file first, so the container can be opened and its entry-array
 	// capacity read off the header rather than assumed.
@@ -185,27 +190,119 @@ func TestAnAppendPastTheEntryArrayGrowsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	capacity := c.entryCount
-	files := map[string][]byte{}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One member more than the root has free slots for.
+	tooMany := map[string][]byte{}
 	for i := 0; i < capacity; i++ {
+		tooMany[fmt.Sprintf("f%06d.dat", i)] = deterministicBytes(int64(i), 1+i%300)
+	}
+	err = ctfsffi.Append(path, tooMany)
+	if err == nil {
+		t.Fatalf("an append of %d members to a %d-entry root holding 1 was accepted", len(tooMany), capacity)
+	}
+	if !strings.Contains(err.Error(), "does not fit") {
+		t.Errorf("the refusal does not name the member that does not fit: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the refused append changed the container (%d bytes before, %d after)", len(before), len(after))
+	}
+	refused, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after the refused append: %v", err)
+	}
+	if names := refused.Names(); len(names) != 1 || names[0] != "first.dat" {
+		t.Fatalf("members after the refused append are %v, want only first.dat", names)
+	}
+
+	// Positive control: the batch that exactly fills the root is accepted,
+	// so the refusal above was about capacity, not about the batch.
+	fits := map[string][]byte{}
+	for i := 0; i < capacity-1; i++ {
+		fits[fmt.Sprintf("f%06d.dat", i)] = deterministicBytes(int64(i), 1+i%300)
+	}
+	if err := ctfsffi.Append(path, fits); err != nil {
+		t.Fatalf("an append that fills the %d-entry root exactly was refused: %v", capacity, err)
+	}
+	full, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after filling the root: %v", err)
+	}
+	if got := len(full.Names()); got != capacity {
+		t.Fatalf("%d members are listed, want %d", got, capacity)
+	}
+	fits["first.dat"] = []byte{1}
+	for name, want := range fits {
+		got, err := full.ReadFile(name)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", name, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%q read back %d bytes that differ from the %d appended", name, len(got), len(want))
+		}
+	}
+}
+
+// TestARootThatSpansSeveralBlocksIsRead: the root region is as many blocks as
+// the writer declared at creation (`ctfs-container.md` §1,
+// `root_blocks = ceil((header + MaxRootEntries * 24) / BlockSize)`; §5: "The
+// root may be any number of blocks the writer declared"), and the streaming
+// writer still declares a larger one when a recording needs it. This reader
+// must read the entries past block 0 and refuse none of them.
+//
+// The canonical FFI creates containers with a one-block root and offers no
+// way to declare a larger one, so this test declares it: it raises the
+// header's `MaxRootEntries` on a freshly created, still empty container and
+// materialises the root blocks that implies, which is exactly the container
+// a writer declaring that many entries at creation produces. Every member is
+// then written by the canonical appender, which recovers `root_blocks` from
+// the header.
+func TestARootThatSpansSeveralBlocksIsRead(t *testing.T) {
+	const blockSize = 4096
+	path := newContainer(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != blockSize {
+		t.Fatalf("a new container is %d bytes, want one %d-byte block", len(raw), blockSize)
+	}
+	// Three blocks' worth of entries after the 16-byte header.
+	entries := (3*blockSize - headerSize) / fileEntrySize
+	binary.LittleEndian.PutUint32(raw[offsetMaxRootE:], uint32(entries))
+	raw = append(raw, make([]byte, 2*blockSize)...)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// More members than block 0 alone has room for, so entries land in every
+	// block of the root.
+	files := map[string][]byte{}
+	for i := 0; i < entries-1; i++ {
 		files[fmt.Sprintf("f%06d.dat", i)] = deterministicBytes(int64(i), 1+i%300)
 	}
 	if err := ctfsffi.Append(path, files); err != nil {
-		t.Fatalf("an append past the %d-entry root was refused: %v", capacity, err)
+		t.Fatalf("an append to a declared %d-entry, 3-block root was refused: %v", entries, err)
 	}
-	grown, err := Open(path)
+	c, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open after the root grew: %v", err)
+		t.Fatalf("Open of a container with a 3-block root: %v", err)
 	}
-	if grown.entryCount <= capacity {
-		t.Fatalf("the root holds %d entries after %d members were appended to a %d-entry root",
-			grown.entryCount, len(files)+1, capacity)
+	if c.rootBlocks != 3 {
+		t.Fatalf("the root spans %d blocks, want 3", c.rootBlocks)
 	}
-	if got := len(grown.Names()); got != len(files)+1 {
-		t.Fatalf("%d members are listed, want %d", got, len(files)+1)
+	if got := len(c.Names()); got != len(files) {
+		t.Fatalf("%d members are listed, want %d", got, len(files))
 	}
-	files["first.dat"] = []byte{1}
 	for name, want := range files {
-		got, err := grown.ReadFile(name)
+		got, err := c.ReadFile(name)
 		if err != nil {
 			t.Fatalf("ReadFile(%q): %v", name, err)
 		}

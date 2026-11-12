@@ -271,12 +271,15 @@
           "codetracer-toolchains",
           "nixpkgs"
         ],
-        "pre-commit-hooks": "pre-commit-hooks_3"
+        "pre-commit-hooks": "pre-commit-hooks_3",
+        "standard-hooks-src": "standard-hooks-src"
       },
       "locked": {
+        "lastModified": 1794404852,
+        "narHash": "sha256-tCM4iOit2zNMi8e4BS9RxdLQMtA5+L/T9G19dCBezUQ=",
         "owner": "metacraft-labs",
         "repo": "codetracer-trace-format-nim",
-        "rev": "808ffdb4507634c3aba0661d96cbc353420ed856",
+        "rev": "30bf1a17decefeadb23606bb8c1af5fe56a5d264",
         "type": "github"
       },
       "original": {
@@ -2624,6 +2627,23 @@
       "original": {
         "type": "git",
         "url": "https://spectrum-os.org/git/spectrum"
+      }
+    },
+    "standard-hooks-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791010525,
+        "narHash": "sha256-wTBTyTJwShLWCUShUsFS35ck5VygVJbVvJtRoyV+hIc=",
+        "owner": "metacraft-labs",
+        "repo": "devops-modules",
+        "rev": "c8ef41d446e211892fe9775182b43d5d517554ac",
+        "type": "github"
+      },
+      "original": {
+        "owner": "metacraft-labs",
+        "repo": "devops-modules",
+        "rev": "c8ef41d446e211892fe9775182b43d5d517554ac",
+        "type": "github"
       }
     },
     "systems": {

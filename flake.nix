@@ -32,13 +32,44 @@
           ...
         }:
         let
+          # The flake check's `lint` hook carries its own tools. The check runs
+          # in the Nix build sandbox, where nothing puts `just`, `go`, a C
+          # compiler or `nixfmt` on PATH, so a bare `just lint` entry failed to
+          # start at all ("Executable `just` not found"). `go vet` type-checks
+          # the cgo writer (`tracewriter/ctfs_writer.go`), so cgo is on and
+          # pointed at the packaged trace-writer FFI's headers, as
+          # `wazero.nix` does for the build; vetting does not link. The
+          # sandbox has no writable HOME, so the Go caches go to a temporary
+          # directory. The installed git hook keeps running `just lint` from
+          # the committed `.pre-commit-config.yaml` with the dev shell's tools.
+          traceWriterFfi = inputs'.codetracer-trace-format-nim.packages.trace-writer-ffi;
+          lintHook = pkgs.writeShellApplication {
+            name = "wasm-recorder-lint";
+            runtimeInputs = [
+              pkgs.just
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.go_1_24
+              pkgs.gcc
+              pkgs.nixfmt
+            ];
+            text = ''
+              scratch="$(mktemp -d)"
+              trap 'rm -rf "$scratch"' EXIT
+              export HOME="$scratch/home" GOCACHE="$scratch/go-cache" GOPATH="$scratch/go"
+              export GOFLAGS=-mod=vendor GOTOOLCHAIN=local
+              export CGO_ENABLED=1 CGO_CFLAGS="-I${traceWriterFfi}/include"
+              exec just lint
+            '';
+          };
           preCommit = inputs.pre-commit-hooks.lib.${system}.run {
             src = ./.;
             hooks = {
               lint = {
                 enable = true;
                 name = "Lint";
-                entry = "just lint";
+                entry = pkgs.lib.getExe lintHook;
                 language = "system";
                 pass_filenames = false;
               };
@@ -134,7 +165,7 @@
           # writer linked from the trace-format FFI.
           packages.default = import ./wazero.nix {
             inherit pkgs;
-            codetracer-trace-format-nim = inputs'.codetracer-trace-format-nim.packages.trace-writer-ffi;
+            codetracer-trace-format-nim = traceWriterFfi;
           };
         };
     };

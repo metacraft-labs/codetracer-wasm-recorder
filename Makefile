@@ -199,14 +199,25 @@ golangci_lint_goarch ?= $(shell go env GOARCH)
 lint: $(golangci_lint_path)
 	@GOARCH=$(golangci_lint_goarch) CGO_ENABLED=0 $(golangci_lint_path) run --timeout 5m -E testableexamples
 
+# The formatters see only the tracked tree's directories, never a hidden one:
+# `.repro/` holds the build engine's per-checkout tool store, which carries a
+# whole Go toolchain's sources (`tool-store/prefixes/go/...`), and formatting
+# it rewrote thousands of the toolchain's own files and failed `make check` on
+# its deliberately malformed compiler tests. No tracked Go or assembly source
+# lives under a hidden directory. `vendor/` is third-party code copied in by
+# `go mod vendor`, kept byte-identical to the module it came from, so neither
+# the directory list nor the file search descends into it.
+format_dirs := $(filter-out vendor/,$(shell ls -d */))
+format_find := find . \( -path './.*' -o -path ./vendor \) -prune -o -type f
+
 .PHONY: format
 format:
-	@go run $(gofumpt) -l -w .
-	@go run $(gosimports) -local github.com/tetratelabs/ -w $(shell find . -name '*.go' -type f)
+	@go run $(gofumpt) -l -w *.go $(format_dirs)
+	@go run $(gosimports) -local github.com/tetratelabs/ -w $(shell $(format_find) -name '*.go' -print)
 # asmfmt formats Go assembly only. A `.s` under testdata is a fixture's source
 # in another assembler's syntax (pair_stats/wrap.s is LLVM WebAssembly
 # assembly), which asmfmt would rewrite.
-	@go run $(asmfmt) -w $(shell find . -name '*.s' -type f -not -path '*/testdata/*')
+	@go run $(asmfmt) -w $(shell $(format_find) -name '*.s' -not -path '*/testdata/*' -print)
 
 .PHONY: check  # Pre-flight check for pull requests
 check:
